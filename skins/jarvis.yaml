@@ -1,0 +1,82 @@
+# JARVIS skin for Hermes Agent's native skin engine (hermes_cli/skin_engine.py).
+#
+# This file is DATA, not a code change. apply.sh copies it to
+# ~/.hermes/skins/jarvis.yaml and sets `display.skin: jarvis` in
+# ~/.hermes/config.yaml. Because it lives under ~/.hermes (outside the
+# upstream repo), it is NEVER touched by `hermes update` and can NEVER
+# cause a merge conflict. It rebrands the entire interactive CLI surface —
+# banner, hero, response label, welcome/goodbye, prompt, help header, and
+# the full color palette — without editing a single line of Hermes source.
+#
+# Brand: JARVIS. Deep black #0A0A0A, electric blue #3B82F6, light blue #60A5FA.
+# (Inter font applies only to UI surfaces we control; terminals use their own.)
+
+name: jarvis
+description: JARVIS — deep black and electric blue
+
+colors:
+  # Banner / panels
+  banner_border: "#3B82F6"      # electric blue frame
+  banner_title: "#60A5FA"       # light blue title text
+  banner_accent: "#3B82F6"      # section headers (Available Tools, etc.)
+  banner_dim: "#6B7280"         # dim/muted separators & labels
+  banner_text: "#E5E7EB"        # body text (tool names, skill names)
+  # General UI
+  ui_accent: "#3B82F6"
+  ui_label: "#60A5FA"
+  ui_ok: "#22C55E"
+  ui_error: "#EF4444"
+  ui_warn: "#F59E0B"
+  prompt: "#E5E7EB"
+  input_rule: "#3B82F6"
+  response_border: "#3B82F6"
+  # Status bar — deep black background, blue highlights
+  status_bar_bg: "#0A0A0A"
+  status_bar_text: "#E5E7EB"
+  status_bar_strong: "#60A5FA"
+  status_bar_dim: "#6B7280"
+  status_bar_good: "#22C55E"
+  status_bar_warn: "#F59E0B"
+  status_bar_bad: "#F97316"
+  status_bar_critical: "#EF4444"
+  session_label: "#60A5FA"
+  session_border: "#374151"
+  # TUI surfaces
+  voice_status_bg: "#0A0A0A"
+  selection_bg: "#1E3A5F"
+  completion_menu_bg: "#0A0A0A"
+  completion_menu_current_bg: "#1E3A5F"
+  completion_menu_meta_bg: "#0A0A0A"
+  completion_menu_meta_current_bg: "#1E3A5F"
+
+branding:
+  agent_name: "JARVIS"
+  welcome: "JARVIS online. Your AI Employee — running your business 24/7. Type your message or /help for commands."
+  goodbye: "JARVIS offline. Standing by."
+  response_label: " ◆ JARVIS "
+  prompt_symbol: "❯"
+  help_header: "JARVIS — Available Commands"
+
+tool_prefix: "┊"
+
+# Vertical gradient wordmark: light blue (#60A5FA, top) → electric blue
+# (#3B82F6, bottom). Rich renders truecolor and degrades gracefully on
+# terminals that lack it. Generated from pyfiglet 'ansi_shadow'.
+banner_logo: |-
+  [bold #60A5FA]     ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗[/]
+  [#599EF9]     ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝[/]
+  [#5197F8]     ██║███████║██████╔╝██║   ██║██║███████╗[/]
+  [#4A90F8]██   ██║██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║[/]
+  [#4289F7]╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║[/]
+  [#3B82F6] ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝[/]
+
+# Hero emblem shown alongside the banner. MUST be non-empty: an empty
+# string is falsy and Hermes falls back to its own caduceus (HERMES_CADUCEUS).
+# A minimal electric-blue arc-reactor motif replaces the Hermes staff.
+banner_hero: |-
+  [#3B82F6]        ╭─────────╮        [/]
+  [#60A5FA]      ╭─┤ ╭─────╮ ├─╮      [/]
+  [#93C5FD]      │ │ │  ◆  │ │ │      [/]
+  [#60A5FA]      ╰─┤ ╰─────╯ ├─╯      [/]
+  [#3B82F6]        ╰─────────╯        [/]
+  [dim #6B7280]      Your AI Employee 24/7      [/]

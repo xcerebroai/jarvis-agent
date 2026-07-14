@@ -1,0 +1,99 @@
+# branding.map — JARVIS white-label rewrite rules for Hermes Agent.
+#
+# Consumed by apply.sh. Customer-VISIBLE strings only. Internal identifiers,
+# API paths, env var names, and anything under website/ are never touched.
+#
+# "Hermes" is a proper noun spelled identically in every language, so the
+# word-boundary rule below rebrands all 33 locale files (18 dashboard i18n
+# + 15 chat catalogs + English) with no per-language work. Hyphenated
+# compounds in translations (Hermes-Plugins, Hermes-inproppe, Hermes-span)
+# rebrand correctly to JARVIS-Plugins, etc.
+#
+# ---------------------------------------------------------------------------
+# FORMAT
+#   Blank lines and lines starting with '#' are ignored.
+#   Section headers are on their own line in [brackets].
+#   Within a section: FIND <TAB> REPLACE   (REPLACE omitted in [protect]).
+#
+# SECTIONS (applied by apply.sh in this order):
+#   [protect]  Exact tokens masked before any replace and restored after.
+#              Guarantees these are never altered even if a rule would match.
+#   [literal]  Exact-substring find→replace. Longest/most-specific first.
+#   [regex]    Perl regex find→replace (whitespace-tolerant special cases).
+#   [command]  Perl regex that rebrands command INVOCATIONS (`hermes <verb>`)
+#              to `jarvis <verb>` — the shim makes them real. Never matches
+#              filesystem paths (~/.hermes) or identifiers (hermes_cli).
+#   [word]     Whole-word find→replace: \bFIND\b, case-SENSITIVE.
+#   [glyph]    Literal find→replace for brand glyphs (⚕ → ◆).
+#
+# All sections are applied to every curated customer-visible file. A repo-wide
+# audit confirmed NO capitalized "Hermes" is ever used as a functional value
+# (dict key, comparison, slug) and NO `subprocess("hermes <verb>")` exec
+# strings exist — so these rules can only alter prose, labels, and on-screen
+# instructions, never program behavior. Protected identifiers are masked
+# regardless as defense-in-depth.
+# ---------------------------------------------------------------------------
+
+# Internal identifiers the spec forbids touching. They are code-only today
+# (absent from every visible file), but masked here as defense-in-depth so a
+# future upstream change that leaks one into a visible string stays safe.
+[protect]
+X-Hermes-Session-Token
+X-Hermes-Session-Id
+X-Hermes-Session-Key
+X-Hermes-Sidecar-Token
+X-Hermes-Model
+updateHermes
+can_update_hermes
+checkHermesUpdate
+HermesCLI
+hermes_cli
+get_hermes_home
+HERMES_HOME
+HERMES_REVISION
+
+# Exact multi-word brand → JARVIS. Runs before [word] so "Hermes Agent"
+# collapses to "JARVIS" (not "JARVIS Agent"). Order: most specific first.
+[literal]
+Hermes Agent - Dashboard	JARVIS - Dashboard
+NOUS HERMES	JARVIS
+Hermes Agent	JARVIS
+Hermes Teal (Large)	JARVIS Blue (Large)
+Hermes Teal	JARVIS Blue
+the canonical Hermes look	the canonical JARVIS look
+
+# Whitespace/markup-tolerant special cases.
+# App.tsx renders the sidebar logo as "Hermes" <br/> "Agent" split across
+# JSX lines — neither [literal] "Hermes Agent" nor [word] alone collapses it.
+[regex]
+Hermes\s*<br\s*/?>\s*Agent	JARVIS
+
+# Command-verb rebranding (ENABLED). Rebrands `hermes <verb>` invocations to
+# `jarvis <verb>`; the shim installed by install-jarvis.sh makes them real.
+# The guarded regex matches lowercase "hermes" ONLY when it is NOT preceded by
+# a word char, dot, slash, tilde, or hyphen AND is followed by whitespace + a
+# lowercase subcommand. So it rebrands  run `hermes update`  ->  `jarvis update`
+# but never touches  ~/.hermes/skills  (path),  hermes_cli  (identifier), or a
+# bare  hermes  at end of line.
+[command]
+(?<![\w./~-])hermes(?=\s+[a-z])	jarvis
+
+# Remaining standalone brand noun. Case-sensitive whole word: matches
+# "Hermes" and hyphenated compounds (Hermes-Plugins), but NOT lowercase
+# commands/paths (hermes update, ~/.hermes), camelCase (updateHermes), or
+# glued identifiers (HermesCLI). Those stay accurate/functional.
+[word]
+Hermes	JARVIS
+
+# Hermes brand glyph (⚕, staff of Hermes/Asclepius) → neutral JARVIS mark.
+# Messaging surfaces only; CLI glyphs are handled by skins/jarvis.yaml.
+[glyph]
+⚕	◆
+
+# ---------------------------------------------------------------------------
+# POLICY: brand NOUNS become JARVIS; command INVOCATIONS become `jarvis`
+# (backed by the real shim); filesystem PATHS under ~/.hermes stay VERBATIM.
+# Paths are never rebranded: the running Hermes code reads them via
+# get_hermes_home(); a shim cannot relocate them, so rewriting them would
+# point customers at directories that do not exist.
+# ---------------------------------------------------------------------------

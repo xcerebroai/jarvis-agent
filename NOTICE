@@ -1,0 +1,44 @@
+JARVIS Overlay
+==============
+
+This project is a white-label branding overlay for Hermes Agent. It does NOT
+fork or modify the upstream project's source in its own repository; it layers
+customer-facing branding on top of an unmodified Hermes Agent install.
+
+Upstream project
+----------------
+Hermes Agent — https://github.com/NousResearch/hermes-agent
+Licensed under the MIT License:
+
+    Copyright (c) 2025 Nous Research
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+    FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+    DEALINGS IN THE SOFTWARE.
+
+Attribution & license retention
+-------------------------------
+The overlay deliberately does NOT touch the upstream `LICENSE` file, any
+`NOTICE` files, `README` attribution, or the `website/` docs of a Hermes
+install. Branding is applied only to customer-visible product strings and via
+Hermes's native skin engine. The MIT copyright and permission notice above are
+retained in every Hermes install this overlay is applied to, as the license
+requires. Attribution stays; only the customer-facing brand changes.
+
+The JARVIS name, banner art, persona, and overlay tooling in this repository
+are the property of their respective owner and are not part of the upstream
+MIT-licensed project.

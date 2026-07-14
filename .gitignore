@@ -1,0 +1,13 @@
+# The upstream Hermes checkout is never vendored into this overlay repo.
+hermes-agent/
+/hermes-agent
+
+# Local Python tooling used only to regenerate art (pyfiglet/pillow).
+.venv/
+__pycache__/
+*.pyc
+
+# Scratch / test artifacts
+*.log
+.DS_Store
+Thumbs.db

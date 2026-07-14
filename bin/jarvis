@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# jarvis — branded command shim that forwards to the real `hermes` binary.
+#
+# Installed on PATH by install-jarvis.sh so that every `jarvis <verb>` the
+# rebranded UI tells customers to run is a real, working command. It does NOT
+# reimplement anything — it locates `hermes` and exec()s it verbatim.
+#
+# It also guarantees a UTF-8 console so the JARVIS banner/box-art renders
+# correctly, even on a legacy Windows code page (cp1252) — the same handling
+# baked into bin/jarvis-banner, so branding is never mojibake in production.
+set -euo pipefail
+
+# Force UTF-8 for the child process and, on Windows, for the console itself.
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
+case "${OS:-}${OSTYPE:-}" in
+  *Windows_NT*|*msys*|*cygwin*|*win32*)
+    # 65001 = CP_UTF8. Best-effort; never fail the launch if it's unavailable.
+    chcp.com 65001 >/dev/null 2>&1 || true
+    ;;
+esac
+
+# Locate the real hermes binary (skip ourselves if a `jarvis`->`hermes`
+# name collision ever occurs on PATH).
+find_hermes() {
+  local c
+  c="$(command -v hermes 2>/dev/null || true)"
+  [ -n "$c" ] && { echo "$c"; return 0; }
+  for c in \
+    "${HERMES_BIN:-}" \
+    "$HOME/.local/bin/hermes" \
+    "$HOME/bin/hermes" \
+    "/usr/local/bin/hermes"; do
+    [ -n "$c" ] && [ -x "$c" ] && { echo "$c"; return 0; }
+  done
+  return 1
+}
+
+HERMES="$(find_hermes || true)"
+if [ -z "$HERMES" ]; then
+  echo "jarvis: could not find the 'hermes' runtime on PATH." >&2
+  echo "        Reinstall with install-jarvis.sh, or add hermes to PATH." >&2
+  exit 127
+fi
+
+exec "$HERMES" "$@"

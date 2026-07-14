@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""JARVIS startup banner — self-contained, zero third-party dependencies.
+
+Renders the JARVIS wordmark with a vertical gradient from light blue
+(#60A5FA, top) to electric blue (#3B82F6, bottom) and a dim-gray tagline.
+
+Two independent fallbacks are baked in so the banner is always legible,
+on any terminal, without a dev machine's environment:
+
+  Glyphs   UTF-8 console  -> block art (U+2588 etc.)
+           legacy console -> pure-ASCII art (no codepoint above 0x7F)
+  Color    COLORTERM=truecolor/24bit -> per-line 24-bit gradient
+           otherwise                 -> single plain #60A5FA (24-bit)
+           NO_COLOR / dumb terminal  -> no ANSI at all
+
+The two art variants are embedded literally (generated once with pyfiglet
+fonts ansi_shadow / standard); pyfiglet is NOT required at runtime.
+
+Usage:
+    jarvis-banner            # auto-detect glyphs + color
+    jarvis-banner --ascii    # force ASCII art
+    jarvis-banner --no-color # force no color
+    jarvis-banner --plain    # ASCII + no color (maximally portable)
+"""
+from __future__ import annotations
+
+import io
+import os
+import sys
+
+# --- Brand ------------------------------------------------------------------
+TAGLINE = "Your AI Employee. Runs Your Business 24/7."
+TOP = (0x60, 0xA5, 0xFA)      # #60A5FA light blue
+BOTTOM = (0x3B, 0x82, 0xF6)   # #3B82F6 electric blue
+TAGLINE_GRAY = (0x6B, 0x72, 0x80)  # #6B7280 dim gray
+
+# UTF-8 block art (pyfiglet: ansi_shadow). 6 rows, <=44 cols.
+BLOCK_ART = [
+    "     ██╗ █████╗ ██████╗ ██╗   ██╗██╗███████╗",
+    "     ██║██╔══██╗██╔══██╗██║   ██║██║██╔════╝",
+    "     ██║███████║██████╔╝██║   ██║██║███████╗",
+    "██   ██║██╔══██║██╔══██╗╚██╗ ██╔╝██║╚════██║",
+    "╚█████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║███████║",
+    " ╚════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝╚══════╝",
+]
+
+# Pure-ASCII art (pyfiglet: standard). 5 rows, <=37 cols. No byte > 0x7F.
+ASCII_ART = [
+    r"     _   _    ______     _____ ____ ",
+    r"    | | / \  |  _ \ \   / /_ _/ ___|",
+    r" _  | |/ _ \ | |_) \ \ / / | |\___ \ ",
+    r"| |_| / ___ \|  _ < \ V /  | | ___) |",
+    r" \___/_/   \_\_| \_\ \_/  |___|____/ ",
+]
+
+RESET = "\033[0m"
+
+
+def _enable_windows_utf8() -> None:
+    """Best-effort: make a Windows console emit UTF-8 for this process.
+
+    Switches the active output code page to 65001 and rewraps stdout/stderr
+    as UTF-8. No-op on non-Windows or when already UTF-8. Never raises.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        # 65001 = CP_UTF8. SetConsoleOutputCP + SetConsoleCP.
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+        ctypes.windll.kernel32.SetConsoleCP(65001)
+    except Exception:
+        pass
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name, None)
+        reconf = getattr(stream, "reconfigure", None)
+        if callable(reconf):
+            try:
+                reconf(encoding="utf-8")
+                continue
+            except Exception:
+                pass
+        # Older Pythons: wrap the raw buffer.
+        buf = getattr(stream, "buffer", None)
+        if buf is not None:
+            try:
+                setattr(sys, name, io.TextIOWrapper(buf, encoding="utf-8"))
+            except Exception:
+                pass
+
+
+def _can_encode_block() -> bool:
+    """True if the active stdout encoding can represent the block glyphs."""
+    enc = getattr(sys.stdout, "encoding", None) or "ascii"
+    try:
+        "".join(BLOCK_ART).encode(enc)
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
+def _supports_truecolor() -> bool:
+    return os.environ.get("COLORTERM", "").lower() in ("truecolor", "24bit")
+
+
+def _color_disabled() -> bool:
+    # https://no-color.org/ ; also treat dumb/absent terminals as no-color.
+    if os.environ.get("NO_COLOR") is not None:
+        return True
+    if os.environ.get("TERM", "") == "dumb":
+        return True
+    return not sys.stdout.isatty()
+
+
+def _lerp(a: int, b: int, t: float) -> int:
+    return round(a + (b - a) * t)
+
+
+def _row_color(i: int, n: int) -> tuple[int, int, int]:
+    t = 0.0 if n <= 1 else i / (n - 1)
+    return (_lerp(TOP[0], BOTTOM[0], t),
+            _lerp(TOP[1], BOTTOM[1], t),
+            _lerp(TOP[2], BOTTOM[2], t))
+
+
+def _fg(rgb: tuple[int, int, int]) -> str:
+    return f"\033[38;2;{rgb[0]};{rgb[1]};{rgb[2]}m"
+
+
+def render(force_ascii: bool = False, force_no_color: bool = False) -> str:
+    use_block = (not force_ascii) and _can_encode_block()
+    art = BLOCK_ART if use_block else ASCII_ART
+
+    no_color = force_no_color or _color_disabled()
+    truecolor = (not no_color) and _supports_truecolor()
+
+    out: list[str] = []
+    n = len(art)
+    for i, line in enumerate(art):
+        if no_color:
+            out.append(line)
+        elif truecolor:
+            out.append(f"{_fg(_row_color(i, n))}{line}{RESET}")
+        else:
+            # No truecolor advertised: single plain #60A5FA for the whole mark.
+            out.append(f"{_fg(TOP)}{line}{RESET}")
+
+    tagline = TAGLINE
+    if not no_color:
+        tagline = f"{_fg(TAGLINE_GRAY)}{TAGLINE}{RESET}"
+    out.append("")
+    # Center the tagline under the wordmark.
+    pad = max(0, (max(len(l) for l in art) - len(TAGLINE)) // 2)
+    out.append(" " * pad + tagline)
+    return "\n".join(out)
+
+
+def main(argv: list[str]) -> int:
+    force_ascii = "--ascii" in argv or "--plain" in argv
+    force_no_color = "--no-color" in argv or "--plain" in argv
+    if not force_ascii:
+        _enable_windows_utf8()
+    sys.stdout.write("\n" + render(force_ascii, force_no_color) + "\n\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

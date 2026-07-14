@@ -1,0 +1,13 @@
+# Shell scripts, perl/python, and config MUST stay LF so they run on Unix
+# regardless of the contributor's platform (a CRLF shebang breaks bash/perl).
+* text=auto eol=lf
+*.sh    text eol=lf
+*.map   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.cmd   text eol=crlf
+bin/jarvis        text eol=lf
+bin/jarvis-banner text eol=lf
+
+# Binary assets — never touch line endings.
+*.png binary

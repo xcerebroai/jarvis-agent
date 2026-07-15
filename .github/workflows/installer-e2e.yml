@@ -1,0 +1,88 @@
+name: Installer E2E (real OS)
+
+# Runs the REAL bootstrap installers end-to-end on the platforms they target —
+# actual git clone, actual uv venv, actual setup-hermes.sh — and asserts the
+# `hermes` command resolves. The previous Ubuntu-only CI proved the wrong
+# platform and let a Windows-only symlink bug ship. -NoDesktop keeps runtime
+# sane (skips the Electron build). Each installer runs TWICE to prove a re-run
+# repairs a partial install instead of breaking it.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows install (real)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure pyyaml for the branding step
+        shell: pwsh
+        run: py -m pip install --quiet pyyaml
+
+      - name: winget branch — prove the invocation on the runner
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          winget --version
+          # The exact command our installer uses when a prereq is missing.
+          # git is preinstalled here, so winget reports already-installed/upgrade —
+          # this proves the invocation + arg syntax work on a real runner.
+          winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements
+          Write-Host "::notice::winget invocation verified. The full missing-prereq -> install -> PATH-refresh -> re-detect flow can only be proven on a clean machine (GitHub runners preinstall git/python/node)."
+
+      - name: E2E install (this commit's overlay, no desktop)
+        shell: pwsh
+        run: pwsh -File dist/jarvis-windows.ps1 -NoDesktop -Dir "$env:RUNNER_TEMP\jv" -OverlayDir "$env:GITHUB_WORKSPACE"
+
+      - name: Assert hermes resolves and is JARVIS-branded
+        shell: pwsh
+        run: |
+          $bash = "C:\Program Files\Git\bin\bash.exe"
+          $out = & $bash -lc 'export PATH="$HOME/.local/bin:$PATH"; hermes --version'
+          Write-Host "hermes --version => $out"
+          if ($LASTEXITCODE -ne 0) { throw "hermes did not resolve via ~/.local/bin" }
+          if ($out -notmatch 'JARVIS')  { throw "expected JARVIS branding in version output" }
+          & "$env:USERPROFILE\.local\bin\hermes.cmd" --version
+          if ($LASTEXITCODE -ne 0) { throw "hermes.cmd (cross-shell shim) did not resolve" }
+
+      - name: Idempotency — re-run must repair, not break
+        shell: pwsh
+        run: |
+          pwsh -File dist/jarvis-windows.ps1 -NoDesktop -Dir "$env:RUNNER_TEMP\jv" -OverlayDir "$env:GITHUB_WORKSPACE"
+          $bash = "C:\Program Files\Git\bin\bash.exe"
+          $out = & $bash -lc 'export PATH="$HOME/.local/bin:$PATH"; hermes --version'
+          if ($LASTEXITCODE -ne 0) { throw "hermes broke after re-run" }
+          Write-Host "re-run OK: $out"
+
+  macos:
+    name: macOS install (real)
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure pyyaml for the branding step
+        run: python3 -m pip install --quiet --break-system-packages pyyaml || python3 -m pip install --quiet pyyaml
+
+      - name: E2E install (this commit's overlay, no desktop)
+        run: bash dist/jarvis-mac.sh --no-desktop --dir "$RUNNER_TEMP/jv" --overlay-dir "$GITHUB_WORKSPACE"
+
+      - name: Assert hermes resolves and is JARVIS-branded
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          out="$(hermes --version)"; echo "hermes --version => $out"
+          echo "$out" | grep -q JARVIS || { echo "expected JARVIS branding"; exit 1; }
+
+      - name: Idempotency — re-run must repair, not break
+        run: |
+          bash dist/jarvis-mac.sh --no-desktop --dir "$RUNNER_TEMP/jv" --overlay-dir "$GITHUB_WORKSPACE"
+          export PATH="$HOME/.local/bin:$PATH"
+          hermes --version | grep -q JARVIS && echo "re-run OK"

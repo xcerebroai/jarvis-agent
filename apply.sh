@@ -59,7 +59,8 @@ is_excluded() {
 }
 
 resolve_python() {
-  for c in "${HERMES_PYTHON:-}" python3 python py; do
+  # 'py'/'python3' before bare 'python' to avoid the Windows Store alias noise.
+  for c in "${HERMES_PYTHON:-}" python3 py python; do
     [ -z "$c" ] && continue
     if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import yaml' >/dev/null 2>&1; then
       echo "$c"; return 0

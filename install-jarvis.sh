@@ -53,9 +53,69 @@ fi
 echo "  Installing JARVIS — your AI employee. Wrapping Hermes Agent setup…"
 echo
 
-# --- 2. Run the real Hermes setup (unmodified) -----------------------------
+# --- Windows / Git Bash compatibility for upstream setup-hermes.sh ---------
+# setup-hermes.sh assumes a Unix venv layout (venv/bin/{python,hermes}) and
+# symlinks hermes into ~/.local/bin. On Windows the venv is venv/Scripts/*.exe,
+# so those paths are missing and `ln -s` (which Git Bash resolves by COPYING
+# the source) fails with ENOENT. We satisfy the upstream assumption WITHOUT
+# patching it: create Unix-layout shim files under venv/bin that forward to the
+# real venv/Scripts/*.exe, then let setup-hermes.sh run unmodified.
+is_win_bash() {
+  case "${OS:-}${OSTYPE:-}$(uname -s 2>/dev/null)" in
+    *Windows_NT*|*msys*|*cygwin*|*MINGW*|*MSYS*) return 0 ;; *) return 1 ;;
+  esac
+}
+ensure_local_bin() {
+  mkdir -p "$HOME/.local/bin"
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
+}
+# Create venv/bin/<name> -> venv/Scripts/<exe> forwarders (absolute path, so the
+# shim keeps working after setup-hermes.sh copies it into ~/.local/bin).
+make_venv_shims() {
+  local src="$1" b="$1/venv/bin" s="$1/venv/Scripts" name exe pair
+  [ -d "$s" ] || return 1
+  mkdir -p "$b"
+  for pair in python:python.exe python3:python.exe pip:pip.exe pip3:pip.exe \
+              hermes:hermes.exe hermes-agent:hermes-agent.exe hermes-acp:hermes-acp.exe; do
+    name="${pair%%:*}"; exe="${pair##*:}"
+    [ -f "$s/$exe" ] || continue
+    printf '#!/bin/sh\nexec "%s/%s" "$@"\n' "$s" "$exe" > "$b/$name"
+    chmod +x "$b/$name" 2>/dev/null || true
+  done
+}
+# Run setup-hermes.sh once. In a real terminal (tty), its prompts work
+# normally; when driven non-interactively (CI / a GUI installer), decline the
+# optional prompts (ripgrep, the setup wizard) so it can't hang — the user
+# configures on first launch instead of a terminal wizard. Those prompts use
+# `read -n 1`, which consumes one char each, so we feed bare 'n's (no newlines).
+run_setup_once() {
+  if [ -t 0 ]; then
+    ( cd "$SRC" && bash ./setup-hermes.sh "$@" )
+  else
+    ( cd "$SRC" && printf 'nnnnnnnn' | bash ./setup-hermes.sh "$@" )
+  fi
+}
+# On Windows, repair the venv/bin layout and retry once so a partial install
+# (venv already built) completes instead of failing. Idempotent.
+run_hermes_setup() {
+  ensure_local_bin
+  if is_win_bash && [ -f "$SRC/venv/Scripts/hermes.exe" ]; then
+    echo "  (Windows) creating venv/bin compatibility shims…"
+    make_venv_shims "$SRC"
+  fi
+  if run_setup_once "$@"; then return 0; fi
+  if is_win_bash && [ -f "$SRC/venv/Scripts/hermes.exe" ]; then
+    echo "  (Windows) setup hit a Unix-only step; applying venv/bin shims and retrying…"
+    make_venv_shims "$SRC"
+    run_setup_once "$@" || return 1
+    return 0
+  fi
+  return 1
+}
+
+# --- 2. Run the real Hermes setup (unmodified, with Windows repair) ---------
 echo "◆ Running Hermes setup (setup-hermes.sh)…"
-( cd "$SRC" && bash ./setup-hermes.sh "${@:2}" )
+run_hermes_setup "${@:2}"
 
 # --- 3. Install the `jarvis` shim onto PATH --------------------------------
 BIN_DIR="${JARVIS_BIN_DIR:-$HOME/.local/bin}"
@@ -64,10 +124,14 @@ cp -f "$OVERLAY_DIR/bin/jarvis" "$BIN_DIR/jarvis"
 chmod +x "$BIN_DIR/jarvis" 2>/dev/null || true
 cp -f "$OVERLAY_DIR/bin/jarvis-banner" "$BIN_DIR/jarvis-banner"
 chmod +x "$BIN_DIR/jarvis-banner" 2>/dev/null || true
-case "${OS:-}${OSTYPE:-}" in
-  *Windows_NT*|*msys*|*cygwin*|*win32*)
-    cp -f "$OVERLAY_DIR/bin/jarvis.cmd" "$BIN_DIR/jarvis.cmd" ;;
-esac
+if is_win_bash; then
+  cp -f "$OVERLAY_DIR/bin/jarvis.cmd" "$BIN_DIR/jarvis.cmd"
+  # Cross-shell `hermes` for PowerShell/cmd (Git Bash gets the shim from setup).
+  if [ -f "$SRC/venv/Scripts/hermes.exe" ]; then
+    HEXE_WIN="$(cygpath -w "$SRC/venv/Scripts/hermes.exe" 2>/dev/null || echo "$SRC/venv/Scripts/hermes.exe")"
+    printf '@echo off\r\n"%s" %%*\r\n' "$HEXE_WIN" > "$BIN_DIR/hermes.cmd"
+  fi
+fi
 echo "◆ installed 'jarvis' command -> $BIN_DIR/jarvis"
 
 # --- 4. Apply JARVIS branding ---------------------------------------------

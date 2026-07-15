@@ -23,7 +23,8 @@
 param(
   [switch]$DryRun,
   [switch]$NoDesktop,
-  [string]$Dir = "$env:USERPROFILE\jarvis"
+  [string]$Dir = "$env:USERPROFILE\jarvis",
+  [string]$OverlayDir = ''   # use an existing jarvis-agent checkout instead of cloning (CI/testing)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -105,8 +106,10 @@ function Check-Prereqs {
   if (Have 'git') { Ok ("git " + ((git --version) -replace 'git version ','')) }
   else { Warn "Git not found."; Winget-Install 'Git.Git' 'Git' }
 
+  # Probe 'py' and 'python3' before bare 'python' so we don't trigger the
+  # Windows Store "Python was not found" app-execution-alias noise.
   $script:PyBin = $null
-  foreach ($c in @('python','python3','py')) { if (Py-Ok $c) { $script:PyBin = $c; break } }
+  foreach ($c in @('py','python3','python')) { if (Py-Ok $c) { $script:PyBin = $c; break } }
   if ($script:PyBin) { Ok ("Python " + (& $script:PyBin -c 'import platform;print(platform.python_version())')) }
   else { Warn "Python 3.11+ not found."; Winget-Install 'Python.Python.3.12' 'Python 3.12'; $script:PyBin = 'python' }
 
@@ -151,14 +154,29 @@ if ($DryRun) {
 }
 
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
-Clone-OrUpdate $HermesRepo  (Join-Path $Dir 'hermes-agent')
-Clone-OrUpdate $OverlayRepo (Join-Path $Dir 'jarvis-agent')
+# hermes/jarvis link their commands into ~/.local/bin — make sure it exists and
+# is on the persisted Windows user PATH so `jarvis`/`hermes` resolve in new shells.
+$LocalBin = Join-Path $env:USERPROFILE '.local\bin'
+New-Item -ItemType Directory -Force -Path $LocalBin | Out-Null
+$userPath = [Environment]::GetEnvironmentVariable('Path','User')
+if (-not (($userPath -split ';') -contains $LocalBin)) {
+  [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ';' + $LocalBin).TrimStart(';')), 'User')
+  Info "Added $LocalBin to your user PATH (new terminals will pick it up)."
+}
+Clone-OrUpdate $HermesRepo (Join-Path $Dir 'hermes-agent')
+if ($OverlayDir) {
+  Info "Using existing overlay checkout: $OverlayDir"
+  $overlayPath = $OverlayDir
+} else {
+  Clone-OrUpdate $OverlayRepo (Join-Path $Dir 'jarvis-agent')
+  $overlayPath = (Join-Path $Dir 'jarvis-agent')
+}
 
 $bash = Find-Bash
 if (-not $bash) { Die "Git Bash (bash.exe) not found. Reinstall Git for Windows, then re-run." }
 
 $hermesPosix  = To-Posix (Join-Path $Dir 'hermes-agent')
-$overlayPosix = To-Posix (Join-Path $Dir 'jarvis-agent')
+$overlayPosix = To-Posix $overlayPath
 $skip = ''
 if ($NoDesktop) { $skip = "JARVIS_SKIP_DESKTOP=1 " }
 

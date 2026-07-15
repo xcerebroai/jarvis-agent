@@ -33,12 +33,13 @@ warn() { printf '%s!%s %s\n' "$R" "$Z" "$*"; }
 die()  { printf '%s✗ %s%s\n' "$R" "$*" "$Z" >&2; exit 1; }
 
 # --- Args -------------------------------------------------------------------
-DRY_RUN=0; NO_DESKTOP=0; JARVIS_DIR="${JARVIS_DIR:-$HOME/jarvis}"
+DRY_RUN=0; NO_DESKTOP=0; JARVIS_DIR="${JARVIS_DIR:-$HOME/jarvis}"; OVERLAY_OVERRIDE=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --no-desktop) NO_DESKTOP=1 ;;
     --dir) shift; JARVIS_DIR="$1" ;;
+    --overlay-dir) shift; OVERLAY_OVERRIDE="$1" ;;  # use an existing checkout instead of cloning (CI/testing)
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
@@ -149,11 +150,16 @@ main() {
 
   mkdir -p "$JARVIS_DIR"
   clone_or_update "$HERMES_REPO"  "$JARVIS_DIR/hermes-agent"
-  clone_or_update "$OVERLAY_REPO" "$JARVIS_DIR/jarvis-agent"
+  local overlay
+  if [ -n "$OVERLAY_OVERRIDE" ]; then
+    info "Using existing overlay checkout: $OVERLAY_OVERRIDE"; overlay="$OVERLAY_OVERRIDE"
+  else
+    clone_or_update "$OVERLAY_REPO" "$JARVIS_DIR/jarvis-agent"; overlay="$JARVIS_DIR/jarvis-agent"
+  fi
 
   info "Running the JARVIS installer…"
   [ "$NO_DESKTOP" = 1 ] && export JARVIS_SKIP_DESKTOP=1
-  HERMES_SRC="$JARVIS_DIR/hermes-agent" bash "$JARVIS_DIR/jarvis-agent/install-jarvis.sh"
+  HERMES_SRC="$JARVIS_DIR/hermes-agent" bash "$overlay/install-jarvis.sh"
 
   say ""
   ok "JARVIS is installed."

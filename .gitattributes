@@ -6,6 +6,7 @@
 *.yaml  text eol=lf
 *.md    text eol=lf
 *.cmd   text eol=crlf
+*.ps1   text eol=crlf
 bin/jarvis        text eol=lf
 bin/jarvis-banner text eol=lf
 

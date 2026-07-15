@@ -78,12 +78,41 @@ jarvis-agent/
 
 ## Install
 
+**Easiest — one-command installers** (download from
+[xcerebro.ai/jarvis](https://xcerebro.ai/jarvis)):
+
+- **macOS:** `bash jarvis-mac.sh`
+- **Windows:** `powershell -ExecutionPolicy Bypass -File jarvis-windows.ps1`
+
+Each installer checks/installs prerequisites (git, Python 3.11+, Node
+`^20.19 || >=22.12`), clones Hermes + this overlay, and runs the full install
+below. Pass `--dry-run` (mac) / `-DryRun` (Windows) to preview without changing
+anything; `--no-desktop` / `-NoDesktop` to skip the desktop build.
+
+**Manual:**
+
 ```bash
 git clone https://github.com/NousResearch/hermes-agent
 git clone https://github.com/xcerebroai/jarvis-agent
 cd jarvis-agent
 HERMES_SRC=../hermes-agent ./install-jarvis.sh
 ```
+
+## Getting started
+
+After installing, launch the **JARVIS** desktop app (Start Menu / dock /
+shortcut) or run `jarvis` in a terminal. On **first launch** JARVIS will ask you
+to:
+
+1. **Connect an AI provider key** — paste an API key (e.g. Anthropic) or sign in
+   with a supported provider so the agent can think.
+2. **Connect Telegram (optional)** — link a Telegram bot so JARVIS is reachable
+   from your phone; WhatsApp and other channels can be added the same way from
+   the dashboard.
+
+That's it — no accounts, no billing. Your keys and config live locally in
+`~/.hermes`. For provider setup details and channel options, see the
+[Hermes Agent docs](https://github.com/NousResearch/hermes-agent#readme).
 
 Then run `jarvis` to start. Update later with `./update-jarvis.sh`.
 

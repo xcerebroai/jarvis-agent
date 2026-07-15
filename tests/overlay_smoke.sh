@@ -135,6 +135,33 @@ for mode in "" "--ascii" "--no-color" "--plain"; do
 done
 
 echo
+echo "== 10. desktop (Electron) Tier-1 source rebrand =="
+# Section 8 reverted the tree; re-apply so the desktop source is branded again.
+bash "$OVERLAY_DIR/apply.sh" >/dev/null 2>&1
+D="$SRC/apps/desktop"
+chk "wordmark rebranded to JARVIS"        "grep -q \"WORDMARK = 'JARVIS'\" '$D/src/components/chat/intro.tsx'"
+chk "main.ts APP_NAME default JARVIS"     "grep -q \"|| 'JARVIS'\" '$D/electron/main.ts'"
+chk "CFBundleDisplayName -> JARVIS"       "grep -q '\"CFBundleDisplayName\": \"JARVIS\"' '$D/package.json'"
+chk "CFBundleName -> JARVIS"              "grep -q '\"CFBundleName\": \"JARVIS\"' '$D/package.json'"
+chk "dmg title -> Install JARVIS"         "grep -q '\"title\": \"Install JARVIS\"' '$D/package.json'"
+chk "NS usage text -> JARVIS uses"        "grep -q 'JARVIS uses the microphone' '$D/package.json'"
+# Protected functional identifiers MUST remain Hermes (updater hardcodes them).
+chk "productName still Hermes (protected)"    "grep -q '\"productName\": \"Hermes\"' '$D/package.json'"
+chk "executableName still Hermes (protected)" "grep -q '\"executableName\": \"Hermes\"' '$D/package.json'"
+chk "CFBundleExecutable still Hermes"         "grep -q '\"CFBundleExecutable\": \"Hermes\"' '$D/package.json'"
+chk "appId still com.nousresearch.hermes"     "grep -q 'com.nousresearch.hermes' '$D/package.json'"
+chk "desktop package.json still valid JSON"   "'$PY' -c 'import json,sys;json.load(open(sys.argv[1],encoding=\"utf-8\"))' '$D/package.json'"
+chk "no 'Hermes Agent' in desktop i18n"       "! grep -rqE 'Hermes Agent|HERMES AGENT' '$D/src/i18n'"
+
+echo "== 11. built-bundle verify catches leaks =="
+mkdir -p "$D/dist/assets"
+printf 'const W=\"JARVIS\";' > "$D/dist/assets/clean.js"
+if bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" >/dev/null 2>&1; then ok "clean built bundle passes"; else bad "clean built bundle passes"; fi
+printf 'const W=\"HERMES AGENT\";' > "$D/dist/assets/leak.js"
+if bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" >/dev/null 2>&1; then bad "leaked bundle is caught"; else ok "leaked bundle is caught"; fi
+rm -rf "$D/dist"
+
+echo
 echo "──────────────────────────────────────────────"
 echo "  RESULT: $PASS passed, $FAIL failed"
 echo "──────────────────────────────────────────────"

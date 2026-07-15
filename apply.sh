@@ -32,6 +32,12 @@ export PYTHONIOENCODING=utf-8
 OVERLAY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MAP="$OVERLAY_DIR/branding.map"
 
+# Mode: `apply.sh --verify-build [SRC]` verifies the BUILT desktop renderer
+# bundle only (called by install/update AFTER the Electron rebuild). Default
+# mode installs the skin and rewrites source strings.
+MODE="apply"
+if [ "${1:-}" = "--verify-build" ]; then MODE="verify-build"; shift; fi
+
 resolve_python() {
   for c in "${HERMES_PYTHON:-}" python3 python py; do
     [ -z "$c" ] && continue
@@ -59,6 +65,43 @@ PY
   return 1
 }
 
+# Verify the BUILT desktop renderer bundle (apps/desktop/dist) — visible brand
+# leaks and JARVIS wordmark presence. Called after an Electron rebuild.
+verify_desktop_build() {
+  local src="$1"
+  local dist="$src/apps/desktop/dist"
+  echo "◆ JARVIS desktop — verify built renderer bundle"
+  if [ ! -d "$dist" ]; then
+    echo "  · no built bundle at apps/desktop/dist — desktop not built here (skipping)"
+    return 0
+  fi
+  local phrase_hits wordmark rc=0
+  # Distinctive visible brand phrases must NOT survive in the bundled output.
+  phrase_hits="$(grep -rloE 'Hermes Agent|HERMES AGENT' "$dist" 2>/dev/null | head -5 || true)"
+  if [ -n "$phrase_hits" ]; then
+    echo "  ⚠ visible brand phrase(s) found in built bundle:"
+    printf '%s\n' "$phrase_hits" | sed "s|^|      |; s|$dist|apps/desktop/dist|"
+    rc=1
+  fi
+  # The JARVIS wordmark must be present — proof the rebrand reached the build.
+  if grep -rqE 'JARVIS' "$dist" 2>/dev/null; then
+    echo "  ✓ JARVIS wordmark present in built bundle"
+  else
+    echo "  ⚠ JARVIS wordmark NOT found in built bundle — rebrand did not reach the build"
+    rc=1
+  fi
+  if [ "$rc" -eq 0 ]; then
+    echo "  ✓ no visible Hermes brand phrases survived in the built desktop bundle"
+  else
+    echo
+    echo "  ##################################################################"
+    echo "  # WARNING: desktop build carries un-rebranded brand strings!      #"
+    echo "  # Re-run apply.sh then rebuild:  <jarvis|hermes> desktop --build-only #"
+    echo "  ##################################################################"
+  fi
+  return "$rc"
+}
+
 SRC="$(resolve_src "${1:-}" || true)"
 if [ -z "$SRC" ] || [ ! -d "$SRC" ]; then
   echo "ERROR: could not locate the Hermes source tree." >&2
@@ -66,6 +109,13 @@ if [ -z "$SRC" ] || [ ! -d "$SRC" ]; then
   exit 1
 fi
 SRC="$(cd "$SRC" && pwd)"
+
+# --verify-build: check the built bundle and exit (no skin/source changes).
+if [ "$MODE" = "verify-build" ]; then
+  verify_desktop_build "$SRC"
+  exit $?
+fi
+
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 
 echo "◆ JARVIS overlay — applying"
@@ -216,7 +266,72 @@ for f in \
   gateway/run.py; do
   add "$SRC/$f"
 done
+# Desktop (Electron) renderer — pure visible-string surfaces (blanket-safe:
+# apps/desktop has no functional capitalized "Hermes"). The build-config files
+# (package.json, electron/main.ts) are handled by the surgical [desktop] pass
+# below, NOT here, because their "Hermes" values are shared with protected
+# identifiers (productName/executableName/CFBundleExecutable).
+add "$SRC/apps/desktop/src/components/chat/intro.tsx"
+add "$SRC/apps/desktop/src/components/chat/intro-copy.jsonl"
+while IFS= read -r f; do FILES+=("$f"); done < <(
+  find "$SRC/apps/desktop/src/i18n" -maxdepth 1 -name '*.ts' \
+    ! -name 'catalog.ts' ! -name 'context.tsx' ! -name 'define-locale.ts' \
+    ! -name 'index.ts' ! -name 'languages.ts' ! -name 'runtime.ts' \
+    ! -name 'types.ts' ! -name '*.test.*' 2>/dev/null || true)
 [ ${#FILES[@]} -gt 0 ] && rewrite "${FILES[@]}"
+
+# --- 3b. Desktop build-config — surgical, key-anchored [desktop] literals ---
+# Applied ONLY to package.json + electron/main.ts. Each pattern includes its
+# JSON key / code context so it rebrands the visible app name (CFBundle*Name,
+# dmg title, permission text, app.setName default) without ever matching the
+# protected productName/executableName/CFBundleExecutable/appId on adjacent
+# lines. Independent JSON validity is asserted after the edit.
+rewrite_desktop_config() {
+  perl -CSDA -Mstrict -Mwarnings - "$MAP" "$@" <<'PERL'
+use strict; use warnings;
+my ($map, @files) = @ARGV;
+my @pairs;
+open(my $m, '<:encoding(UTF-8)', $map) or die "cannot read map: $!";
+my $sec = '';
+while (my $l = <$m>) {
+    chomp $l;
+    next if $l =~ /^\s*#/ || $l =~ /^\s*$/;
+    if ($l =~ /^\[(\w+)\]\s*$/) { $sec = $1; next; }
+    next unless $sec eq 'desktop';
+    my ($f, $r) = split(/\t/, $l, 2);
+    push @pairs, [$f, $r] if defined $f && defined $r;
+}
+close $m;
+my $changed = 0;
+for my $file (@files) {
+    next unless -f $file;
+    local $/; open(my $fh, '<:encoding(UTF-8)', $file) or next;
+    my $orig = <$fh>; close $fh; my $s = $orig;
+    for my $p (@pairs) { my $q = quotemeta $p->[0]; $s =~ s/$q/$p->[1]/g; }
+    if ($s ne $orig) {
+        open(my $out, '>:encoding(UTF-8)', $file) or die "cannot write $file: $!";
+        print $out $s; close $out;
+        my $short = $file; $short =~ s{.*/(apps/desktop/.*)$}{$1};
+        $changed++; print "    ~ $short\n";
+    }
+}
+print "  (desktop) rewrote $changed file(s)\n";
+PERL
+}
+DESK_PKG="$SRC/apps/desktop/package.json"
+DESK_MAIN="$SRC/apps/desktop/electron/main.ts"
+if [ -f "$DESK_PKG" ] || [ -f "$DESK_MAIN" ]; then
+  echo "  rewriting desktop build config…"
+  rewrite_desktop_config "$DESK_PKG" "$DESK_MAIN"
+  # Assert package.json is still valid JSON after the surgical edit.
+  if [ -f "$DESK_PKG" ] && [ -n "$PY" ]; then
+    if ! "$PY" -c "import json,sys; json.load(open(sys.argv[1],encoding='utf-8'))" "$DESK_PKG" 2>/dev/null; then
+      echo "  ✗ desktop package.json is no longer valid JSON after edit — aborting" >&2
+      exit 1
+    fi
+    echo "  ✓ desktop package.json still valid JSON"
+  fi
+fi
 
 # --- 4. Verify pass -------------------------------------------------------
 # Grep EVERY customer-visible surface for a surviving standalone brand token.
@@ -231,7 +346,7 @@ scan() {
   local f hits
   for f in "$@"; do
     [ -f "$f" ] || continue
-    hits="$(grep -nE '\bHermes\b|\bNOUS HERMES\b' "$f" 2>/dev/null \
+    hits="$(grep -nE '\bHermes\b|NOUS HERMES|HERMES AGENT' "$f" 2>/dev/null \
             | grep -vE 'X-Hermes-|HermesCLI|updateHermes|checkHermesUpdate|can_update_hermes' || true)"
     if [ -n "$hits" ]; then
       LEAKS=$(( LEAKS + $(printf '%s\n' "$hits" | grep -c .) ))
@@ -256,6 +371,30 @@ scan "cli/gateway"    \
   "$SRC/hermes_cli/commands.py"   "$SRC/hermes_cli/cli_commands_mixin.py" \
   "$SRC/gateway/platforms/whatsapp_common.py" "$SRC/cli.py"
 
+# Desktop renderer surfaces (i18n + intro) — pure visible strings.
+DESKI18N=(); while IFS= read -r f; do DESKI18N+=("$f"); done < <(
+  find "$SRC/apps/desktop/src/i18n" -maxdepth 1 -name '*.ts' \
+    ! -name 'catalog.ts' ! -name 'context.tsx' ! -name 'define-locale.ts' \
+    ! -name 'index.ts' ! -name 'languages.ts' ! -name 'runtime.ts' \
+    ! -name 'types.ts' ! -name '*.test.*' 2>/dev/null || true)
+[ ${#DESKI18N[@]} -gt 0 ] && scan "desktop-i18n" "${DESKI18N[@]}"
+scan "desktop-ui" \
+  "$SRC/apps/desktop/src/components/chat/intro.tsx" \
+  "$SRC/apps/desktop/src/components/chat/intro-copy.jsonl"
+
+# Desktop build config — assert visible fields rebranded AND that the
+# protected functional identifiers are STILL "Hermes" (a change here would
+# break Hermes's own updater, which hardcodes Hermes.app/Hermes.exe).
+DESK_PKG="$SRC/apps/desktop/package.json"
+if [ -f "$DESK_PKG" ]; then
+  cfg_bad() { echo "  ⚠ [desktop-config] $1"; LEAKS=$((LEAKS + 1)); }
+  grep -q '"CFBundleDisplayName": "JARVIS"' "$DESK_PKG" || cfg_bad "CFBundleDisplayName not rebranded to JARVIS"
+  grep -q '"CFBundleName": "JARVIS"'        "$DESK_PKG" || cfg_bad "CFBundleName not rebranded to JARVIS"
+  grep -q '"productName": "Hermes"'         "$DESK_PKG" || cfg_bad "productName changed from Hermes — bundle/updater name drift!"
+  grep -q '"executableName": "Hermes"'      "$DESK_PKG" || cfg_bad "executableName changed from Hermes — updater relaunch will break!"
+  grep -q "|| 'JARVIS'" "$SRC/apps/desktop/electron/main.ts" 2>/dev/null || cfg_bad "main.ts APP_NAME default not rebranded to JARVIS"
+fi
+
 if [ "$LEAKS" -gt 0 ]; then
   echo
   echo "  ##################################################################"
@@ -264,7 +403,7 @@ if [ "$LEAKS" -gt 0 ]; then
   echo "  ##################################################################"
   echo
 else
-  echo "  ✓ no visible brand strings survived across all locale + web + cli surfaces"
+  echo "  ✓ no visible brand strings survived across all locale + web + cli + desktop surfaces"
 fi
 
 echo "◆ JARVIS overlay — done"

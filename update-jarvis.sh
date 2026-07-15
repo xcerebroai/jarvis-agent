@@ -74,4 +74,26 @@ fi
 echo "  → re-applying JARVIS overlay…"
 HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh"
 
+# --- 4. Rebuild the desktop app so it isn't left rebuilt un-branded ---------
+# `hermes update` (step 2) runs `hermes desktop --build-only` from PRISTINE
+# source BEFORE our re-apply, so without this the running desktop app would be
+# a freshly-built HERMES. Rebuild once more from the now-rebranded source.
+# Only if the desktop was actually built on this machine (release/ present).
+DESK_RELEASE="$SRC/apps/desktop/release"
+if [ -d "$DESK_RELEASE" ] && ls "$DESK_RELEASE"/*-unpacked >/dev/null 2>&1; then
+  echo
+  echo "◆ Rebuilding JARVIS desktop — this takes a few minutes, don't close."
+  if "$UPDATER" desktop --build-only "${@:2}"; then
+    echo "  ✓ desktop rebuilt from JARVIS-branded source"
+    HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" || \
+      echo "  ⚠ built desktop bundle still carries brand strings — see warning above"
+  else
+    echo "  ⚠ desktop rebuild failed — the app may show HERMES until you run:"
+    echo "      $UPDATER desktop --build-only"
+  fi
+else
+  echo "  · desktop app was never built on this machine — skipping rebuild."
+  echo "    (Build it any time with:  $UPDATER desktop --build-only)"
+fi
+
 echo "◆ JARVIS — update complete"

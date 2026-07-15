@@ -57,6 +57,7 @@ HERMES_REVISION
 [literal]
 Hermes Agent - Dashboard	JARVIS - Dashboard
 NOUS HERMES	JARVIS
+HERMES AGENT	JARVIS
 Hermes Agent	JARVIS
 Hermes Teal (Large)	JARVIS Blue (Large)
 Hermes Teal	JARVIS Blue
@@ -89,6 +90,24 @@ Hermes	JARVIS
 # Messaging surfaces only; CLI glyphs are handled by skins/jarvis.yaml.
 [glyph]
 ⚕	◆
+
+# Desktop (Electron) build-config edits — applied by apply.sh ONLY to
+# apps/desktop/package.json and apps/desktop/electron/main.ts (Tier 1).
+# Each find includes its JSON key / code context so it is unambiguous: it
+# rebrands the VISIBLE app name (macOS dock/menu/About via CFBundle*Name,
+# the dmg install title, the macOS permission-prompt text, and the Electron
+# app.setName default) while never matching the protected functional
+# identifiers on adjacent lines — productName, executableName,
+# CFBundleExecutable, appId (com.nousresearch.hermes), or the hermes://
+# protocol. Those keep the .app/.exe filename as "Hermes" so Hermes's own
+# updater (which hardcodes Hermes.app / Hermes.exe) keeps working.
+[desktop]
+"CFBundleDisplayName": "Hermes"	"CFBundleDisplayName": "JARVIS"
+"CFBundleName": "Hermes"	"CFBundleName": "JARVIS"
+"Hermes uses audio capture	"JARVIS uses audio capture
+"Hermes uses the microphone	"JARVIS uses the microphone
+"title": "Install Hermes"	"title": "Install JARVIS"
+HERMES_DESKTOP_APP_NAME || 'Hermes'	HERMES_DESKTOP_APP_NAME || 'JARVIS'
 
 # ---------------------------------------------------------------------------
 # POLICY: brand NOUNS become JARVIS; command INVOCATIONS become `jarvis`

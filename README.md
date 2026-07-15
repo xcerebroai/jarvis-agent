@@ -7,6 +7,10 @@ while keeping the underlying Hermes code pristine — so `hermes update` always
 pulls clean upstream with **zero merge conflicts**. This is an overlay, *not* a
 fork or an in-place edit of upstream.
 
+All three client launch surfaces are branded at full capability parity:
+**terminal/PowerShell CLI**, the **desktop app** (Electron), and the **browser
+dashboard**.
+
 > Brand: **JARVIS** — deep black `#0A0A0A`, electric blue `#3B82F6`, light blue
 > `#60A5FA`. Tagline: *"Your AI Employee. Runs Your Business 24/7."*
 
@@ -47,6 +51,7 @@ The skin needs none of this — it's outside the repo.
 | Command invocations: `hermes update` → `jarvis update` (a real `jarvis` shim backs them) | Internal identifiers: `X-Hermes-Session-Token`, `updateHermes`, `HERMES_HOME`, `hermes_cli` |
 | Theme labels (client **and** server copies) | The `website/` docs site (ignored entirely) |
 | Brand glyph `⚕` → `◆` | Upstream `LICENSE` / `NOTICE` / attribution |
+| Desktop wordmark, i18n, macOS `CFBundleDisplayName`/`CFBundleName`, dmg title, permission text, `app.setName` default | Desktop `productName`/`executableName`/`CFBundleExecutable`/`appId`/`hermes://` (the `.app`/`.exe` filename stays "Hermes" so the self-updater, which hardcodes `Hermes.app`/`Hermes.exe`, keeps working) |
 
 A repo-wide audit confirmed no capitalized `"Hermes"` is ever used as a
 functional value and no `subprocess("hermes …")` exec strings exist, so the
@@ -90,9 +95,11 @@ one) for the config edit.
 ## Testing & CI
 
 `tests/overlay_smoke.sh` clones upstream Hermes into a throwaway home, applies
-the overlay, and asserts all 16 guarantees (skin loads via Hermes's own engine,
+the overlay, and asserts all 30 guarantees (skin loads via Hermes's own engine,
 verify pass clean, 0 locale leaks, idempotency, protected identifiers/paths
-preserved, commands rebranded, clean-revert, banner fallbacks). Run it locally:
+preserved, commands rebranded, clean-revert, banner fallbacks, desktop Tier-1
+rebrand with functional identifiers protected, built-bundle leak detection).
+Run it locally:
 
 ```bash
 python3 -m pip install pyyaml
@@ -106,6 +113,28 @@ Two GitHub workflows run it:
   introduces a brand surface the overlay doesn't cover, the verify pass fails
   and the workflow opens/updates a tracking issue so `branding.map` can be
   extended before the next customer update.
+
+## Desktop app (Electron)
+
+The desktop app (`apps/desktop`) is **built from source and self-updates via
+`git pull` + `hermes desktop --build-only`** — the same source tree and update
+model as the CLI (Nous ships no prebuilt desktop binaries). It does **not** use
+the CLI skin engine, so its brand lives in source: `apply.sh` rebrands the
+wordmark, its own i18n, and the visible `package.json` build fields.
+
+**Tier 1 (display-only):** the app window, dock, menu, About, dmg title, and
+macOS permission prompts read **JARVIS**. The bundle/exe filename and `appId`
+stay "Hermes" on purpose — Hermes's own updater hardcodes `Hermes.app` /
+`Hermes.exe`, so renaming them would break self-update. `install-jarvis.sh`
+creates **JARVIS-named launch points** (Windows Start-menu/desktop shortcuts,
+a macOS `JARVIS.app` link, a Linux `.desktop` entry) so clients never launch
+via a Hermes-named path.
+
+**Update-survival:** `hermes update` rebuilds the desktop from *pristine*
+source *before* our re-apply, so `update-jarvis.sh` runs a **trailing branded
+rebuild** (`jarvis desktop --build-only`) after re-applying, then verifies the
+built renderer bundle. If the desktop was never built on a machine, the rebuild
+step is skipped gracefully. Building requires Node `^20.19 || >=22.12`.
 
 ## Banner art
 

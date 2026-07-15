@@ -27,16 +27,37 @@ jobs:
         shell: pwsh
         run: py -m pip install --quiet pyyaml
 
+      - name: Prereq detection + dry-run plan (winget-branch decision logic)
+        shell: pwsh
+        run: |
+          # Exercises the code that DECIDES whether to hit the winget branch:
+          # Have / Node-Ok / Py-Ok / Find-Bash + repo reachability. All prereqs
+          # are present on the runner, so this asserts the happy path detects
+          # them (never mis-fires winget) and that DryRun changes nothing —
+          # coverage that needs no clean machine and touches no install state.
+          $log = pwsh -File dist/jarvis-windows.ps1 -DryRun -Dir "$env:RUNNER_TEMP\jv-dry" 2>&1 | Out-String
+          Write-Host $log
+          if ($LASTEXITCODE -ne 0)                         { throw "DryRun exited $LASTEXITCODE" }
+          if ($log -notmatch 'OK git ')                    { throw "git not detected (would wrongly trigger winget)" }
+          if ($log -notmatch 'OK Python ')                 { throw "python not detected (would wrongly trigger winget)" }
+          if ($log -notmatch 'OK Node ')                   { throw "node not detected (would wrongly trigger winget)" }
+          if ($log -notmatch 'reachable:.*hermes-agent')   { throw "hermes repo reachability not exercised" }
+          if ($log -notmatch 'Git Bash found')             { throw "Git Bash detection not exercised" }
+          if ($log -notmatch 'Dry run complete')           { throw "no completion line" }
+          if (Test-Path "$env:RUNNER_TEMP\jv-dry")         { throw "DryRun must not create the install dir" }
+          Write-Host "OK: prereq detection + reachability + plan exercised; nothing installed or cloned."
+
       - name: winget branch — prove the invocation on the runner
         continue-on-error: true
         shell: pwsh
         run: |
           winget --version
-          # The exact command our installer uses when a prereq is missing.
-          # git is preinstalled here, so winget reports already-installed/upgrade —
-          # this proves the invocation + arg syntax work on a real runner.
+          # The exact command our installer runs when a prereq is missing
+          # (see Winget-Install in dist/jarvis-windows.ps1). git is preinstalled
+          # here, so winget reports already-installed/upgrade — this proves the
+          # invocation + arg syntax resolve on a real runner.
           winget install --id Git.Git -e --source winget --accept-package-agreements --accept-source-agreements
-          Write-Host "::notice::winget invocation verified. The full missing-prereq -> install -> PATH-refresh -> re-detect flow can only be proven on a clean machine (GitHub runners preinstall git/python/node)."
+          Write-Host "::notice::winget invocation + prereq-detection verified on the runner. What a GitHub runner CANNOT prove (git/python/node are preinstalled): the missing-prereq -> Winget-Install -> Refresh-Path -> re-detect transition. That single path needs a clean Windows VM; everything around it (detection, plan, install invocation, real end-to-end install, idempotent re-run) is covered above."
 
       - name: E2E install (this commit's overlay, no desktop)
         shell: pwsh

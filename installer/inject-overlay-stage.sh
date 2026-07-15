@@ -1,15 +1,31 @@
 #!/usr/bin/env bash
 # inject-overlay-stage.sh — wire the JARVIS overlay stage into the Tauri app.
 #
-# Called by brand-installer.sh. Three idempotent injections:
-#   1. Copy the bundled overlay scripts into src-tauri/resources/.
-#   2. Declare them in tauri.conf.json  bundle.resources  so they ship.
-#   3. Add ~20 lines of Rust to bootstrap.rs: after the upstream stage loop
-#      (before Complete) run the overlay script via the existing
-#      run_install_script machinery, streamed as a "jarvis-overlay" stage.
+# Called by brand-installer.sh. Idempotent injections (each independently
+# guarded so a partial run repairs):
+#
+#   1. Copy the overlay scripts into src-tauri/resources/ — the COMPILE-TIME
+#      source for include_str!. They are EMBEDDED in the binary, not bundled
+#      as loose Tauri resources: the shipped Windows artifact is a bare
+#      JARVIS-Setup.exe with no files next to it, so resource-dir loading can
+#      never work there (finding #1). At run time the embedded script is
+#      written to the bootstrap cache dir and executed from that stable path.
+#   2. bootstrap.rs: an overlay-stage call after the upstream stage loop,
+#      before Complete; a synthetic StageInfo pushed into the Manifest EVENT
+#      so the stage is visible in the UI (the frontend drops Stage events for
+#      names it never saw in a manifest — finding #3); the embedded-script
+#      helper with the overlay ref BAKED at build time (finding #5).
+#   3. update.rs: a `rebrand` StageInfo in the synthetic update manifest
+#      (same visibility rule, finding #3); a manifest-scoped revert of the
+#      branded files BEFORE `hermes update` so the pull fast-forwards with
+#      nothing to autostash (finding #19); the re-apply + helper that rebrands
+#      before the desktop rebuild (finding from the original update-story).
 #
 # Upstream install.ps1 / install.sh are NEVER modified — only the Tauri app
-# (which we own the branded build of) gets the injected call.
+# (whose branded build we own) gets the injected code.
+#
+# Env: JARVIS_OVERLAY_REF — ref baked into the binary (default main). CI passes
+# the exact overlay commit SHA so shipped installers apply the tested overlay.
 set -euo pipefail
 
 OVERLAY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,72 +34,92 @@ APP="$SRC/apps/bootstrap-installer"
 TAURI="$APP/src-tauri"
 [ -d "$TAURI" ] || { echo "ERROR: $TAURI not found." >&2; exit 1; }
 
-# --- 1. Bundle the overlay scripts as resources -----------------------------
+# Sanitize the ref (goes into a Rust string literal + git fetch argv).
+REF="${JARVIS_OVERLAY_REF:-main}"
+case "$REF" in
+  *[!A-Za-z0-9._/-]*) echo "ERROR: JARVIS_OVERLAY_REF '$REF' contains unsafe characters." >&2; exit 1 ;;
+esac
+
+# --- 1. Stage the overlay scripts as compile-time include_str! sources ------
 mkdir -p "$TAURI/resources"
 cp -f "$OVERLAY_DIR/installer/overlay-stage/jarvis-overlay.sh"  "$TAURI/resources/jarvis-overlay.sh"
 cp -f "$OVERLAY_DIR/installer/overlay-stage/jarvis-overlay.ps1" "$TAURI/resources/jarvis-overlay.ps1"
-echo "  overlay scripts -> src-tauri/resources/"
+echo "  overlay scripts -> src-tauri/resources/ (embedded via include_str!)"
 
-# --- 2. Declare resources in tauri.conf.json --------------------------------
-TC="$TAURI/tauri.conf.json"
-if grep -q 'resources/jarvis-overlay' "$TC"; then
-  echo "  tauri.conf.json: resources already declared (idempotent)"
-else
-  perl -0777 -pi -e 's/("bundle":\s*\{\s*\n\s*"active":\s*true,)/$1\n    "resources": ["resources\/jarvis-overlay.ps1", "resources\/jarvis-overlay.sh"],/' "$TC"
-  grep -q 'resources/jarvis-overlay' "$TC" || { echo "ERROR: failed to add bundle.resources to tauri.conf.json" >&2; exit 1; }
-  echo "  tauri.conf.json: bundle.resources declared"
-fi
-
-# --- 3. Inject the Rust call + helper into bootstrap.rs ---------------------
 BR="$TAURI/src/bootstrap.rs"
-# 3a. Call block — inserted right after install_root is computed.
+UR="$TAURI/src/update.rs"
+
+# --- 2a. bootstrap.rs: overlay-stage call after the upstream stage loop -----
 if grep -q 'JARVIS overlay stage (injected' "$BR"; then
   echo "  bootstrap.rs: overlay call already present (idempotent)"
 else
   perl -0777 -pi -e 's{(    let install_root = PathBuf::from\(&hermes_home\)\.join\("hermes-agent"\);)}{$1\n    // --- JARVIS overlay stage (injected by the JARVIS overlay; upstream untouched) ---\n    // Layer branding + branded desktop + JARVIS shortcuts on top of the pristine\n    // install install.ps1 produced. Runs before Complete so a failure here surfaces\n    // as a failed install, never a half-branded one.\n    \{\n        let started = Instant::now();\n        emit_event(&app, BootstrapEvent::Stage \{ name: "jarvis-overlay".into(), state: StageState::Running, duration_ms: None, result: None, error: None \});\n        match jarvis_overlay_run(&app, &install_root, args.hermes_home.as_deref(), &emit_log).await \{\n            Ok(()) => emit_event(&app, BootstrapEvent::Stage \{ name: "jarvis-overlay".into(), state: StageState::Succeeded, duration_ms: Some(started.elapsed().as_millis() as u64), result: None, error: None \}),\n            Err(e) => \{\n                let msg = format!("JARVIS overlay stage failed: \{e:#\}");\n                emit_event(&app, BootstrapEvent::Stage \{ name: "jarvis-overlay".into(), state: StageState::Failed, duration_ms: Some(started.elapsed().as_millis() as u64), result: None, error: Some(msg.clone()) \});\n                emit_event(&app, BootstrapEvent::Failed \{ stage: Some("jarvis-overlay".into()), error: msg.clone() \});\n                return Err(anyhow!(msg));\n            \}\n        \}\n    \}\n}g' "$BR"
-
   grep -q 'JARVIS overlay stage (injected' "$BR" || { echo "ERROR: overlay call block not injected — anchor changed upstream?" >&2; exit 1; }
   echo "  bootstrap.rs: overlay call injected"
 fi
 
-# 3b. Helper fn — appended at EOF.
+# --- 2b. bootstrap.rs: make the stage VISIBLE in the installer UI -----------
+# The frontend renders ONLY stages present in the Manifest event (store.ts
+# drops Stage events for unknown names), so push a synthetic StageInfo. The
+# Rust stage LOOP iterates manifest.stages (unmodified) and never tries to run
+# it as an install.ps1 stage — only the injected block above emits its events.
+if grep -q 'Applying JARVIS' "$BR"; then
+  echo "  bootstrap.rs: manifest stage row already present (idempotent)"
+else
+  perl -0777 -pi -e 's{stages: manifest\.stages\.clone\(\),}{stages: \{ let mut s = manifest.stages.clone(); s.push(crate::events::StageInfo \{ name: "jarvis-overlay".into(), title: "Applying JARVIS (branding + desktop)".into(), category: "install".into(), needs_user_input: false \}); s \},}g' "$BR"
+  grep -q 'Applying JARVIS' "$BR" || { echo "ERROR: manifest stage row not injected — anchor changed upstream?" >&2; exit 1; }
+  echo "  bootstrap.rs: 'Applying JARVIS' stage row added to the UI manifest"
+fi
+
+# --- 2c. bootstrap.rs: embedded-script helper + baked overlay ref -----------
 if grep -q 'async fn jarvis_overlay_run' "$BR"; then
   echo "  bootstrap.rs: overlay helper already present (idempotent)"
 else
   cat >> "$BR" <<'RUST'
 
 /// JARVIS overlay stage runner (injected by the JARVIS overlay — not upstream).
-/// Resolves the bundled overlay script (jarvis-overlay.ps1 on Windows,
-/// jarvis-overlay.sh elsewhere) from the app resource dir and runs it through
-/// the same install-script machinery, passing install_root as its argument.
+/// The overlay scripts are EMBEDDED in the binary: a bare JARVIS-Setup.exe
+/// downloaded to ~/Downloads has no loose resource files next to it, so
+/// Tauri resource-dir loading can never work on Windows. At run time the
+/// embedded script is written to the bootstrap cache dir and executed via the
+/// same machinery that drives install.ps1.
+const JARVIS_OVERLAY_PS1: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/jarvis-overlay.ps1"));
+const JARVIS_OVERLAY_SH: &str =
+    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/jarvis-overlay.sh"));
+/// Overlay ref baked at brand time by inject-overlay-stage.sh — the shipped
+/// installer applies the exact overlay commit it was built/tested against.
+const JARVIS_OVERLAY_REF: &str = "__JARVIS_OVERLAY_REF__";
+
 async fn jarvis_overlay_run(
     app: &AppHandle,
     install_root: &std::path::Path,
     hermes_home: Option<&str>,
     emit_log: &impl Fn(&str),
 ) -> Result<()> {
-    use tauri::Manager;
-    let script_name = if cfg!(target_os = "windows") {
-        "jarvis-overlay.ps1"
+    let (name, body) = if cfg!(target_os = "windows") {
+        ("jarvis-overlay.ps1", JARVIS_OVERLAY_PS1)
     } else {
-        "jarvis-overlay.sh"
+        ("jarvis-overlay.sh", JARVIS_OVERLAY_SH)
     };
-    let dir = app
-        .path()
-        .resource_dir()
-        .map_err(|e| anyhow!("resolve resource_dir: {e}"))?;
-    let script = dir.join("resources").join(script_name);
-    if !script.exists() {
-        return Err(anyhow!(
-            "bundled JARVIS overlay script not found at {}",
-            script.display()
-        ));
-    }
-    emit_log(&format!("[jarvis] overlay via {}", script.display()));
+    let dir = crate::paths::bootstrap_cache_dir();
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| anyhow!("create bootstrap cache dir {}: {e}", dir.display()))?;
+    let script = dir.join(name);
+    std::fs::write(&script, body).map_err(|e| anyhow!("write {}: {e}", script.display()))?;
+    emit_log(&format!(
+        "[jarvis] overlay via {} (ref {})",
+        script.display(),
+        JARVIS_OVERLAY_REF
+    ));
+    let script_args = vec![
+        install_root.to_string_lossy().into_owned(),
+        JARVIS_OVERLAY_REF.to_string(),
+    ];
     let res = run_install_script(
         app,
         &script,
-        &[install_root.to_string_lossy().into_owned()],
+        &script_args,
         hermes_home,
         None,
         Some("jarvis-overlay".to_string()),
@@ -100,18 +136,11 @@ async fn jarvis_overlay_run(
     }
 }
 RUST
-
   grep -q 'async fn jarvis_overlay_run' "$BR" || { echo "ERROR: failed to append overlay helper to bootstrap.rs" >&2; exit 1; }
   echo "  bootstrap.rs: overlay helper appended"
 fi
 
-# --- 4. Trailing re-apply on self-update (update.rs) ------------------------
-# The desktop's "Update" hands off to `--update` -> update::run_update, which
-# pulls upstream then rebuilds apps/desktop — from now-unbranded source. Inject
-# a re-apply of the persistent overlay checkout's apply.sh BEFORE that rebuild,
-# so the rebuilt desktop stays JARVIS. Mirrors update-jarvis.sh's post-pull
-# apply; uses the checkout at <HERMES_HOME>/jarvis-agent (no bundled-resource
-# dependency, since --update runs the staged bare exe).
+# --- 2d. bootstrap.rs: reapply helper (used by update.rs's rebrand stage) ---
 if grep -q 'jarvis_reapply_branding' "$BR"; then
   echo "  bootstrap.rs: reapply helper already present (idempotent)"
 else
@@ -177,14 +206,44 @@ RUST
   echo "  bootstrap.rs: reapply helper appended"
 fi
 
-# Inject the re-apply call into update.rs, before the rebuild stage.
-UR="$TAURI/src/update.rs"
-if [ -f "$UR" ] && ! grep -q 'jarvis_reapply_branding' "$UR"; then
-  perl -0777 -pi -e 's{(    emit_stage\(&app, "rebuild", StageState::Running, None, None\);)}{// --- JARVIS: re-apply branding before the rebuild so it builds branded ---\n    emit_stage(&app, "rebrand", StageState::Running, None, None);\n    match crate::bootstrap::jarvis_reapply_branding(&install_root).await \{\n        Ok(()) => emit_stage(&app, "rebrand", StageState::Succeeded, None, None),\n        Err(e) => \{\n            emit_log(&app, Some("rebrand"), LogStream::Stderr, &format!("[jarvis] re-apply failed (desktop may rebuild unbranded): \{e:#\}"));\n            emit_stage(&app, "rebrand", StageState::Failed, None, Some(format!("\{e:#\}")));\n        \}\n    \}\n\n$1}g' "$UR"
-  grep -q 'jarvis_reapply_branding' "$UR" || { echo "ERROR: failed to inject re-apply into update.rs (anchor changed upstream?)" >&2; exit 1; }
-  echo "  update.rs: trailing re-apply injected before rebuild"
-elif [ -f "$UR" ]; then
-  echo "  update.rs: re-apply already present (idempotent)"
+# Bake the ref into the helper (first injection only — see idempotency note).
+if grep -q '__JARVIS_OVERLAY_REF__' "$BR"; then
+  perl -pi -e "s{__JARVIS_OVERLAY_REF__}{$REF}g" "$BR"
+  echo "  bootstrap.rs: overlay ref baked -> $REF"
 fi
 
-echo "  ✓ overlay stage wired"
+# --- 3a. update.rs: 'rebrand' row in the synthetic update manifest ----------
+# update.rs builds its own manifest (handoff → update → rebuild); without a
+# row the rebrand stage's events are dropped by the UI (finding #3).
+if [ -f "$UR" ] && ! grep -q '"rebrand", "Re-applying JARVIS' "$UR"; then
+  perl -0777 -pi -e 's{(        stage_info\("update", "Downloading the latest version"\),)}{$1\n        stage_info("rebrand", "Re-applying JARVIS branding"),}g' "$UR"
+  grep -q '"rebrand", "Re-applying JARVIS' "$UR" || { echo "ERROR: rebrand manifest row not injected — anchor changed upstream?" >&2; exit 1; }
+  echo "  update.rs: 'rebrand' row added to the synthetic update manifest"
+elif [ -f "$UR" ]; then
+  echo "  update.rs: rebrand manifest row already present (idempotent)"
+fi
+
+# --- 3b. update.rs: manifest-scoped revert BEFORE `hermes update` -----------
+# A clean tree fast-forwards with nothing to autostash: no per-update stash
+# growth, no stash-apply conflicts (finding #19). Scoped to the manifest
+# apply.sh writes; files in branding.exclude are never in the manifest, so
+# operator-patched files are left alone. Best-effort: on any failure the
+# upstream autostash path handles the dirty tree as before.
+if [ -f "$UR" ] && ! grep -q 'JARVIS: revert branded files' "$UR"; then
+  perl -0777 -pi -e 's{(    emit_stage\(&app, "update", StageState::Running, None, None\);)}{// --- JARVIS: revert branded files before `hermes update` (injected) ---\n    \{\n        let manifest_path = crate::paths::hermes_home().join(".jarvis").join("branded-files.txt");\n        if let Ok(list) = std::fs::read_to_string(&manifest_path) \{\n            let rels: Vec<String> = list.lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();\n            if !rels.is_empty() \{\n                let mut cmd = std::process::Command::new("git");\n                cmd.arg("-C").arg(&install_root).args(["checkout", "--"]);\n                for r in &rels \{ cmd.arg(r); \}\n                match cmd.status() \{\n                    Ok(s) if s.success() => emit_log(&app, Some("update"), LogStream::Stdout, &format!("[jarvis] reverted \{\} branded file(s) for a clean pull", rels.len())),\n                    other => emit_log(&app, Some("update"), LogStream::Stdout, &format!("[jarvis] branded-file revert skipped (\{other:?\}) — autostash will handle the dirty tree")),\n                \}\n            \}\n        \}\n    \}\n\n$1}g' "$UR"
+  grep -q 'JARVIS: revert branded files' "$UR" || { echo "ERROR: pre-update revert not injected — anchor changed upstream?" >&2; exit 1; }
+  echo "  update.rs: manifest-scoped pre-update revert injected"
+elif [ -f "$UR" ]; then
+  echo "  update.rs: pre-update revert already present (idempotent)"
+fi
+
+# --- 3c. update.rs: rebrand stage before the desktop rebuild ----------------
+if [ -f "$UR" ] && ! grep -q 'jarvis_reapply_branding' "$UR"; then
+  perl -0777 -pi -e 's{(    emit_stage\(&app, "rebuild", StageState::Running, None, None\);)}{// --- JARVIS: re-apply branding before the rebuild so it builds branded ---\n    emit_stage(&app, "rebrand", StageState::Running, None, None);\n    match crate::bootstrap::jarvis_reapply_branding(&install_root).await \{\n        Ok(()) => emit_stage(&app, "rebrand", StageState::Succeeded, None, None),\n        Err(e) => \{\n            emit_log(&app, Some("rebrand"), LogStream::Stderr, &format!("[jarvis] re-apply failed (desktop may rebuild unbranded): \{e:#\}"));\n            emit_stage(&app, "rebrand", StageState::Failed, None, Some(format!("\{e:#\}")));\n        \}\n    \}\n\n$1}g' "$UR"
+  grep -q 'jarvis_reapply_branding' "$UR" || { echo "ERROR: rebrand call not injected into update.rs — anchor changed upstream?" >&2; exit 1; }
+  echo "  update.rs: rebrand stage injected before rebuild"
+elif [ -f "$UR" ]; then
+  echo "  update.rs: rebrand call already present (idempotent)"
+fi
+
+echo "  ✓ overlay stage wired (embedded scripts, visible stages, pinned ref $REF)"

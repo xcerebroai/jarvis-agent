@@ -20,6 +20,10 @@ on:
       - ".github/workflows/installer-build.yml"
   release:
     types: [published]
+  # (#22) Weekly canary: upstream drift that breaks the brand/inject anchors
+  # fails loudly here instead of on the next release.
+  schedule:
+    - cron: "23 6 * * 2"
   workflow_dispatch:
     inputs:
       hermes_ref:
@@ -112,6 +116,10 @@ jobs:
 
       - name: Apply JARVIS branding + inject overlay stage
         shell: bash
+        env:
+          # (#5) Baked into the binary by the injector so shipped installers
+          # apply the exact overlay commit this build was tested against.
+          JARVIS_OVERLAY_REF: ${{ github.sha }}
         run: bash installer/brand-installer.sh "$PWD/hermes-src"
 
       - name: Rust check (fast fail on the injected overlay stage)
@@ -125,12 +133,14 @@ jobs:
 
       # Bake the tested upstream commit as the install-script pin, so the built
       # installer downloads the exact scripts/install.ps1 we validated against.
+      # (#4) build.rs reads HERMES_BUILD_PIN_COMMIT (and emits the un-prefixed
+      # rustc-env itself) — the previous BUILD_PIN_COMMIT name was silently
+      # ignored and installers tracked main HEAD.
       - name: Build (Windows — exe, no bundle)
         if: runner.os == 'Windows'
         working-directory: hermes-src/apps/bootstrap-installer
         env:
-          BUILD_PIN_COMMIT: ${{ steps.clone.outputs.sha }}
-          JARVIS_OVERLAY_REF: ${{ github.sha }}
+          HERMES_BUILD_PIN_COMMIT: ${{ steps.clone.outputs.sha }}
         run: npx tauri build --no-bundle
 
       # Signed build — only when Apple secrets exist. Tauri v2 codesigns +
@@ -139,8 +149,7 @@ jobs:
         if: runner.os == 'macOS' && env.HAS_APPLE == 'yes'
         working-directory: hermes-src/apps/bootstrap-installer
         env:
-          BUILD_PIN_COMMIT: ${{ steps.clone.outputs.sha }}
-          JARVIS_OVERLAY_REF: ${{ github.sha }}
+          HERMES_BUILD_PIN_COMMIT: ${{ steps.clone.outputs.sha }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -156,8 +165,7 @@ jobs:
         if: runner.os == 'macOS' && env.HAS_APPLE != 'yes'
         working-directory: hermes-src/apps/bootstrap-installer
         env:
-          BUILD_PIN_COMMIT: ${{ steps.clone.outputs.sha }}
-          JARVIS_OVERLAY_REF: ${{ github.sha }}
+          HERMES_BUILD_PIN_COMMIT: ${{ steps.clone.outputs.sha }}
         run: npx tauri build --bundles dmg
 
       # --- Stage the artifact under a stable JARVIS-Setup name ---------------

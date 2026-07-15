@@ -34,6 +34,9 @@ echo "◆ Generating JARVIS icons from $LOGO"
 rasterize "$LOGO" 32  "$ICONS/32x32.png"
 rasterize "$LOGO" 128 "$ICONS/128x128.png"
 rasterize "$LOGO" 256 "$ICONS/128x128@2x.png"
+# (#23) apply.sh swaps this over apps/desktop/assets/icon.png (Electron's
+# linux/window icon source) — keep it high-res.
+rasterize "$LOGO" 512 "$ICONS/icon-512.png"
 
 tmp="$(mktemp -d)"
 for s in 16 24 32 48 64 128 256 512 1024; do rasterize "$LOGO" "$s" "$tmp/i$s.png"; done

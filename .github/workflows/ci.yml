@@ -55,6 +55,23 @@ jobs:
           done
           echo "banner OK (all modes)"
 
+  pslint:
+    name: PSScriptAnalyzer (PowerShell installers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Analyze (Severity Error)
+        shell: pwsh
+        run: |
+          # (#21) The .ps1 files are the highest-risk scripts in the repo
+          # (PS 5.1 NativeCommandError class of bug) and shellcheck can't see
+          # them.
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          $files = @('dist/jarvis-windows.ps1', 'installer/overlay-stage/jarvis-overlay.ps1')
+          $r = @($files | ForEach-Object { Invoke-ScriptAnalyzer -Path $_ -Severity Error })
+          if ($r.Count -gt 0) { $r | Format-Table -AutoSize | Out-String | Write-Host; exit 1 }
+          Write-Host "PSScriptAnalyzer: no errors across $($files.Count) file(s)"
+
   smoke:
     name: End-to-end overlay smoke (vs upstream Hermes)
     runs-on: ubuntu-latest

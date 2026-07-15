@@ -69,6 +69,12 @@ function Winget-Install($id, $name) {
   Info "Installing $name via winget ($id)..."
   if ($DryRun) { Write-Host "   (dry-run) winget install --id $id"; return }
   winget install --id $id -e --source winget --accept-package-agreements --accept-source-agreements
+  # (#12) winget can fail without admin rights, behind corporate policy, or on
+  # source-agreement errors — continuing would cascade into confusing failures
+  # ("git not recognized") much later.
+  if ($LASTEXITCODE -ne 0) {
+    Die "winget could not install $name (exit $LASTEXITCODE). Install $name manually, then re-run this installer."
+  }
   Refresh-Path
 }
 
@@ -144,8 +150,14 @@ if ($DryRun) {
   if ($NoDesktop) { Write-Host "     (desktop build skipped via -NoDesktop)" }
   Write-Host ""
   foreach ($u in @($HermesRepo, $OverlayRepo)) {
-    git ls-remote $u *> $null
-    if ($?) { Ok "reachable: $u" } else { Warn "NOT reachable: $u" }
+    # (#16) Under EAP=Stop in PS 5.1, redirecting a native command's stderr
+    # (*>/2>) wraps it in terminating NativeCommandErrors — the unreachable
+    # branch would throw instead of warning. Probe by exit code, EAP relaxed.
+    $prevEAP = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    git ls-remote $u 2>&1 | Out-Null
+    $reachable = ($LASTEXITCODE -eq 0)
+    $ErrorActionPreference = $prevEAP
+    if ($reachable) { Ok "reachable: $u" } else { Warn "NOT reachable: $u" }
   }
   $bash = Find-Bash
   if ($bash) { Ok "Git Bash found: $bash" } else { Warn "Git Bash not found (Git install provides it)" }
@@ -158,9 +170,12 @@ New-Item -ItemType Directory -Force -Path $Dir | Out-Null
 # is on the persisted Windows user PATH so `jarvis`/`hermes` resolve in new shells.
 $LocalBin = Join-Path $env:USERPROFILE '.local\bin'
 New-Item -ItemType Directory -Force -Path $LocalBin | Out-Null
-$userPath = [Environment]::GetEnvironmentVariable('Path','User')
+# (#14) A fresh profile can have a NULL user PATH — calling .TrimEnd() on it
+# throws under EAP=Stop. Coerce to [string] and branch.
+[string]$userPath = [Environment]::GetEnvironmentVariable('Path','User')
 if (-not (($userPath -split ';') -contains $LocalBin)) {
-  [Environment]::SetEnvironmentVariable('Path', (($userPath.TrimEnd(';') + ';' + $LocalBin).TrimStart(';')), 'User')
+  $newPath = if ($userPath) { $userPath.TrimEnd(';') + ';' + $LocalBin } else { $LocalBin }
+  [Environment]::SetEnvironmentVariable('Path', $newPath.TrimStart(';'), 'User')
   Info "Added $LocalBin to your user PATH (new terminals will pick it up)."
 }
 Clone-OrUpdate $HermesRepo (Join-Path $Dir 'hermes-agent')

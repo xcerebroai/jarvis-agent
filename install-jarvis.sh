@@ -69,6 +69,25 @@ ensure_local_bin() {
   mkdir -p "$HOME/.local/bin"
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac
 }
+# Runtime Hermes home, mirroring hermes_constants.get_hermes_home() — same
+# resolver as apply.sh/update-jarvis.sh. Needed here for the stable icon path
+# apply.sh stages under $HERMES_HOME/.jarvis (finding #23).
+resolve_hermes_home() {
+  if [ -n "${HERMES_HOME:-}" ]; then printf '%s\n' "$HERMES_HOME"; return 0; fi
+  local src="$1" py hh
+  for py in "$src/venv/bin/python" "$src/venv/Scripts/python.exe" python3 python py; do
+    if [ -x "$py" ] || command -v "$py" >/dev/null 2>&1; then
+      hh="$(PYTHONPATH="$src" "$py" -c 'import hermes_constants;print(hermes_constants.get_hermes_home())' 2>/dev/null || true)"
+      if [ -n "$hh" ]; then printf '%s\n' "${hh//\\//}"; return 0; fi
+    fi
+  done
+  case "${OS:-}${OSTYPE:-}$(uname -s 2>/dev/null)" in
+    *Windows_NT*|*msys*|*cygwin*|*MINGW*|*MSYS*)
+      if [ -n "${LOCALAPPDATA:-}" ]; then printf '%s\n' "${LOCALAPPDATA//\\//}/hermes"; return 0; fi
+      printf '%s\n' "$HOME/AppData/Local/hermes"; return 0 ;;
+    *) printf '%s\n' "$HOME/.hermes"; return 0 ;;
+  esac
+}
 # Create venv/bin/<name> -> venv/Scripts/<exe> forwarders (absolute path, so the
 # shim keeps working after setup-hermes.sh copies it into ~/.local/bin).
 make_venv_shims() {
@@ -171,6 +190,16 @@ if is_win_bash; then
     HEXE_WIN="$(cygpath -w "$SRC/venv/Scripts/hermes.exe" 2>/dev/null || echo "$SRC/venv/Scripts/hermes.exe")"
     printf '@echo off\r\n"%s" %%*\r\n' "$HEXE_WIN" > "$BIN_DIR/hermes.cmd"
   fi
+  # (#6) The Setup path (scripts/install.ps1) persists venv\Scripts — NOT
+  # ~/.local/bin — onto the user PATH. Drop the jarvis shims next to
+  # hermes.exe too so `jarvis <verb>` resolves in new shells on that layout.
+  # Harmless duplicate on the script-installer layout.
+  if [ -d "$SRC/venv/Scripts" ]; then
+    cp -f "$OVERLAY_DIR/bin/jarvis" "$SRC/venv/Scripts/jarvis"
+    cp -f "$OVERLAY_DIR/bin/jarvis.cmd" "$SRC/venv/Scripts/jarvis.cmd"
+    chmod +x "$SRC/venv/Scripts/jarvis" 2>/dev/null || true
+    echo "◆ installed 'jarvis' shims -> venv/Scripts (on PATH for Setup installs)"
+  fi
 fi
 echo "◆ installed 'jarvis' command -> $BIN_DIR/jarvis"
 
@@ -231,18 +260,33 @@ create_launch_points() {
   [ -z "$exe" ] && { echo "  · no built desktop executable found — skipping launch points"; return 0; }
   case "${OS:-}${OSTYPE:-}$(uname -s 2>/dev/null)" in
     *Windows_NT*|*msys*|*cygwin*|*win32*|*MINGW*)
-      local exe_w dir_w start desk
+      local exe_w dir_w start desk hh icon_w
       exe_w="$(cygpath -w "$exe" 2>/dev/null || echo "$exe")"
       dir_w="$(cygpath -w "$(dirname "$exe")" 2>/dev/null || dirname "$exe")"
       start="${JARVIS_SHORTCUT_DIR:-$APPDATA/Microsoft/Windows/Start Menu/Programs}"
-      desk="${JARVIS_DESKTOP_DIR:-$USERPROFILE/Desktop}"
+      # (#15) OneDrive can redirect the real Desktop away from
+      # %USERPROFILE%\Desktop — ask the shell for the actual folder, like
+      # upstream's New-DesktopShortcuts does.
+      desk="${JARVIS_DESKTOP_DIR:-}"
+      if [ -z "$desk" ]; then
+        desk="$(powershell.exe -NoProfile -NonInteractive -Command "[Environment]::GetFolderPath('Desktop')" 2>/dev/null | tr -d '\r' || true)"
+        desk="${desk//\\//}"
+        [ -n "$desk" ] || desk="$USERPROFILE/Desktop"
+      fi
+      # (#23) Point the shortcut at the JARVIS icon apply.sh staged under the
+      # STABLE $HERMES_HOME/.jarvis path (release/ is wiped on every rebuild;
+      # the exe's embedded icon is upstream art until a branded rebuild).
+      hh="$(resolve_hermes_home "$SRC")"
+      icon_w=""
+      [ -f "$hh/.jarvis/jarvis.ico" ] && icon_w="$(cygpath -w "$hh/.jarvis/jarvis.ico" 2>/dev/null || echo "$hh/.jarvis/jarvis.ico")"
+      local iconloc="${icon_w:-$exe_w},0"
       mkdir -p "$start" "$desk" 2>/dev/null || true
       for loc in "$start/JARVIS.lnk" "$desk/JARVIS.lnk"; do
         local loc_w; loc_w="$(cygpath -w "$loc" 2>/dev/null || echo "$loc")"
         powershell.exe -NoProfile -NonInteractive -Command \
-          "\$s=(New-Object -ComObject WScript.Shell).CreateShortcut('$loc_w'); \$s.TargetPath='$exe_w'; \$s.WorkingDirectory='$dir_w'; \$s.IconLocation='$exe_w,0'; \$s.Description='JARVIS'; \$s.Save()" \
+          "\$s=(New-Object -ComObject WScript.Shell).CreateShortcut('$loc_w'); \$s.TargetPath='$exe_w'; \$s.WorkingDirectory='$dir_w'; \$s.IconLocation='$iconloc'; \$s.Description='JARVIS'; \$s.Save()" \
           >/dev/null 2>&1 \
-          && echo "  ✓ JARVIS shortcut -> ${loc}" \
+          && echo "  ✓ JARVIS shortcut -> ${loc} (icon: ${icon_w:-exe})" \
           || echo "  ⚠ could not create shortcut at ${loc}"
       done
       ;;
@@ -257,13 +301,17 @@ create_launch_points() {
         || echo "  ⚠ could not link JARVIS.app into $appdir"
       ;;
     *Linux*)
-      local appdir="${JARVIS_SHORTCUT_DIR:-$HOME/.local/share/applications}"
+      local appdir="${JARVIS_SHORTCUT_DIR:-$HOME/.local/share/applications}" hh icon_line=""
+      # (#23) Icon= from the stable staged copy, when apply.sh installed one.
+      hh="$(resolve_hermes_home "$SRC")"
+      [ -f "$hh/.jarvis/jarvis-icon.png" ] && icon_line="Icon=$hh/.jarvis/jarvis-icon.png"
       mkdir -p "$appdir"
       cat > "$appdir/jarvis.desktop" <<DESKTOP
 [Desktop Entry]
 Name=JARVIS
 Comment=Your AI Employee
 Exec=$exe
+${icon_line}
 Terminal=false
 Type=Application
 Categories=Development;Utility;
@@ -276,6 +324,11 @@ DESKTOP
 }
 
 if build_desktop; then
+  create_launch_points
+elif [ -n "${JARVIS_FORCE_LAUNCH_POINTS:-}" ]; then
+  # CI hook (#23): exercise shortcut creation without a real desktop build —
+  # the caller plants a stub exe under apps/desktop/release/*-unpacked/ and
+  # asserts the created .lnk points at the JARVIS icon.
   create_launch_points
 fi
 

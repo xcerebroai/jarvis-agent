@@ -23,9 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Ensure pyyaml for the branding step
-        shell: pwsh
-        run: py -m pip install --quiet pyyaml
+      # NOTE (#10): deliberately NO pyyaml preinstall. apply.sh must find yaml
+      # via the install's venv python (pyyaml is a core Hermes dep) — end-user
+      # machines have no system pyyaml, and preinstalling one here masked that.
 
       - name: Prereq detection + dry-run plan (winget-branch decision logic)
         shell: pwsh
@@ -75,14 +75,49 @@ jobs:
           if ($LASTEXITCODE -ne 0)     { throw "hermes.cmd (cross-shell shim) did not resolve" }
           Write-Host "hermes.cmd => $cmdOut"
 
-      - name: Idempotency — re-run must repair, not break
+      - name: Assert skin activated + jarvis shims on the Setup-PATH dir
         shell: pwsh
         run: |
+          # (#10) Skin activation needs a python with pyyaml — must come from
+          # the venv (none is preinstalled on this runner anymore).
+          $cfgPath = Join-Path $env:LOCALAPPDATA 'hermes\config.yaml'
+          if (-not (Test-Path $cfgPath)) { throw "config.yaml not created at $cfgPath — skin activation did not run" }
+          $cfg = Get-Content $cfgPath -Raw
+          if ($cfg -notmatch 'skin:\s*jarvis') { throw "display.skin: jarvis not set in config.yaml (finding #10)" }
+          Write-Host "skin activated: display.skin=jarvis in $cfgPath"
+          # (#6) jarvis shims must sit next to hermes.exe (venv\Scripts is the
+          # dir the Setup path persists onto PATH; ~/.local/bin is not).
+          $jcmd = "$env:RUNNER_TEMP\jv\hermes-agent\venv\Scripts\jarvis.cmd"
+          if (-not (Test-Path $jcmd)) { throw "jarvis.cmd missing from venv\Scripts (finding #6)" }
+          $jout = (& $jcmd --version) -join "`n"
+          if ($LASTEXITCODE -ne 0) { throw "venv\Scripts\jarvis.cmd did not run" }
+          Write-Host "venv\Scripts\jarvis.cmd => $jout"
+
+      - name: Idempotency — re-run must repair, not break (+ shortcut icon)
+        shell: pwsh
+        env:
+          # (#23) Exercise create_launch_points without a desktop build: plant
+          # a stub exe, force launch points, and assert the .lnk uses the
+          # JARVIS icon from the stable $HERMES_HOME\.jarvis path.
+          JARVIS_FORCE_LAUNCH_POINTS: "1"
+          JARVIS_SHORTCUT_DIR: ${{ runner.temp }}\jv-start
+          JARVIS_DESKTOP_DIR: ${{ runner.temp }}\jv-desk
+        run: |
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\jv\hermes-agent\apps\desktop\release\win-unpacked" | Out-Null
+          Set-Content -Path "$env:RUNNER_TEMP\jv\hermes-agent\apps\desktop\release\win-unpacked\Hermes.exe" -Value 'stub'
           pwsh -File dist/jarvis-windows.ps1 -NoDesktop -Dir "$env:RUNNER_TEMP\jv" -OverlayDir "$env:GITHUB_WORKSPACE"
           $bash = "C:\Program Files\Git\bin\bash.exe"
           $out = (& $bash -lc 'export PATH="$HOME/.local/bin:$PATH"; hermes --version') -join "`n"
           if ($LASTEXITCODE -ne 0) { throw "hermes broke after re-run" }
           Write-Host "re-run OK: $out"
+          $lnk = Join-Path "$env:RUNNER_TEMP\jv-start" 'JARVIS.lnk'
+          if (-not (Test-Path $lnk)) { throw "JARVIS.lnk was not created (finding #23)" }
+          $sc = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+          Write-Host "IconLocation => $($sc.IconLocation)"
+          if ($sc.IconLocation -notmatch '\.jarvis\\jarvis\.ico') { throw "shortcut does not use the JARVIS icon (finding #23): $($sc.IconLocation)" }
+          $ico = Join-Path $env:LOCALAPPDATA 'hermes\.jarvis\jarvis.ico'
+          if (-not (Test-Path $ico)) { throw "staged JARVIS icon missing at $ico" }
+          Write-Host "shortcut icon OK: $ico"
 
   macos:
     name: macOS install (real)
@@ -91,8 +126,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Ensure pyyaml for the branding step
-        run: python3 -m pip install --quiet --break-system-packages pyyaml || python3 -m pip install --quiet pyyaml
+      # NOTE (#10): no pyyaml preinstall — apply.sh must use the venv python.
 
       - name: E2E install (this commit's overlay, no desktop)
         run: bash dist/jarvis-mac.sh --no-desktop --dir "$RUNNER_TEMP/jv" --overlay-dir "$GITHUB_WORKSPACE"
@@ -102,6 +136,10 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           out="$(hermes --version)"; echo "hermes --version => $out"
           echo "$out" | grep -q JARVIS || { echo "expected JARVIS branding"; exit 1; }
+          # (#10) Skin activation must have worked via the venv python.
+          grep -Eq 'skin:\s*jarvis' "$HOME/.hermes/config.yaml" \
+            || { echo "display.skin: jarvis not set (finding #10)"; exit 1; }
+          echo "skin activated: display.skin=jarvis"
 
       - name: Idempotency — re-run must repair, not break
         run: |

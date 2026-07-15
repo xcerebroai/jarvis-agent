@@ -59,10 +59,17 @@ is_excluded() {
 }
 
 resolve_python() {
+  # (#10) Prefer the install's venv python: pyyaml==6.0.3 is a CORE Hermes
+  # dep, guaranteed there; system pythons on end-user machines (winget/uv
+  # installs) usually lack it, which used to silently skip skin activation
+  # and the package.json JSON guard. $SRC may be unset when called from
+  # resolve_src pre-resolution — those candidates simply don't exist then.
   # 'py'/'python3' before bare 'python' to avoid the Windows Store alias noise.
-  for c in "${HERMES_PYTHON:-}" python3 py python; do
+  for c in "${HERMES_PYTHON:-}" \
+           "${SRC:-/nonexistent}/venv/bin/python" "${SRC:-/nonexistent}/venv/Scripts/python.exe" \
+           python3 py python; do
     [ -z "$c" ] && continue
-    if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import yaml' >/dev/null 2>&1; then
+    if { [ -x "$c" ] || command -v "$c" >/dev/null 2>&1; } && "$c" -c 'import yaml' >/dev/null 2>&1; then
       echo "$c"; return 0
     fi
   done
@@ -168,6 +175,20 @@ HERMES_HOME="$(resolve_hermes_home "$SRC")"
 echo "◆ JARVIS overlay — applying"
 echo "  source : $SRC"
 echo "  data   : $HERMES_HOME"
+
+# (#13) The skin/config in $HERMES_HOME are PER-USER and shared by every
+# Hermes install on this machine — activating the JARVIS skin rebrands the
+# CLI of all of them (the runtime reads exactly one home). Warn loudly when
+# another hermes-agent tree exists so this is never a surprise.
+for _other in "${LOCALAPPDATA:-$HOME/AppData/Local}/hermes/hermes-agent" \
+              "$HOME/.hermes/hermes-agent" "$HOME/jarvis/hermes-agent"; do
+  [ -d "$_other/.git" ] || continue
+  [ "$(cd "$_other" 2>/dev/null && pwd)" = "$SRC" ] && continue
+  echo "  ⚠ another Hermes install exists at: $_other"
+  echo "    The CLI skin/config in $HERMES_HOME are shared per-user, so that"
+  echo "    install's CLI will show JARVIS branding too. To undo later: remove"
+  echo "    display.skin from config.yaml and delete skins/jarvis.yaml there."
+done
 [ -f "$MAP" ] || { echo "ERROR: branding.map not found at $MAP" >&2; exit 1; }
 
 # --- 1. Install the CLI skin (data, no source edit) -----------------------
@@ -223,6 +244,39 @@ fi
 if [ -f "$OVERLAY_DIR/assets/banner.png" ] && [ -d "$SRC/assets" ]; then
   cp -f "$OVERLAY_DIR/assets/banner.png" "$SRC/assets/banner.png"
   echo "  ✓ asset   -> assets/banner.png"
+fi
+
+# --- 2b. JARVIS icon art (finding #23) -------------------------------------
+# Two jobs:
+#   a) Swap the desktop app's icon sources at apps/desktop/assets/icon.* —
+#      the ONE point everything downstream reads: electron-builder's bundle
+#      icon ("icon": "assets/icon"), the rcedit exe stamp
+#      (scripts/set-exe-identity.mjs uses assets/icon.ico), and the runtime
+#      dock icon. Rebuilt desktops then carry JARVIS art on every platform.
+#      Recorded in the manifest (section 3) so updates revert them pre-pull.
+#   b) Stage stable copies under $HERMES_HOME/.jarvis/ for shortcuts to
+#      reference — .lnk IconLocation must point at a path that survives
+#      rebuilds (the release/ dir is wiped) and repo cleanup.
+ICON_DIR="$OVERLAY_DIR/installer/assets/icons"
+ICON_PNG=""
+for _p in "$ICON_DIR/icon-512.png" "$ICON_DIR/128x128@2x.png"; do
+  [ -f "$_p" ] && { ICON_PNG="$_p"; break; }
+done
+if [ -d "$ICON_DIR" ] && [ -f "$ICON_DIR/icon.ico" ]; then
+  DESK_ASSETS="$SRC/apps/desktop/assets"
+  if [ -d "$DESK_ASSETS" ]; then
+    cp -f "$ICON_DIR/icon.ico" "$DESK_ASSETS/icon.ico"
+    [ -f "$ICON_DIR/icon.icns" ] && cp -f "$ICON_DIR/icon.icns" "$DESK_ASSETS/icon.icns"
+    [ -n "$ICON_PNG" ] && cp -f "$ICON_PNG" "$DESK_ASSETS/icon.png"
+    echo "  ✓ icons   -> apps/desktop/assets/icon.{ico,icns,png} (JARVIS art)"
+  fi
+  mkdir -p "$HERMES_HOME/.jarvis"
+  cp -f "$ICON_DIR/icon.ico" "$HERMES_HOME/.jarvis/jarvis.ico"
+  [ -f "$ICON_DIR/icon.icns" ] && cp -f "$ICON_DIR/icon.icns" "$HERMES_HOME/.jarvis/jarvis.icns"
+  [ -n "$ICON_PNG" ] && cp -f "$ICON_PNG" "$HERMES_HOME/.jarvis/jarvis-icon.png"
+  echo "  ✓ icons   -> $HERMES_HOME/.jarvis/ (stable path for shortcuts)"
+else
+  echo "  · no JARVIS icon set at installer/assets/icons — shortcuts fall back to the exe icon"
 fi
 
 # --- 3. Rewrite customer-visible strings ----------------------------------
@@ -339,6 +393,20 @@ for f in "${FILES[@]:-}"; do
 done
 FILES=("${FILTERED[@]:-}")
 [ "$SKIPPED" -gt 0 ] && echo "  · excluded $SKIPPED operator-maintained file(s) from branding"
+# (#18/#23) Binary assets the overlay writes into the source tree are part of
+# the branded set: record them so update-jarvis.sh (and the Setup path's
+# pre-update revert) restore pristine upstream before the pull, instead of
+# leaving autostash churn. git checkout no-ops harmlessly if untracked.
+for _asset in assets/banner.png \
+              apps/desktop/assets/icon.ico apps/desktop/assets/icon.icns \
+              apps/desktop/assets/icon.png; do
+  [ -f "$SRC/$_asset" ] || continue
+  is_excluded "$_asset" && continue
+  # Only tracked files: the Setup path reverts the manifest in ONE batched
+  # `git checkout -- <paths>`, which fails wholesale on an untracked pathspec.
+  git -C "$SRC" ls-files --error-unmatch "$_asset" >/dev/null 2>&1 || continue
+  echo "$_asset" >> "$MANIFEST"
+done
 [ ${#FILES[@]} -gt 0 ] && rewrite "${FILES[@]}"
 
 # --- 3b. Desktop build-config — surgical, key-anchored [desktop] literals ---

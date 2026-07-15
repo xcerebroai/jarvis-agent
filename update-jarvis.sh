@@ -98,9 +98,13 @@ if git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
                   | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
                   | grep -viE 'jarvis|hermes|◆|⚕' \
                   | grep -vE '^[+-][[:space:]]*(<br[[:space:]]*/?>|Agent)[[:space:]]*$' || true)"
-      if [ -n "$nonbrand" ]; then
+      # (#17) Back up EVERY dirty branded file, not just ones the brand-word
+      # filter flags: a user patch whose lines all happen to mention
+      # hermes/jarvis would otherwise be reverted with no copy. The filter is
+      # kept only to make the warning precise. Backups are capped at 3 below.
+      if ! git -C "$SRC" diff --quiet HEAD -- "$rel" 2>/dev/null; then
         mkdir -p "$BK/$(dirname "$rel")" && cp -f "$f" "$BK/$rel" && backed=$((backed + 1))
-        echo "  ! branded file has a local patch — backed up: $rel"
+        [ -n "$nonbrand" ] && echo "  ! branded file has a NON-branding local patch — backed up: $rel"
       fi
       git -C "$SRC" checkout -- "$rel" 2>/dev/null && reverted=$((reverted + 1)) || true
     done < "$MANIFEST"
@@ -126,7 +130,17 @@ if [ -z "$UPDATER" ]; then
   echo "ERROR: neither 'hermes' nor 'jarvis' found on PATH to run the update." >&2
   exit 127
 fi
-"$UPDATER" update "${@:2}"
+# JARVIS_NO_UPDATE_WRAP=1 stops the jarvis shim's `update` interception from
+# recursing back here when $UPDATER resolves to the jarvis shim (finding #9).
+# (#7) On failure, re-apply branding BEFORE exiting: step 1 reverted the
+# branded files, and dying here would leave the install as pristine Hermes.
+rc=0
+JARVIS_NO_UPDATE_WRAP=1 "$UPDATER" update "${@:2}" || rc=$?
+if [ "$rc" -ne 0 ]; then
+  echo "  ✗ hermes update failed (exit $rc) — re-applying branding so the tree isn't left reverted/unbranded." >&2
+  HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh" || true
+  exit "$rc"
+fi
 
 # --- 3. Re-apply JARVIS branding to the fresh upstream ---------------------
 echo "  → re-applying JARVIS overlay…"
@@ -137,8 +151,11 @@ HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh"
 # source BEFORE our re-apply, so without this the running desktop app would be
 # a freshly-built HERMES. Rebuild once more from the now-rebranded source.
 # Only if the desktop was actually built on this machine (release/ present).
+# (#8) macOS output is release/mac*/ (no "-unpacked" suffix) — the old
+# *-unpacked-only glob skipped the rebuild on every Mac, leaving the desktop
+# stale/unbranded after updates.
 DESK_RELEASE="$SRC/apps/desktop/release"
-if [ -d "$DESK_RELEASE" ] && ls "$DESK_RELEASE"/*-unpacked >/dev/null 2>&1; then
+if [ -d "$DESK_RELEASE" ] && { ls -d "$DESK_RELEASE"/*-unpacked >/dev/null 2>&1 || ls -d "$DESK_RELEASE"/mac* >/dev/null 2>&1; }; then
   echo
   echo "◆ Rebuilding JARVIS desktop — this takes a few minutes, don't close."
   if "$UPDATER" desktop --build-only "${@:2}"; then

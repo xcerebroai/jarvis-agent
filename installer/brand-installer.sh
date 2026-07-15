@@ -127,4 +127,21 @@ done
 grep -q '"identifier": "com.nousresearch.hermes.setup"' "$TC" || {
   echo "ERROR: bundle identifier changed — must stay com.nousresearch.hermes.setup." >&2; exit 1; }
 
+# (#11) The two rewrites that MUST have taken — a silent perl no-op after an
+# upstream reformat would otherwise ship the exact regressions this transform
+# exists to prevent, with green CI.
+grep -q 'include_desktop: false' "$APP/src/store.ts" || {
+  echo "ERROR: include_desktop flip did not take — upstream Stage-Desktop would run and create Hermes.lnk." >&2; exit 1; }
+grep -q 'name = "JARVIS-Setup"' "$APP/src-tauri/Cargo.toml" || {
+  echo "ERROR: [[bin]] rename to JARVIS-Setup did not take." >&2; exit 1; }
+
+# (#11) Debrand verify: no visible capitalized brand may survive the rewrite.
+LEFT="$(grep -rnE '\bHermes\b|HERMES AGENT|\bHERMES\b|Nous Research' "$APP/src" "$APP/index.html" 2>/dev/null || true)"
+if [ -n "$LEFT" ]; then
+  echo "ERROR: visible brand strings survived the installer rebrand:" >&2
+  printf '%s\n' "$LEFT" | head -10 >&2
+  exit 1
+fi
+echo "  ✓ guardrails: flip taken, bin renamed, no visible brand strings survive"
+
 echo "◆ JARVIS installer branding applied."

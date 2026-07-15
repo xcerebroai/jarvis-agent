@@ -20,6 +20,26 @@ case "${OS:-}${OSTYPE:-}" in
     ;;
 esac
 
+# `jarvis update` → the overlay-aware updater (finding #9): a bare
+# `hermes update` pulls upstream over the branded tree and leaves the install
+# unbranded until the next apply. update-jarvis.sh does the conflict-free
+# revert → update → re-apply cycle instead. Falls through to plain hermes when
+# no overlay checkout is found. update-jarvis.sh sets JARVIS_NO_UPDATE_WRAP=1
+# on its own hermes call so this can never recurse.
+if [ "${1:-}" = "update" ] && [ -z "${JARVIS_NO_UPDATE_WRAP:-}" ]; then
+  for _ov in "${JARVIS_OVERLAY_DIR:-}" \
+             "${LOCALAPPDATA:-$HOME/AppData/Local}/hermes/jarvis-agent" \
+             "$HOME/.hermes/jarvis-agent" \
+             "$HOME/jarvis/jarvis-agent"; do
+    [ -n "$_ov" ] && [ -f "$_ov/update-jarvis.sh" ] || continue
+    # Both install layouts keep hermes-agent next to jarvis-agent.
+    _src="$(dirname "$_ov")/hermes-agent"
+    [ -d "$_src" ] && export HERMES_SRC="${HERMES_SRC:-$_src}"
+    shift
+    exec bash "$_ov/update-jarvis.sh" "" "$@"
+  done
+fi
+
 # Locate the real hermes binary (skip ourselves if a `jarvis`->`hermes`
 # name collision ever occurs on PATH).
 find_hermes() {

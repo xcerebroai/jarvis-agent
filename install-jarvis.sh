@@ -95,21 +95,29 @@ run_setup_once() {
     ( cd "$SRC" && printf 'nnnnnnnn' | bash ./setup-hermes.sh "$@" )
   fi
 }
-# On Windows, repair the venv/bin layout and retry once so a partial install
-# (venv already built) completes instead of failing. Idempotent.
+# Complete the `hermes` command-linking that upstream's Unix-only symlink step
+# can't do on Windows. Runs AFTER setup built the venv. We do NOT re-run
+# setup-hermes.sh (that rebuilds the venv and wipes these shims) — we finish the
+# exact post-venv steps ourselves: venv/bin shims, the ~/.local/bin symlink, and
+# the best-effort skills sync. Idempotent.
+finish_windows_command_link() {
+  [ -f "$SRC/venv/Scripts/hermes.exe" ] || return 1
+  echo "  (Windows) completing hermes command-linking (upstream symlink step is Unix-only)…"
+  make_venv_shims "$SRC"
+  # MSYS `ln -s` copies the source; fall back to an explicit copy if needed.
+  ln -sf "$SRC/venv/bin/hermes" "$HOME/.local/bin/hermes" 2>/dev/null \
+    || cp -f "$SRC/venv/bin/hermes" "$HOME/.local/bin/hermes"
+  chmod +x "$HOME/.local/bin/hermes" 2>/dev/null || true
+  ( cd "$SRC" && "$SRC/venv/bin/python" tools/skills_sync.py >/dev/null 2>&1 ) || true
+  echo "  ✓ hermes linked into ~/.local/bin"
+  return 0
+}
+# Run setup; on Windows it will build the venv then fail at the Unix symlink —
+# expected — so we finish the linking ourselves. Idempotent / resumable.
 run_hermes_setup() {
   ensure_local_bin
-  if is_win_bash && [ -f "$SRC/venv/Scripts/hermes.exe" ]; then
-    echo "  (Windows) creating venv/bin compatibility shims…"
-    make_venv_shims "$SRC"
-  fi
   if run_setup_once "$@"; then return 0; fi
-  if is_win_bash && [ -f "$SRC/venv/Scripts/hermes.exe" ]; then
-    echo "  (Windows) setup hit a Unix-only step; applying venv/bin shims and retrying…"
-    make_venv_shims "$SRC"
-    run_setup_once "$@" || return 1
-    return 0
-  fi
+  if is_win_bash && finish_windows_command_link; then return 0; fi
   return 1
 }
 

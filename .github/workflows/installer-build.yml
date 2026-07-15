@@ -1,0 +1,208 @@
+name: Installer build (JARVIS-Setup.exe / .dmg)
+
+# Builds the branded double-click installers from upstream's Tauri bootstrap
+# app (hermes-agent/apps/bootstrap-installer): clone hermes -> gen JARVIS icons
+# -> brand-installer.sh (Tier-1 rebrand + inject the JARVIS overlay stage) ->
+# tauri build. Produces JARVIS-Setup.exe (Windows) and JARVIS-Setup.dmg (macOS),
+# uploads them as artifacts, and on a published release attaches them as assets.
+#
+# Signing is wired but DISABLED until credentials exist: each signing step runs
+# only when its secrets are present (see the env guards). Until then CI still
+# produces working unsigned installers.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "installer/**"
+      - "apply.sh"
+      - "install-jarvis.sh"
+      - ".github/workflows/installer-build.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      hermes_ref:
+        description: "hermes-agent ref to build against (default: main HEAD)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write   # attach assets to releases
+
+jobs:
+  # --- Rasterize the JARVIS icon set once (easy tooling on ubuntu) ----------
+  icons:
+    name: Generate JARVIS icons
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rasterizers
+        run: sudo apt-get update && sudo apt-get install -y imagemagick librsvg2-bin icnsutils
+      - name: gen-icons.sh
+        run: bash installer/gen-icons.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jarvis-icons
+          path: |
+            installer/assets/icons/**
+            installer/assets/jarvis-mark.png
+          if-no-files-found: error
+
+  build:
+    name: ${{ matrix.label }}
+    needs: icons
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      # Secrets aren't referenceable in a step's own `if`; hoist presence flags
+      # to job-level env (which step `if` CAN see) so signing stays disabled
+      # until credentials are added.
+      HAS_AZURE: ${{ secrets.AZURE_CLIENT_ID != '' && 'yes' || '' }}
+      HAS_APPLE: ${{ secrets.APPLE_SIGNING_IDENTITY != '' && 'yes' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows — JARVIS-Setup.exe
+            artifact: JARVIS-Setup.exe
+          - os: macos-latest
+            label: macOS — JARVIS-Setup.dmg
+            artifact: JARVIS-Setup.dmg
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download JARVIS icons
+        uses: actions/download-artifact@v4
+        with:
+          name: jarvis-icons
+          path: installer/assets
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo + npm
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.npm
+          key: installer-${{ runner.os }}-${{ hashFiles('installer/**') }}
+          restore-keys: installer-${{ runner.os }}-
+
+      - name: Clone upstream Hermes
+        id: clone
+        shell: bash
+        run: |
+          REF="${{ github.event.inputs.hermes_ref }}"
+          git clone --depth 1 ${REF:+--branch "$REF"} https://github.com/NousResearch/hermes-agent hermes-src
+          SHA="$(git -C hermes-src rev-parse HEAD)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Upstream HEAD: $SHA"
+
+      - name: Apply JARVIS branding + inject overlay stage
+        shell: bash
+        run: bash installer/brand-installer.sh "$PWD/hermes-src"
+
+      - name: Rust check (fast fail on the injected overlay stage)
+        shell: bash
+        working-directory: hermes-src/apps/bootstrap-installer/src-tauri
+        run: cargo check --locked || cargo check
+
+      - name: Install app deps
+        working-directory: hermes-src/apps/bootstrap-installer
+        run: npm ci || npm install
+
+      # Bake the tested upstream commit as the install-script pin, so the built
+      # installer downloads the exact scripts/install.ps1 we validated against.
+      - name: Build (Windows — exe, no bundle)
+        if: runner.os == 'Windows'
+        working-directory: hermes-src/apps/bootstrap-installer
+        env:
+          BUILD_PIN_COMMIT: ${{ steps.clone.outputs.sha }}
+          JARVIS_OVERLAY_REF: ${{ github.sha }}
+        run: npx tauri build --no-bundle
+
+      - name: Build (macOS — dmg)
+        if: runner.os == 'macOS'
+        working-directory: hermes-src/apps/bootstrap-installer
+        env:
+          BUILD_PIN_COMMIT: ${{ steps.clone.outputs.sha }}
+          JARVIS_OVERLAY_REF: ${{ github.sha }}
+          # Tauri v2 signs + notarizes automatically when these are present.
+          # Empty (unset secrets) -> ad-hoc unsigned build, CI stays green.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx tauri build --bundles dmg
+
+      # --- Stage the artifact under a stable JARVIS-Setup name ---------------
+      - name: Stage artifact (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -e
+          src="hermes-src/apps/bootstrap-installer/src-tauri/target/release/JARVIS-Setup.exe"
+          [ -f "$src" ] || { echo "::error::JARVIS-Setup.exe not found at $src"; ls -R hermes-src/apps/bootstrap-installer/src-tauri/target/release | head -50; exit 1; }
+          mkdir -p out && cp "$src" "out/JARVIS-Setup.exe"
+
+      - name: Stage artifact (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          dmg="$(find hermes-src/apps/bootstrap-installer/src-tauri/target/release/bundle/dmg -name '*.dmg' | head -1)"
+          [ -n "$dmg" ] || { echo "::error::no .dmg produced"; find hermes-src/apps/bootstrap-installer/src-tauri/target/release/bundle -maxdepth 2 | head -50; exit 1; }
+          mkdir -p out && cp "$dmg" "out/JARVIS-Setup.dmg"
+
+      # --- Windows signing (Azure Trusted Signing) — DISABLED until secrets --
+      - name: Code-sign (Windows / Azure Trusted Signing)
+        if: runner.os == 'Windows' && env.HAS_AZURE == 'yes'
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        uses: azure/trusted-signing-action@v0.5.1
+        with:
+          endpoint: ${{ secrets.AZURE_TS_ENDPOINT }}
+          trusted-signing-account-name: ${{ secrets.AZURE_TS_ACCOUNT }}
+          certificate-profile-name: ${{ secrets.AZURE_TS_CERT_PROFILE }}
+          files-folder: ${{ github.workspace }}\out
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Signing status note
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ] && [ "${{ env.HAS_AZURE }}" != "yes" ]; then
+            echo "::notice::Windows installer is UNSIGNED — add Azure Trusted Signing secrets (AZURE_TENANT_ID/AZURE_CLIENT_ID/AZURE_CLIENT_SECRET/AZURE_TS_ENDPOINT/AZURE_TS_ACCOUNT/AZURE_TS_CERT_PROFILE) to enable signing."
+          fi
+          if [ "${{ runner.os }}" = "macOS" ] && [ "${{ env.HAS_APPLE }}" != "yes" ]; then
+            echo "::notice::macOS installer is AD-HOC / unnotarized — add APPLE_SIGNING_IDENTITY/APPLE_CERTIFICATE(+PASSWORD)/APPLE_API_ISSUER/APPLE_API_KEY(_PATH)/APPLE_TEAM_ID to sign + notarize."
+          fi
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: out/${{ matrix.artifact }}
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release upload "${{ github.event.release.tag_name }}" "out/${{ matrix.artifact }}" --clobber

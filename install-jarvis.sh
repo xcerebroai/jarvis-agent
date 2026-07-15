@@ -112,17 +112,49 @@ finish_windows_command_link() {
   echo "  ✓ hermes linked into ~/.local/bin"
   return 0
 }
+# Ensure the `hermes` command resolves for the branding / desktop steps when we
+# did NOT run setup-hermes.sh ourselves (overlay-only mode — the Setup binary /
+# scripts/install.ps1 already built the venv). On Windows this creates the
+# venv/bin→Scripts shims and links hermes into ~/.local/bin; on Unix the
+# venv/bin/hermes already exists, so just link it.
+link_existing_hermes() {
+  if is_win_bash; then
+    finish_windows_command_link
+  elif [ -x "$SRC/venv/bin/hermes" ]; then
+    ln -sf "$SRC/venv/bin/hermes" "$HOME/.local/bin/hermes" 2>/dev/null \
+      || cp -f "$SRC/venv/bin/hermes" "$HOME/.local/bin/hermes"
+    chmod +x "$HOME/.local/bin/hermes" 2>/dev/null || true
+    return 0
+  else
+    return 1
+  fi
+}
+
 # Run setup; on Windows it will build the venv then fail at the Unix symlink —
 # expected — so we finish the linking ourselves. Idempotent / resumable.
+#
+# JARVIS_OVERLAY_ONLY=1 skips setup-hermes.sh entirely: the Tauri Setup binary
+# (which drives scripts/install.ps1) has already installed Hermes into the
+# %LOCALAPPDATA%\hermes / ~/.hermes layout, so we only layer the JARVIS overlay
+# (shim + apply.sh branding + branded desktop build + JARVIS shortcuts) on top.
 run_hermes_setup() {
   ensure_local_bin
+  if [ -n "${JARVIS_OVERLAY_ONLY:-}" ]; then
+    echo "◆ Overlay-only mode — Hermes already installed; layering JARVIS on top."
+    link_existing_hermes || echo "  ⚠ could not resolve an installed 'hermes' under $SRC/venv — desktop/build steps may fall back to the shim."
+    return 0
+  fi
   if run_setup_once "$@"; then return 0; fi
   if is_win_bash && finish_windows_command_link; then return 0; fi
   return 1
 }
 
 # --- 2. Run the real Hermes setup (unmodified, with Windows repair) ---------
-echo "◆ Running Hermes setup (setup-hermes.sh)…"
+if [ -n "${JARVIS_OVERLAY_ONLY:-}" ]; then
+  echo "◆ Skipping Hermes setup (overlay-only) — using the existing install at $SRC."
+else
+  echo "◆ Running Hermes setup (setup-hermes.sh)…"
+fi
 run_hermes_setup "${@:2}"
 
 # --- 3. Install the `jarvis` shim onto PATH --------------------------------

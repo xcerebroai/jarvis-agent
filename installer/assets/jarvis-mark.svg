@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- JARVIS diamond mark on transparent — used in-app by brand-mark.tsx
+       (sits on its white tile). Palette: #3B82F6 → #60A5FA. -->
+  <defs>
+    <linearGradient id="b" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#60A5FA"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(128 128) rotate(45)">
+    <rect x="-84" y="-84" width="168" height="168" rx="26" fill="url(#b)"/>
+    <rect x="-37" y="-37" width="74" height="74" rx="12" fill="#ffffff"/>
+  </g>
+</svg>

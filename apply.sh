@@ -86,6 +86,32 @@ PY
   return 1
 }
 
+# Resolve the runtime's Hermes home the SAME way hermes_constants.get_hermes_home()
+# does — the single source of truth the CLI actually reads the skin/config from:
+#   $HERMES_HOME override  ->  Windows: %LOCALAPPDATA%\hermes  ->  else ~/.hermes
+# This matters because the two install paths use DIFFERENT homes on Windows:
+#   • script installers (setup-hermes.sh) historically assumed ~/.hermes, but
+#   • the Setup binary / scripts/install.ps1 install into %LOCALAPPDATA%\hermes.
+# Writing the skin to the wrong home means CLI branding silently doesn't apply.
+# We ask the installed hermes_constants first (tracks upstream if the rule ever
+# changes), then fall back to replicating the platform rule in pure bash.
+resolve_hermes_home() {
+  if [ -n "${HERMES_HOME:-}" ]; then printf '%s\n' "$HERMES_HOME"; return 0; fi
+  local src="$1" py hh
+  for py in "$src/venv/bin/python" "$src/venv/Scripts/python.exe" python3 python py; do
+    if [ -x "$py" ] || command -v "$py" >/dev/null 2>&1; then
+      hh="$(PYTHONPATH="$src" "$py" -c 'import hermes_constants;print(hermes_constants.get_hermes_home())' 2>/dev/null || true)"
+      if [ -n "$hh" ]; then printf '%s\n' "${hh//\\//}"; return 0; fi
+    fi
+  done
+  case "${OS:-}${OSTYPE:-}$(uname -s 2>/dev/null)" in
+    *Windows_NT*|*msys*|*cygwin*|*MINGW*|*MSYS*)
+      if [ -n "${LOCALAPPDATA:-}" ]; then printf '%s\n' "${LOCALAPPDATA//\\//}/hermes"; return 0; fi
+      printf '%s\n' "$HOME/AppData/Local/hermes"; return 0 ;;
+    *) printf '%s\n' "$HOME/.hermes"; return 0 ;;
+  esac
+}
+
 # Verify the BUILT desktop renderer bundle (apps/desktop/dist) — visible brand
 # leaks and JARVIS wordmark presence. Called after an Electron rebuild.
 verify_desktop_build() {
@@ -137,7 +163,7 @@ if [ "$MODE" = "verify-build" ]; then
   exit $?
 fi
 
-HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+HERMES_HOME="$(resolve_hermes_home "$SRC")"
 
 echo "◆ JARVIS overlay — applying"
 echo "  source : $SRC"

@@ -20,7 +20,9 @@ jobs:
         run: |
           shellcheck --version
           # error severity: fail on genuine bugs, not style opinions.
-          shellcheck --severity=error apply.sh install-jarvis.sh update-jarvis.sh bin/jarvis tests/overlay_smoke.sh
+          shellcheck --severity=error apply.sh install-jarvis.sh update-jarvis.sh bin/jarvis tests/overlay_smoke.sh \
+            installer/brand-installer.sh installer/inject-overlay-stage.sh installer/gen-icons.sh \
+            installer/overlay-stage/jarvis-overlay.sh
 
       - name: Validate skin YAML + branding.map + banner (no third-party deps)
         run: |

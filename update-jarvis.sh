@@ -34,6 +34,29 @@ resolve_src() {
   return 1
 }
 
+# Resolve the runtime's Hermes home like hermes_constants.get_hermes_home():
+#   $HERMES_HOME  ->  Windows: %LOCALAPPDATA%\hermes  ->  else ~/.hermes.
+# The Setup binary (scripts/install.ps1) installs into %LOCALAPPDATA%\hermes on
+# Windows, NOT ~/.hermes — so the branded-files manifest and backups must live
+# there too, or the re-apply after an upstream update targets the wrong tree.
+# Ask the installed hermes_constants first (source of truth); bash fallback.
+resolve_hermes_home() {
+  if [ -n "${HERMES_HOME:-}" ]; then printf '%s\n' "$HERMES_HOME"; return 0; fi
+  local src="$1" py hh
+  for py in "$src/venv/bin/python" "$src/venv/Scripts/python.exe" python3 python py; do
+    if [ -x "$py" ] || command -v "$py" >/dev/null 2>&1; then
+      hh="$(PYTHONPATH="$src" "$py" -c 'import hermes_constants;print(hermes_constants.get_hermes_home())' 2>/dev/null || true)"
+      if [ -n "$hh" ]; then printf '%s\n' "${hh//\\//}"; return 0; fi
+    fi
+  done
+  case "${OS:-}${OSTYPE:-}$(uname -s 2>/dev/null)" in
+    *Windows_NT*|*msys*|*cygwin*|*MINGW*|*MSYS*)
+      if [ -n "${LOCALAPPDATA:-}" ]; then printf '%s\n' "${LOCALAPPDATA//\\//}/hermes"; return 0; fi
+      printf '%s\n' "$HOME/AppData/Local/hermes"; return 0 ;;
+    *) printf '%s\n' "$HOME/.hermes"; return 0 ;;
+  esac
+}
+
 SRC="$(resolve_src "${1:-}" || true)"
 if [ -z "$SRC" ] || [ ! -d "$SRC" ]; then
   echo "ERROR: could not locate the Hermes source tree." >&2
@@ -50,7 +73,7 @@ echo "  source : $SRC"
 # `git checkout -- .`. Local modifications to files the overlay does NOT brand
 # are left completely untouched (hermes update stashes/restores them as usual).
 # Any dirty branded file is backed up first, so nothing is ever lost silently.
-HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+HERMES_HOME="$(resolve_hermes_home "$SRC")"
 MANIFEST="$HERMES_HOME/.jarvis/branded-files.txt"
 if git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if [ ! -f "$MANIFEST" ]; then

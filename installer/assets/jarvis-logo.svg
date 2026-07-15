@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- JARVIS installer mark. Deep black #0A0A0A tile, electric-blue #3B82F6 →
+       light-blue #60A5FA diamond (◆), reads cleanly down to 16px. Placeholder
+       art generated from the brand palette — swap this SVG for final art and
+       re-run installer/gen-icons.sh; nothing else changes. -->
+  <defs>
+    <linearGradient id="blue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#60A5FA"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.28"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Tile -->
+  <rect width="1024" height="1024" rx="224" fill="#0A0A0A"/>
+  <rect width="1024" height="1024" rx="224" fill="none" stroke="#3B82F6" stroke-opacity="0.20" stroke-width="6"/>
+
+  <!-- Diamond mark (◆), centered -->
+  <g transform="translate(512 512) rotate(45)">
+    <rect x="-236" y="-236" width="472" height="472" rx="72" fill="url(#blue)"/>
+    <rect x="-236" y="-236" width="472" height="472" rx="72" fill="url(#sheen)"/>
+    <!-- Negative-space inner diamond for depth -->
+    <rect x="-104" y="-104" width="208" height="208" rx="34" fill="#0A0A0A"/>
+    <rect x="-104" y="-104" width="208" height="208" rx="34" fill="url(#blue)" opacity="0.14"/>
+  </g>
+</svg>

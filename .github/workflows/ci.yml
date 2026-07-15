@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint shell + validate data
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ShellCheck scripts
+        run: |
+          shellcheck --version
+          # error severity: fail on genuine bugs, not style opinions.
+          shellcheck --severity=error apply.sh install-jarvis.sh update-jarvis.sh bin/jarvis tests/overlay_smoke.sh
+
+      - name: Validate skin YAML + branding.map + banner (no third-party deps)
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 - <<'PY'
+          import yaml, sys
+          d = yaml.safe_load(open("skins/jarvis.yaml", encoding="utf-8"))
+          assert isinstance(d, dict) and d.get("name") == "jarvis", "skin invalid"
+          assert d["banner_hero"].strip(), "banner_hero empty -> caduceus would leak"
+          assert d["banner_logo"].strip(), "banner_logo empty"
+          assert d["branding"]["agent_name"] == "JARVIS"
+          print("skin OK:", len(d["colors"]), "colors,", len(d["branding"]), "branding keys")
+
+          # branding.map parses into known sections
+          secs, cur = {}, None
+          for ln in open("branding.map", encoding="utf-8"):
+              ln = ln.rstrip("\n")
+              if ln.startswith("#") or not ln.strip(): continue
+              if ln.startswith("[") and ln.endswith("]"): cur = ln[1:-1]; secs.setdefault(cur, 0); continue
+              secs[cur] = secs.get(cur, 0) + 1
+          for s in ("protect", "literal", "regex", "command", "word", "glyph"):
+              assert s in secs, f"branding.map missing [{s}]"
+          print("branding.map OK:", secs)
+          PY
+
+      - name: Banner renders in every fallback mode
+        run: |
+          for mode in "" "--ascii" "--no-color" "--plain"; do
+            python3 bin/jarvis-banner $mode >/dev/null || { echo "banner failed: $mode"; exit 1; }
+          done
+          echo "banner OK (all modes)"
+
+  smoke:
+    name: End-to-end overlay smoke (vs upstream Hermes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pyyaml
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Run overlay smoke test
+        run: bash tests/overlay_smoke.sh

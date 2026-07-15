@@ -56,7 +56,7 @@ behavior. Protected identifiers are masked regardless.
 ## Layout
 
 ```
-jarvis-overlay/
+jarvis-agent/
   apply.sh            # idempotent; installs skin + rewrites visible strings + verify pass
   branding.map        # find→replace rules (protect / literal / regex / command / word / glyph)
   skins/jarvis.yaml   # CLI skin (deep black + electric blue, gradient JARVIS logo)
@@ -67,14 +67,16 @@ jarvis-overlay/
   assets/banner.png   # placeholder JARVIS banner (swap for final art)
   install-jarvis.sh   # branded installer wrapping setup-hermes.sh
   update-jarvis.sh    # revert → hermes update → apply.sh
+  tests/overlay_smoke.sh      # end-to-end validation harness (16 assertions)
+  .github/workflows/          # CI (lint + smoke) + scheduled upstream-drift watch
 ```
 
 ## Install
 
 ```bash
 git clone https://github.com/NousResearch/hermes-agent
-git clone https://github.com/xcerebroai/jarvis-overlay
-cd jarvis-overlay
+git clone https://github.com/xcerebroai/jarvis-agent
+cd jarvis-agent
 HERMES_SRC=../hermes-agent ./install-jarvis.sh
 ```
 
@@ -84,6 +86,26 @@ Then run `jarvis` to start. Update later with `./update-jarvis.sh`.
 `hermes_cli`; pass `HERMES_SRC=/path/to/hermes-agent` to be explicit. Requires
 `bash`, `perl` (ships with git), and a Python with `pyyaml` (Hermes provides
 one) for the config edit.
+
+## Testing & CI
+
+`tests/overlay_smoke.sh` clones upstream Hermes into a throwaway home, applies
+the overlay, and asserts all 16 guarantees (skin loads via Hermes's own engine,
+verify pass clean, 0 locale leaks, idempotency, protected identifiers/paths
+preserved, commands rebranded, clean-revert, banner fallbacks). Run it locally:
+
+```bash
+python3 -m pip install pyyaml
+./tests/overlay_smoke.sh                          # clones upstream
+HERMES_SRC=../hermes-agent ./tests/overlay_smoke.sh   # reuse a checkout
+```
+
+Two GitHub workflows run it:
+- **`ci.yml`** — on push/PR: shellcheck + data validation + the smoke test.
+- **`upstream-drift.yml`** — weekly against latest Hermes `main`; if upstream
+  introduces a brand surface the overlay doesn't cover, the verify pass fails
+  and the workflow opens/updates a tracking issue so `branding.map` can be
+  extended before the next customer update.
 
 ## Banner art
 

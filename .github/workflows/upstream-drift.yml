@@ -1,0 +1,66 @@
+name: Upstream drift watch
+
+# Runs the overlay against the LATEST Hermes upstream on a schedule. If Hermes
+# has moved and introduced a customer-visible brand surface the overlay does
+# not yet cover, the smoke test's verify pass fails — and this workflow opens
+# (or updates) a tracking issue so branding.map can be extended before the next
+# customer install/update.
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  drift:
+    name: Apply overlay to latest upstream
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pyyaml
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: Smoke test against latest Hermes main
+        id: smoke
+        run: |
+          set -o pipefail
+          HERMES_REF=main bash tests/overlay_smoke.sh 2>&1 | tee smoke.log
+
+      - name: Open/update drift issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="⚠ Upstream drift: overlay needs attention"
+          BODY_FILE=$(mktemp)
+          {
+            echo "The scheduled overlay smoke test against the latest Hermes \`main\` failed."
+            echo "Upstream likely changed a customer-visible brand surface the overlay"
+            echo "does not yet cover, or a rebrand assumption no longer holds."
+            echo
+            echo "Run \`./tests/overlay_smoke.sh\` locally, inspect the verify-pass"
+            echo "warnings, and extend \`branding.map\` (or the file list in \`apply.sh\`)."
+            echo
+            echo "Workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo '<details><summary>smoke.log tail</summary>'
+            echo
+            echo '```'
+            tail -n 60 smoke.log 2>/dev/null || true
+            echo '```'
+            echo '</details>'
+          } > "$BODY_FILE"
+
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$BODY_FILE"
+            echo "commented on existing issue #$EXISTING"
+          else
+            gh issue create --title "$TITLE" --body-file "$BODY_FILE" --label "upstream-drift" 2>/dev/null \
+              || gh issue create --title "$TITLE" --body-file "$BODY_FILE"
+          fi

@@ -105,4 +105,86 @@ RUST
   echo "  bootstrap.rs: overlay helper appended"
 fi
 
+# --- 4. Trailing re-apply on self-update (update.rs) ------------------------
+# The desktop's "Update" hands off to `--update` -> update::run_update, which
+# pulls upstream then rebuilds apps/desktop — from now-unbranded source. Inject
+# a re-apply of the persistent overlay checkout's apply.sh BEFORE that rebuild,
+# so the rebuilt desktop stays JARVIS. Mirrors update-jarvis.sh's post-pull
+# apply; uses the checkout at <HERMES_HOME>/jarvis-agent (no bundled-resource
+# dependency, since --update runs the staged bare exe).
+if grep -q 'jarvis_reapply_branding' "$BR"; then
+  echo "  bootstrap.rs: reapply helper already present (idempotent)"
+else
+  cat >> "$BR" <<'RUST'
+
+/// JARVIS: re-apply branding to the updated source so a following desktop
+/// rebuild is branded (the Setup-path trailing re-apply — analogue of
+/// update-jarvis.sh's post-pull apply). Runs apply.sh from the persistent
+/// overlay checkout at <HERMES_HOME>/jarvis-agent via bash (Git Bash on
+/// Windows). Best-effort: the caller logs failure and still rebuilds.
+pub(crate) async fn jarvis_reapply_branding(install_root: &std::path::Path) -> Result<()> {
+    let overlay = install_root
+        .parent()
+        .map(|p| p.join("jarvis-agent"))
+        .ok_or_else(|| anyhow!("no parent dir for install_root"))?;
+    let apply = overlay.join("apply.sh");
+    if !apply.exists() {
+        return Err(anyhow!("overlay apply.sh not found at {}", apply.display()));
+    }
+    let bash = jarvis_find_bash().ok_or_else(|| anyhow!("bash not found for JARVIS re-apply"))?;
+    let apply_posix = apply.to_string_lossy().replace('\\', "/");
+    let root_posix = install_root.to_string_lossy().replace('\\', "/");
+    let status = tokio::process::Command::new(bash)
+        .arg("-lc")
+        .arg(format!("HERMES_SRC='{root_posix}' bash '{apply_posix}'"))
+        .status()
+        .await
+        .map_err(|e| anyhow!("spawn bash apply.sh: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(anyhow!("apply.sh exited with {status}"))
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn jarvis_find_bash() -> Option<std::path::PathBuf> {
+    use std::path::PathBuf;
+    for var in ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"] {
+        if let Ok(base) = std::env::var(var) {
+            let p = if var == "LOCALAPPDATA" {
+                PathBuf::from(base).join("Programs").join("Git").join("bin").join("bash.exe")
+            } else {
+                PathBuf::from(base).join("Git").join("bin").join("bash.exe")
+            };
+            if p.exists() {
+                return Some(p);
+            }
+        }
+    }
+    which::which("bash").ok()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn jarvis_find_bash() -> Option<std::path::PathBuf> {
+    which::which("bash").ok().or_else(|| {
+        let p = std::path::PathBuf::from("/bin/bash");
+        if p.exists() { Some(p) } else { None }
+    })
+}
+RUST
+  grep -q 'jarvis_reapply_branding' "$BR" || { echo "ERROR: failed to append reapply helper to bootstrap.rs" >&2; exit 1; }
+  echo "  bootstrap.rs: reapply helper appended"
+fi
+
+# Inject the re-apply call into update.rs, before the rebuild stage.
+UR="$TAURI/src/update.rs"
+if [ -f "$UR" ] && ! grep -q 'jarvis_reapply_branding' "$UR"; then
+  perl -0777 -pi -e 's{(    emit_stage\(&app, "rebuild", StageState::Running, None, None\);)}{// --- JARVIS: re-apply branding before the rebuild so it builds branded ---\n    emit_stage(&app, "rebrand", StageState::Running, None, None);\n    match crate::bootstrap::jarvis_reapply_branding(&install_root).await \{\n        Ok(()) => emit_stage(&app, "rebrand", StageState::Succeeded, None, None),\n        Err(e) => \{\n            emit_log(&app, Some("rebrand"), LogStream::Stderr, &format!("[jarvis] re-apply failed (desktop may rebuild unbranded): \{e:#\}"));\n            emit_stage(&app, "rebrand", StageState::Failed, None, Some(format!("\{e:#\}")));\n        \}\n    \}\n\n$1}g' "$UR"
+  grep -q 'jarvis_reapply_branding' "$UR" || { echo "ERROR: failed to inject re-apply into update.rs (anchor changed upstream?)" >&2; exit 1; }
+  echo "  update.rs: trailing re-apply injected before rebuild"
+elif [ -f "$UR" ]; then
+  echo "  update.rs: re-apply already present (idempotent)"
+fi
+
 echo "  ✓ overlay stage wired"

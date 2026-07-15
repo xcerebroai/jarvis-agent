@@ -30,6 +30,10 @@ on:
 permissions:
   contents: write   # attach assets to releases
 
+concurrency:
+  group: installer-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # --- Rasterize the JARVIS icon set once (easy tooling on ubuntu) ----------
   icons:
@@ -129,14 +133,14 @@ jobs:
           JARVIS_OVERLAY_REF: ${{ github.sha }}
         run: npx tauri build --no-bundle
 
-      - name: Build (macOS — dmg)
-        if: runner.os == 'macOS'
+      # Signed build — only when Apple secrets exist. Tauri v2 codesigns +
+      # notarizes automatically from these env vars.
+      - name: Build (macOS — dmg, signed + notarized)
+        if: runner.os == 'macOS' && env.HAS_APPLE == 'yes'
         working-directory: hermes-src/apps/bootstrap-installer
         env:
           BUILD_PIN_COMMIT: ${{ steps.clone.outputs.sha }}
           JARVIS_OVERLAY_REF: ${{ github.sha }}
-          # Tauri v2 signs + notarizes automatically when these are present.
-          # Empty (unset secrets) -> ad-hoc unsigned build, CI stays green.
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -144,6 +148,16 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npx tauri build --bundles dmg
+
+      # Unsigned build — NO Apple env (empty APPLE_CERTIFICATE would make Tauri
+      # try to import a nonexistent cert and fail); Tauri ad-hoc signs instead.
+      - name: Build (macOS — dmg, unsigned/ad-hoc)
+        if: runner.os == 'macOS' && env.HAS_APPLE != 'yes'
+        working-directory: hermes-src/apps/bootstrap-installer
+        env:
+          BUILD_PIN_COMMIT: ${{ steps.clone.outputs.sha }}
+          JARVIS_OVERLAY_REF: ${{ github.sha }}
         run: npx tauri build --bundles dmg
 
       # --- Stage the artifact under a stable JARVIS-Setup name ---------------

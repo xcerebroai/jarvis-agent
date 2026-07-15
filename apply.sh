@@ -286,18 +286,17 @@ for f in \
   gateway/run.py; do
   add "$SRC/$f"
 done
-# Desktop (Electron) renderer — pure visible-string surfaces (blanket-safe:
-# apps/desktop has no functional capitalized "Hermes"). The build-config files
-# (package.json, electron/main.ts) are handled by the surgical [desktop] pass
-# below, NOT here, because their "Hermes" values are shared with protected
-# identifiers (productName/executableName/CFBundleExecutable).
-add "$SRC/apps/desktop/src/components/chat/intro.tsx"
-add "$SRC/apps/desktop/src/components/chat/intro-copy.jsonl"
-while IFS= read -r f; do FILES+=("$f"); done < <(
-  find "$SRC/apps/desktop/src/i18n" -maxdepth 1 -name '*.ts' \
-    ! -name 'catalog.ts' ! -name 'context.tsx' ! -name 'define-locale.ts' \
-    ! -name 'index.ts' ! -name 'languages.ts' ! -name 'runtime.ts' \
-    ! -name 'types.ts' ! -name '*.test.*' 2>/dev/null || true)
+# Desktop (Electron) RENDERER (apps/desktop/src) — blanket-rebrand every file
+# that mentions the brand. Blanket-safe: the renderer has no functional
+# capitalized "Hermes" and no Hermes.app/.exe bundle paths (those live only in
+# electron/*, handled surgically below). Grep-filter so only files that
+# actually carry a brand string enter the manifest.
+if [ -d "$SRC/apps/desktop/src" ]; then
+  while IFS= read -r f; do FILES+=("$f"); done < <(
+    grep -rlE '\bHermes\b|HERMES AGENT' "$SRC/apps/desktop/src" \
+      --include='*.ts' --include='*.tsx' --include='*.jsonl' 2>/dev/null \
+      | grep -vE '\.test\.|\.spec\.' || true)
+fi
 
 # Drop any operator-excluded files, and record the branded set to a manifest
 # so update-jarvis.sh can revert ONLY these files (never unrelated local work).
@@ -353,12 +352,24 @@ for my $file (@files) {
 print "  (desktop) rewrote $changed file(s)\n";
 PERL
 }
+# Surgical set: package.json + EVERY electron/*.ts that mentions the brand.
+# The [desktop] literals are context-anchored, so applying them across all
+# electron files only ever touches visible strings ("Hermes Agent", window
+# titles, app-name fallbacks) — never the functional Hermes.app/.exe/MacOS/Hermes
+# paths those same files use to drive the updater/uninstaller.
 DESK_CFG=()
-for rel in apps/desktop/package.json apps/desktop/electron/main.ts; do
-  [ -f "$SRC/$rel" ] || continue
-  if is_excluded "$rel"; then continue; fi
+desk_add_cfg() {
+  local rel="$1"
+  [ -f "$SRC/$rel" ] || return 0
+  is_excluded "$rel" && return 0
   DESK_CFG+=("$SRC/$rel"); echo "$rel" >> "$MANIFEST"
-done
+}
+desk_add_cfg "apps/desktop/package.json"
+if [ -d "$SRC/apps/desktop/electron" ]; then
+  while IFS= read -r f; do desk_add_cfg "${f#"$SRC"/}"; done < <(
+    grep -rlE '\bHermes\b|HERMES AGENT' "$SRC/apps/desktop/electron" \
+      --include='*.ts' 2>/dev/null | grep -vE '\.test\.|\.spec\.' || true)
+fi
 DESK_PKG="$SRC/apps/desktop/package.json"
 if [ ${#DESK_CFG[@]} -gt 0 ]; then
   echo "  rewriting desktop build config…"

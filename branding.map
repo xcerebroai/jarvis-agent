@@ -51,6 +51,10 @@ hermes_cli
 get_hermes_home
 HERMES_HOME
 HERMES_REVISION
+Hermes.app
+Hermes.exe
+MacOS/Hermes
+TERM_PROGRAM = 'Hermes'
 
 # Exact multi-word brand → JARVIS. Runs before [word] so "Hermes Agent"
 # collapses to "JARVIS" (not "JARVIS Agent"). Order: most specific first.
@@ -101,13 +105,20 @@ Hermes	JARVIS
 # CFBundleExecutable, appId (com.nousresearch.hermes), or the hermes://
 # protocol. Those keep the .app/.exe filename as "Hermes" so Hermes's own
 # updater (which hardcodes Hermes.app / Hermes.exe) keeps working.
+# Applied to package.json AND every electron/*.ts file that mentions the brand.
+# Each pattern is context-anchored so it only ever hits VISIBLE strings, never
+# the functional filename/path refs (Hermes.app, Hermes.exe, MacOS/Hermes) or
+# TERM_PROGRAM='Hermes' that Hermes's own updater/uninstaller depend on.
 [desktop]
 "CFBundleDisplayName": "Hermes"	"CFBundleDisplayName": "JARVIS"
 "CFBundleName": "Hermes"	"CFBundleName": "JARVIS"
 "Hermes uses audio capture	"JARVIS uses audio capture
 "Hermes uses the microphone	"JARVIS uses the microphone
 "title": "Install Hermes"	"title": "Install JARVIS"
-HERMES_DESKTOP_APP_NAME || 'Hermes'	HERMES_DESKTOP_APP_NAME || 'JARVIS'
+HERMES AGENT	JARVIS
+Hermes Agent	JARVIS
+title: 'Hermes'	title: 'JARVIS'
+|| 'Hermes'	|| 'JARVIS'
 
 # ---------------------------------------------------------------------------
 # POLICY: brand NOUNS become JARVIS; command INVOCATIONS become `jarvis`

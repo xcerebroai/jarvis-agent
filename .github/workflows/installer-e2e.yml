@@ -46,19 +46,20 @@ jobs:
         shell: pwsh
         run: |
           $bash = "C:\Program Files\Git\bin\bash.exe"
-          $out = & $bash -lc 'export PATH="$HOME/.local/bin:$PATH"; hermes --version'
+          $out = (& $bash -lc 'export PATH="$HOME/.local/bin:$PATH"; hermes --version') -join "`n"
           Write-Host "hermes --version => $out"
-          if ($LASTEXITCODE -ne 0) { throw "hermes did not resolve via ~/.local/bin" }
-          if ($out -notmatch 'JARVIS')  { throw "expected JARVIS branding in version output" }
-          & "$env:USERPROFILE\.local\bin\hermes.cmd" --version
-          if ($LASTEXITCODE -ne 0) { throw "hermes.cmd (cross-shell shim) did not resolve" }
+          if ($LASTEXITCODE -ne 0)     { throw "hermes did not resolve via ~/.local/bin" }
+          if ($out -notmatch 'JARVIS') { throw "expected JARVIS branding in version output" }
+          $cmdOut = (& "$env:USERPROFILE\.local\bin\hermes.cmd" --version) -join "`n"
+          if ($LASTEXITCODE -ne 0)     { throw "hermes.cmd (cross-shell shim) did not resolve" }
+          Write-Host "hermes.cmd => $cmdOut"
 
       - name: Idempotency — re-run must repair, not break
         shell: pwsh
         run: |
           pwsh -File dist/jarvis-windows.ps1 -NoDesktop -Dir "$env:RUNNER_TEMP\jv" -OverlayDir "$env:GITHUB_WORKSPACE"
           $bash = "C:\Program Files\Git\bin\bash.exe"
-          $out = & $bash -lc 'export PATH="$HOME/.local/bin:$PATH"; hermes --version'
+          $out = (& $bash -lc 'export PATH="$HOME/.local/bin:$PATH"; hermes --version') -join "`n"
           if ($LASTEXITCODE -ne 0) { throw "hermes broke after re-run" }
           Write-Host "re-run OK: $out"
 

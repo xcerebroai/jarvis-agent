@@ -45,15 +45,50 @@ SRC="$(cd "$SRC" && pwd)"
 echo "◆ JARVIS — updating Hermes upstream, then re-branding"
 echo "  source : $SRC"
 
-# --- 1. Revert branding so the pull is a clean fast-forward ----------------
+# --- 1. Revert ONLY the branded files so the pull is a clean fast-forward ---
+# SCOPED to the files listed in the manifest apply.sh writes — never a blanket
+# `git checkout -- .`. Local modifications to files the overlay does NOT brand
+# are left completely untouched (hermes update stashes/restores them as usual).
+# Any dirty branded file is backed up first, so nothing is ever lost silently.
+HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+MANIFEST="$HERMES_HOME/.jarvis/branded-files.txt"
 if git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  if [ -n "$(git -C "$SRC" status --porcelain)" ]; then
-    echo "  → reverting local branding to pristine upstream (git checkout -- .)"
-    echo "    (JARVIS branding is reproducible via apply.sh; this avoids a"
-    echo "     stash/replay merge conflict during the pull.)"
-    git -C "$SRC" checkout -- .
-  else
-    echo "  → working tree already clean"
+  if [ ! -f "$MANIFEST" ]; then
+    echo "  ! no branded-files manifest at $MANIFEST — running apply.sh once to build it."
+    HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh" >/dev/null 2>&1 || true
+  fi
+  if [ -f "$MANIFEST" ]; then
+    ts="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
+    BK="$HERMES_HOME/.jarvis/backup-$ts"
+    reverted=0; backed=0
+    while IFS= read -r rel; do
+      [ -z "$rel" ] && continue
+      f="$SRC/$rel"; [ -f "$f" ] || continue
+      # Back up ONLY if the file has changes that are NOT just JARVIS branding —
+      # i.e. a genuine operator patch we'd otherwise discard. Normal updates
+      # (pure branding) back up nothing. (Exclude such files via branding.exclude
+      # for the reliable guarantee; this backup is a safety net.)
+      # A line is "branding" if it mentions the brand (case-insensitive, so the
+      # uppercase HERMES AGENT wordmark counts) or is a bare markup fragment
+      # left by the multi-line "Hermes <br/> Agent" -> JARVIS collapse.
+      nonbrand="$(git -C "$SRC" diff HEAD -- "$rel" 2>/dev/null \
+                  | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' \
+                  | grep -viE 'jarvis|hermes|◆|⚕' \
+                  | grep -vE '^[+-][[:space:]]*(<br[[:space:]]*/?>|Agent)[[:space:]]*$' || true)"
+      if [ -n "$nonbrand" ]; then
+        mkdir -p "$BK/$(dirname "$rel")" && cp -f "$f" "$BK/$rel" && backed=$((backed + 1))
+        echo "  ! branded file has a local patch — backed up: $rel"
+      fi
+      git -C "$SRC" checkout -- "$rel" 2>/dev/null && reverted=$((reverted + 1)) || true
+    done < "$MANIFEST"
+    echo "  → reverted $reverted branded file(s) to pristine; backed up $backed dirty one(s)"
+    [ "$backed" -gt 0 ] && echo "    backup: $BK"
+    echo "    (files NOT branded by JARVIS are untouched; if you locally patch a"
+    echo "     branded file, add it to branding.exclude so it is never reverted.)"
+    # Keep only the 3 most recent backups.
+    ls -1dt "$HERMES_HOME/.jarvis"/backup-* 2>/dev/null | tail -n +4 | while IFS= read -r old; do
+      rm -rf "$old"
+    done
   fi
 else
   echo "  ! $SRC is not a git checkout — skipping revert."

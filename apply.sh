@@ -38,6 +38,26 @@ MAP="$OVERLAY_DIR/branding.map"
 MODE="apply"
 if [ "${1:-}" = "--verify-build" ]; then MODE="verify-build"; shift; fi
 
+# Exclude list — repo-relative paths the overlay must NEVER brand or revert.
+# Sources: $OVERLAY_DIR/branding.exclude (one path per line, # comments) and
+# the JARVIS_EXCLUDE env var (whitespace-separated). Operators list files they
+# maintain their own local patches to, so the overlay leaves them fully alone.
+EXCLUDES=()
+if [ -f "$OVERLAY_DIR/branding.exclude" ]; then
+  while IFS= read -r line; do
+    line="${line%%#*}"; line="$(echo "$line" | tr -d '[:space:]')"
+    [ -n "$line" ] && EXCLUDES+=("$line")
+  done < "$OVERLAY_DIR/branding.exclude"
+fi
+if [ -n "${JARVIS_EXCLUDE:-}" ]; then
+  for line in $JARVIS_EXCLUDE; do [ -n "$line" ] && EXCLUDES+=("$line"); done
+fi
+is_excluded() {
+  local rel="$1" e
+  for e in "${EXCLUDES[@]:-}"; do [ -n "$e" ] && [ "$rel" = "$e" ] && return 0; done
+  return 1
+}
+
 resolve_python() {
   for c in "${HERMES_PYTHON:-}" python3 python py; do
     [ -z "$c" ] && continue
@@ -278,6 +298,21 @@ while IFS= read -r f; do FILES+=("$f"); done < <(
     ! -name 'catalog.ts' ! -name 'context.tsx' ! -name 'define-locale.ts' \
     ! -name 'index.ts' ! -name 'languages.ts' ! -name 'runtime.ts' \
     ! -name 'types.ts' ! -name '*.test.*' 2>/dev/null || true)
+
+# Drop any operator-excluded files, and record the branded set to a manifest
+# so update-jarvis.sh can revert ONLY these files (never unrelated local work).
+MANIFEST_DIR="$HERMES_HOME/.jarvis"; mkdir -p "$MANIFEST_DIR"
+MANIFEST="$MANIFEST_DIR/branded-files.txt"
+: > "$MANIFEST"
+FILTERED=(); SKIPPED=0
+for f in "${FILES[@]:-}"; do
+  [ -z "$f" ] && continue
+  rel="${f#"$SRC"/}"
+  if is_excluded "$rel"; then SKIPPED=$((SKIPPED + 1)); continue; fi
+  FILTERED+=("$f"); echo "$rel" >> "$MANIFEST"
+done
+FILES=("${FILTERED[@]:-}")
+[ "$SKIPPED" -gt 0 ] && echo "  · excluded $SKIPPED operator-maintained file(s) from branding"
 [ ${#FILES[@]} -gt 0 ] && rewrite "${FILES[@]}"
 
 # --- 3b. Desktop build-config — surgical, key-anchored [desktop] literals ---
@@ -318,11 +353,16 @@ for my $file (@files) {
 print "  (desktop) rewrote $changed file(s)\n";
 PERL
 }
+DESK_CFG=()
+for rel in apps/desktop/package.json apps/desktop/electron/main.ts; do
+  [ -f "$SRC/$rel" ] || continue
+  if is_excluded "$rel"; then continue; fi
+  DESK_CFG+=("$SRC/$rel"); echo "$rel" >> "$MANIFEST"
+done
 DESK_PKG="$SRC/apps/desktop/package.json"
-DESK_MAIN="$SRC/apps/desktop/electron/main.ts"
-if [ -f "$DESK_PKG" ] || [ -f "$DESK_MAIN" ]; then
+if [ ${#DESK_CFG[@]} -gt 0 ]; then
   echo "  rewriting desktop build config…"
-  rewrite_desktop_config "$DESK_PKG" "$DESK_MAIN"
+  rewrite_desktop_config "${DESK_CFG[@]}"
   # Assert package.json is still valid JSON after the surgical edit.
   if [ -f "$DESK_PKG" ] && [ -n "$PY" ]; then
     if ! "$PY" -c "import json,sys; json.load(open(sys.argv[1],encoding='utf-8'))" "$DESK_PKG" 2>/dev/null; then

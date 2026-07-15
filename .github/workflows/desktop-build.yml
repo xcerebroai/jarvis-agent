@@ -1,0 +1,124 @@
+name: Desktop build (electron-builder)
+
+# Performs a REAL electron-builder --dir build of the JARVIS-branded desktop
+# app against upstream Hermes, then verifies the built renderer bundle. This is
+# the canary: if Nous changes something that breaks the overlay or the build,
+# CI fails here — not a client. On the weekly run a failure opens a tracking
+# issue.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "37 5 * * 1"   # Mondays 05:37 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  desktop-build:
+    name: Build & verify branded desktop app
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install pyyaml
+        run: python3 -m pip install --quiet pyyaml
+
+      - name: "Stage 1/4 — clone upstream Hermes (HEAD)"
+        id: clone
+        run: |
+          git clone --depth 1 https://github.com/NousResearch/hermes-agent hermes-src
+          echo "sha=$(git -C hermes-src rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Upstream HEAD: $(git -C hermes-src rev-parse --short HEAD)"
+
+      - name: Cache npm + Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            ~/.cache/electron
+            ~/.cache/electron-builder
+          key: desktop-${{ runner.os }}-${{ hashFiles('hermes-src/package-lock.json') }}
+          restore-keys: |
+            desktop-${{ runner.os }}-
+
+      - name: "Stage 2/4 — apply JARVIS overlay"
+        id: apply
+        run: HERMES_SRC="$PWD/hermes-src" bash apply.sh
+
+      - name: "Stage 3/4 — build desktop (npm ci + electron-builder --dir)"
+        id: build
+        working-directory: hermes-src
+        env:
+          # electron-builder --dir on CI: no signing, no publish.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          npm ci
+          npm run pack -w apps/desktop
+
+      - name: "Stage 4/4 — verify built bundle (JARVIS present, no Hermes)"
+        id: verify
+        run: bash apply.sh --verify-build "$PWD/hermes-src"
+
+      - name: Stage summary — state clearly which stage broke
+        if: always()
+        run: |
+          declare -A O=(
+            [1-clone]="${{ steps.clone.outcome }}"
+            [2-apply]="${{ steps.apply.outcome }}"
+            [3-build]="${{ steps.build.outcome }}"
+            [4-verify]="${{ steps.verify.outcome }}"
+          )
+          echo "── Desktop build stage results (upstream ${{ steps.clone.outputs.sha }}) ──"
+          for s in 1-clone 2-apply 3-build 4-verify; do
+            printf '  %-9s %s\n' "$s" "${O[$s]:-skipped}"
+          done
+          broke=""
+          for s in 1-clone 2-apply 3-build 4-verify; do
+            if [ "${O[$s]}" = "failure" ]; then broke="$s"; break; fi
+          done
+          if [ -n "$broke" ]; then
+            echo "::error::Desktop build FAILED at stage ${broke#*-} (${broke})."
+            {
+              echo "## ❌ Desktop build failed at stage: \`${broke#*-}\`"
+              echo "Upstream Hermes: \`${{ steps.clone.outputs.sha }}\`"
+              echo ""
+              echo "| stage | result |"
+              echo "|-------|--------|"
+              for s in 1-clone 2-apply 3-build 4-verify; do echo "| ${s#*-} | ${O[$s]:-skipped} |"; done
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "✓ All stages passed — JARVIS desktop builds and verifies clean against upstream."
+          fi
+
+      - name: Open/update drift issue (scheduled failures only)
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="⚠ Desktop build broke against upstream Hermes"
+          BODY=$(mktemp)
+          {
+            echo "The weekly desktop-build canary failed against upstream Hermes"
+            echo "\`${{ steps.clone.outputs.sha }}\`. Upstream likely changed the desktop"
+            echo "app, its build, or a surface the overlay brands."
+            echo ""
+            echo "Stages: clone=${{ steps.clone.outcome }} apply=${{ steps.apply.outcome }} build=${{ steps.build.outcome }} verify=${{ steps.verify.outcome }}"
+            echo ""
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } > "$BODY"
+          EXISTING=$(gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number' 2>/dev/null || true)
+          if [ -n "$EXISTING" ]; then
+            gh issue comment "$EXISTING" --body-file "$BODY"
+          else
+            gh issue create --title "$TITLE" --body-file "$BODY" --label "upstream-drift" 2>/dev/null \
+              || gh issue create --title "$TITLE" --body-file "$BODY"
+          fi

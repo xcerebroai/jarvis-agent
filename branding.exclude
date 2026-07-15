@@ -1,0 +1,11 @@
+# branding.exclude — repo-relative paths the JARVIS overlay must NEVER brand
+# or revert. Use this for files you maintain your own local patches to: the
+# overlay leaves them completely alone, so `update-jarvis.sh` never reverts
+# your changes and never re-brands them.
+#
+# One path per line, relative to the Hermes source root. '#' starts a comment.
+# (You can also pass paths at runtime via the JARVIS_EXCLUDE env var.)
+#
+# Example — an operator who has hand-patched the QQ adapter and gateway:
+# gateway/platforms/qqbot/adapter.py
+# gateway/run.py

@@ -10,6 +10,11 @@
 #      JARVIS-Setup.exe with no files next to it, so resource-dir loading can
 #      never work there (finding #1). At run time the embedded script is
 #      written to the bootstrap cache dir and executed from that stable path.
+#   1b. jarvis_dmg.rs copied into src-tauri/src/ + lib.rs wired (mod decl +
+#      a hop_or_eject() call at the top of run(), ahead of the launcher fast
+#      path): launching Setup from inside the mounted .dmg stages the bundle
+#      into the bootstrap cache, relaunches from the copy, and ejects the
+#      image — fixes the "can't eject / Resource busy" DMG UX bug.
 #   2. bootstrap.rs: an overlay-stage call after the upstream stage loop,
 #      before Complete; a synthetic StageInfo pushed into the Manifest EVENT
 #      so the stage is visible in the UI (the frontend drops Stage events for
@@ -48,6 +53,32 @@ echo "  overlay scripts -> src-tauri/resources/ (embedded via include_str!)"
 
 BR="$TAURI/src/bootstrap.rs"
 UR="$TAURI/src/update.rs"
+LR="$TAURI/src/lib.rs"
+
+# --- 1b. DMG hop module (macOS eject fix) ------------------------------------
+# Launching Setup from inside the mounted .dmg pins the volume (hdiutil
+# detach -> "Resource busy"). jarvis_dmg.rs stages the bundle into the
+# bootstrap cache, relaunches from the copy, and ejects the image before the
+# UI starts. Module file is copied verbatim; lib.rs gets a mod declaration and
+# one call at the top of run(), ahead of the launcher fast path.
+cp -f "$OVERLAY_DIR/installer/overlay-stage/jarvis_dmg.rs" "$TAURI/src/jarvis_dmg.rs"
+echo "  jarvis_dmg.rs -> src-tauri/src/ (DMG hop module)"
+
+if grep -q 'mod jarvis_dmg;' "$LR"; then
+  echo "  lib.rs: jarvis_dmg mod already declared (idempotent)"
+else
+  perl -0777 -pi -e 's{^mod update;$}{mod update;\n// JARVIS overlay: DMG hop (macOS eject fix) — see src/jarvis_dmg.rs.\nmod jarvis_dmg;}m' "$LR"
+  grep -q 'mod jarvis_dmg;' "$LR" || { echo "ERROR: jarvis_dmg mod not declared — anchor changed upstream?" >&2; exit 1; }
+  echo "  lib.rs: mod jarvis_dmg declared"
+fi
+
+if grep -q 'jarvis_dmg::hop_or_eject' "$LR"; then
+  echo "  lib.rs: DMG hop call already present (idempotent)"
+else
+  perl -0777 -pi -e 's{(    tracing::info!\(\?mode, force_setup, "Hermes installer starting"\);)}{$1\n    // JARVIS overlay: hop out of a mounted DMG (and eject it) BEFORE the\n    // launcher fast path or any UI — see src/jarvis_dmg.rs.\n    jarvis_dmg::hop_or_eject();}g' "$LR"
+  grep -q 'jarvis_dmg::hop_or_eject' "$LR" || { echo "ERROR: DMG hop call not injected — anchor changed upstream?" >&2; exit 1; }
+  echo "  lib.rs: DMG hop call injected at top of run()"
+fi
 
 # --- 2a. bootstrap.rs: overlay-stage call after the upstream stage loop -----
 if grep -q 'JARVIS overlay stage (injected' "$BR"; then

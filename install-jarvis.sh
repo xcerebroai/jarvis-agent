@@ -292,13 +292,24 @@ create_launch_points() {
       ;;
     *Darwin*)
       # The bundle is Hermes.app but CFBundleDisplayName=JARVIS, so Finder/dock
-      # show "JARVIS". Symlink it into /Applications (or ~/Applications) so it's
-      # launchable; the display name comes from the bundle, not the link name.
+      # show "JARVIS". (#24) COPY it into /Applications — NEVER symlink:
+      # Launchpad refuses to index symlinked .apps, and Electron resolves its
+      # helper apps through the physical bundle path, so launching through a
+      # symlink dies with "FATAL: Unable to find helper app"
+      # (electron_main_delegate_mac.mm). ditto preserves signatures, xattrs,
+      # and resource forks. NOTE: never "repair" this bundle with
+      # `codesign --force --deep --sign -` — a blanket ad-hoc deep re-sign
+      # strips the Electron helper entitlements and bricks the app; recovery
+      # is `jarvis desktop --build-only` (electron-builder re-signs correctly)
+      # then re-running this installer/update to refresh the copy.
       local appdir="/Applications"; [ -w "$appdir" ] || appdir="$HOME/Applications"
       mkdir -p "$appdir" 2>/dev/null || true
-      ln -sfn "$exe" "$appdir/JARVIS.app" 2>/dev/null \
-        && echo "  ✓ JARVIS.app -> $appdir/JARVIS.app (Finder/dock show JARVIS via CFBundleDisplayName)" \
-        || echo "  ⚠ could not link JARVIS.app into $appdir"
+      rm -rf "$appdir/JARVIS.app"
+      if ditto "$exe" "$appdir/JARVIS.app" 2>/dev/null; then
+        echo "  ✓ JARVIS.app -> $appdir/JARVIS.app (real copy via ditto; Finder/dock/Launchpad show JARVIS)"
+      else
+        echo "  ⚠ could not copy JARVIS.app into $appdir"
+      fi
       ;;
     *Linux*)
       local appdir="${JARVIS_SHORTCUT_DIR:-$HOME/.local/share/applications}" hh icon_line=""

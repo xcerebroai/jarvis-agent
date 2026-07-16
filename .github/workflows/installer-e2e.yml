@@ -141,8 +141,24 @@ jobs:
             || { echo "display.skin: jarvis not set (finding #10)"; exit 1; }
           echo "skin activated: display.skin=jarvis"
 
-      - name: Idempotency — re-run must repair, not break
+      - name: Idempotency — re-run must repair, not break (+ app copy)
+        env:
+          # (#24d) Exercise the macOS launch point without a real desktop
+          # build: plant a stub .app, force launch points, and assert the
+          # /Applications entry is a REAL directory copy — never a symlink
+          # (Launchpad won't index one and Electron helper resolution dies).
+          JARVIS_FORCE_LAUNCH_POINTS: "1"
         run: |
+          mkdir -p "$RUNNER_TEMP/jv/hermes-agent/apps/desktop/release/mac/Hermes.app/Contents/MacOS"
+          printf '#!/bin/sh\n' > "$RUNNER_TEMP/jv/hermes-agent/apps/desktop/release/mac/Hermes.app/Contents/MacOS/Hermes"
           bash dist/jarvis-mac.sh --no-desktop --dir "$RUNNER_TEMP/jv" --overlay-dir "$GITHUB_WORKSPACE"
           export PATH="$HOME/.local/bin:$PATH"
           hermes --version | grep -q JARVIS && echo "re-run OK"
+          app=""
+          for c in "/Applications/JARVIS.app" "$HOME/Applications/JARVIS.app"; do
+            [ -e "$c" ] && { app="$c"; break; }
+          done
+          [ -n "$app" ] || { echo "JARVIS.app launch point not created (finding #24)"; exit 1; }
+          [ -L "$app" ] && { echo "JARVIS.app is a SYMLINK — must be a real copy (finding #24)"; exit 1; }
+          [ -d "$app" ] || { echo "JARVIS.app is not a directory bundle (finding #24)"; exit 1; }
+          echo "launch point OK: $app (real ditto copy, not a symlink)"

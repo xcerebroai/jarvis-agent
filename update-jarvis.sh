@@ -162,6 +162,30 @@ if [ -d "$DESK_RELEASE" ] && { ls -d "$DESK_RELEASE"/*-unpacked >/dev/null 2>&1 
     echo "  ✓ desktop rebuilt from JARVIS-branded source"
     HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" || \
       echo "  ⚠ built desktop bundle still carries brand strings — see warning above"
+    # (#24c) macOS: the /Applications launch point is a real COPY of the
+    # bundle (never a symlink — Launchpad/helper-app resolution both break),
+    # so a rebuild must refresh it or users keep launching the stale app.
+    case "$(uname -s)" in
+      Darwin*)
+        app="$(ls -d "$DESK_RELEASE"/mac*/Hermes.app 2>/dev/null | head -1)"
+        if [ -n "$app" ]; then
+          refreshed=0
+          for tgt in "/Applications/JARVIS.app" "$HOME/Applications/JARVIS.app"; do
+            { [ -e "$tgt" ] || [ -L "$tgt" ]; } || continue
+            rm -rf "$tgt"
+            ditto "$app" "$tgt" 2>/dev/null \
+              && { echo "  ✓ refreshed $tgt (ditto copy)"; refreshed=1; } \
+              || echo "  ⚠ could not refresh $tgt"
+          done
+          if [ "$refreshed" -eq 0 ]; then
+            appdir="/Applications"; [ -w "$appdir" ] || appdir="$HOME/Applications"
+            mkdir -p "$appdir" 2>/dev/null || true
+            ditto "$app" "$appdir/JARVIS.app" 2>/dev/null \
+              && echo "  ✓ JARVIS.app -> $appdir/JARVIS.app (real copy)" \
+              || echo "  ⚠ could not install JARVIS.app into $appdir"
+          fi
+        fi ;;
+    esac
   else
     echo "  ⚠ desktop rebuild failed — the app may show HERMES until you run:"
     echo "      $UPDATER desktop --build-only"

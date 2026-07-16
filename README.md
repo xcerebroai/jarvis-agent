@@ -114,6 +114,19 @@ That's it — no accounts, no billing. Your keys and config live locally in
 `~/.hermes`. For provider setup details and channel options, see the
 [Hermes Agent docs](https://github.com/NousResearch/hermes-agent#readme).
 
+> **macOS notes.** `/Applications/JARVIS.app` is a real **copy** of the built
+> bundle (installed with `ditto`), refreshed automatically on update — never a
+> symlink (Launchpad won't index one, and Electron's helper-app resolution
+> crashes through one). **Never run `codesign --force --deep --sign -` on the
+> bundle** — a blanket ad-hoc deep re-sign strips the Electron helpers'
+> entitlements and the app stops launching entirely. If Gatekeeper complains,
+> right-click → Open (or `xattr -dr com.apple.quarantine` on the app). If the
+> bundle's signature is ever broken, recover with
+> `jarvis desktop --build-only` (electron-builder re-signs correctly), then
+> `./update-jarvis.sh` or re-run the installer to refresh the copy. Known
+> residual: macOS **crash dialogs** show "Hermes" — the executable name is
+> intentionally left upstream so the self-updater keeps working.
+
 Then run `jarvis` to start. Update later with `./update-jarvis.sh`.
 
 `apply.sh` and the wrappers auto-detect the Hermes source tree via an installed

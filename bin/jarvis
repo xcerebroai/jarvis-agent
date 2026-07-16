@@ -41,9 +41,15 @@ if [ "${1:-}" = "update" ] && [ -z "${JARVIS_NO_UPDATE_WRAP:-}" ]; then
 fi
 
 # Locate the real hermes binary (skip ourselves if a `jarvis`->`hermes`
-# name collision ever occurs on PATH).
+# name collision ever occurs on PATH). Sibling candidates first: this shim is
+# also installed NEXT TO hermes(.exe) in venv/Scripts and must work when run
+# by absolute path from a shell whose PATH lacks that dir (e2e-caught defect).
 find_hermes() {
-  local c
+  local c here
+  here="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  for c in "${here:+$here/hermes.exe}" "${here:+$here/hermes}"; do
+    [ -n "$c" ] && [ -f "$c" ] && [ "$c" != "${BASH_SOURCE[0]}" ] && { echo "$c"; return 0; }
+  done
   c="$(command -v hermes 2>/dev/null || true)"
   [ -n "$c" ] && { echo "$c"; return 0; }
   for c in \

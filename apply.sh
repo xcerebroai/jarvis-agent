@@ -209,6 +209,21 @@ verify_shipped_bundle() {  # <.app bundle or *-unpacked dir>
       rc=1
     fi
   fi
+  # Runtime dock/window icon: electron/main.ts APP_ICON_PATHS feeds the packed
+  # dist/apple-touch-icon.png to app.dock.setIcon() — the bundle's icon.icns
+  # being JARVIS does NOT cover this; a pristine copy here means the RUNNING
+  # app docks upstream art. Byte-compare against the overlay PNG apply used.
+  local touch_ref="" _p
+  for _p in "$OVERLAY_DIR/installer/assets/icons/icon-512.png" \
+            "$OVERLAY_DIR/installer/assets/icons/128x128@2x.png"; do
+    [ -f "$_p" ] && { touch_ref="$_p"; break; }
+  done
+  if [ -n "$touch_ref" ] && [ -f "$unpacked/apple-touch-icon.png" ]; then
+    if ! cmp -s "$unpacked/apple-touch-icon.png" "$touch_ref"; then
+      echo "  ⚠ $name packs upstream RUNTIME icon (unpacked dist/apple-touch-icon.png ≠ JARVIS art) — dock shows upstream while running"
+      rc=1
+    fi
+  fi
   [ "$rc" -eq 0 ] && echo "  ✓ shipped bundle OK: $app"
   return "$rc"
 }
@@ -386,14 +401,22 @@ if [ -f "$OVERLAY_DIR/assets/banner.png" ] && [ -d "$SRC/assets" ]; then
 fi
 
 # --- 2b. JARVIS icon art (finding #23) -------------------------------------
-# Two jobs:
+# Three jobs:
 #   a) Swap the desktop app's icon sources at apps/desktop/assets/icon.* —
-#      the ONE point everything downstream reads: electron-builder's bundle
-#      icon ("icon": "assets/icon"), the rcedit exe stamp
-#      (scripts/set-exe-identity.mjs uses assets/icon.ico), and the runtime
-#      dock icon. Rebuilt desktops then carry JARVIS art on every platform.
+#      the point electron-builder ("icon": "assets/icon") and the rcedit exe
+#      stamp (scripts/set-exe-identity.mjs uses assets/icon.ico) read.
+#      Rebuilt desktops then carry JARVIS art on every platform.
 #      Recorded in the manifest (section 3) so updates revert them pre-pull.
-#   b) Stage stable copies under $HERMES_HOME/.jarvis/ for shortcuts to
+#   b) Swap apps/desktop/public/apple-touch-icon.png — the RUNTIME icon.
+#      electron/main.ts APP_ICON_PATHS resolves apple-touch-icon.png (public/,
+#      dist/, or the asar-unpacked dist/) and feeds it to app.dock.setIcon()
+#      on macOS and BrowserWindow {icon} elsewhere; index.html also uses it
+#      as the favicon. assets/icon.* never reaches this path, so without this
+#      swap the RUNNING app shows upstream art in the dock even though
+#      Finder (bundle icon.icns) shows JARVIS. Vite copies public/ verbatim
+#      into dist/ on rebuild; the dist copies are overwritten too so an
+#      already-built tree is corrected even before its next rebuild.
+#   c) Stage stable copies under $HERMES_HOME/.jarvis/ for shortcuts to
 #      reference — .lnk IconLocation must point at a path that survives
 #      rebuilds (the release/ dir is wiped) and repo cleanup.
 ICON_DIR="$OVERLAY_DIR/installer/assets/icons"
@@ -408,6 +431,21 @@ if [ -d "$ICON_DIR" ] && [ -f "$ICON_DIR/icon.ico" ]; then
     [ -f "$ICON_DIR/icon.icns" ] && cp -f "$ICON_DIR/icon.icns" "$DESK_ASSETS/icon.icns"
     [ -n "$ICON_PNG" ] && cp -f "$ICON_PNG" "$DESK_ASSETS/icon.png"
     echo "  ✓ icons   -> apps/desktop/assets/icon.{ico,icns,png} (JARVIS art)"
+  fi
+  # (b) runtime dock/window icon + favicon (see header comment). dist copies
+  # are best-effort: vite regenerates them from public/ on the next rebuild.
+  if [ -n "$ICON_PNG" ]; then
+    _touch_swapped=""
+    if [ -f "$SRC/apps/desktop/public/apple-touch-icon.png" ]; then
+      cp -f "$ICON_PNG" "$SRC/apps/desktop/public/apple-touch-icon.png"
+      _touch_swapped=1
+    fi
+    if [ -f "$SRC/apps/desktop/dist/apple-touch-icon.png" ]; then
+      cp -f "$ICON_PNG" "$SRC/apps/desktop/dist/apple-touch-icon.png"
+      _touch_swapped=1
+    fi
+    [ -n "$_touch_swapped" ] && \
+      echo "  ✓ icons   -> apps/desktop/{public,dist}/apple-touch-icon.png (runtime dock icon)"
   fi
   mkdir -p "$HERMES_HOME/.jarvis"
   cp -f "$ICON_DIR/icon.ico" "$HERMES_HOME/.jarvis/jarvis.ico"
@@ -543,7 +581,8 @@ FILES=("${FILTERED[@]:-}")
 # leaving autostash churn. git checkout no-ops harmlessly if untracked.
 for _asset in assets/banner.png \
               apps/desktop/assets/icon.ico apps/desktop/assets/icon.icns \
-              apps/desktop/assets/icon.png; do
+              apps/desktop/assets/icon.png \
+              apps/desktop/public/apple-touch-icon.png; do
   [ -f "$SRC/$_asset" ] || continue
   is_excluded "$_asset" && continue
   # Only tracked files: the Setup path reverts the manifest in ONE batched

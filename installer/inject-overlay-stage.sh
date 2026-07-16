@@ -67,7 +67,9 @@ echo "  jarvis_dmg.rs -> src-tauri/src/ (DMG hop module)"
 if grep -q 'mod jarvis_dmg;' "$LR"; then
   echo "  lib.rs: jarvis_dmg mod already declared (idempotent)"
 else
-  perl -0777 -pi -e 's{^mod update;$}{mod update;\n// JARVIS overlay: DMG hop (macOS eject fix) — see src/jarvis_dmg.rs.\nmod jarvis_dmg;}m' "$LR"
+  # \r? — Windows runners check upstream out with CRLF endings; a bare $
+  # would never match after the semicolon there (broke the first CI run).
+  perl -0777 -pi -e 's{^(mod update;\r?)$}{$1\n// JARVIS overlay: DMG hop (macOS eject fix) — see src/jarvis_dmg.rs.\nmod jarvis_dmg;}m' "$LR"
   grep -q 'mod jarvis_dmg;' "$LR" || { echo "ERROR: jarvis_dmg mod not declared — anchor changed upstream?" >&2; exit 1; }
   echo "  lib.rs: mod jarvis_dmg declared"
 fi

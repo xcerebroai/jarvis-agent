@@ -51,7 +51,7 @@ The skin needs none of this — it's outside the repo.
 | Command invocations: `hermes update` → `jarvis update` (a real `jarvis` shim backs them) | Internal identifiers: `X-Hermes-Session-Token`, `updateHermes`, `HERMES_HOME`, `hermes_cli` |
 | Theme labels (client **and** server copies) | The `website/` docs site (ignored entirely) |
 | Brand glyph `⚕` → `◆` | Upstream `LICENSE` / `NOTICE` / attribution |
-| Desktop wordmark, i18n, macOS `CFBundleDisplayName`/`CFBundleName`, dmg title, permission text, `app.setName` default | Desktop `productName`/`executableName`/`CFBundleExecutable`/`appId`/`hermes://` (the `.app`/`.exe` filename stays "Hermes" so the self-updater, which hardcodes `Hermes.app`/`Hermes.exe`, keeps working) |
+| Desktop wordmark, i18n, macOS `CFBundleDisplayName`, dmg title, permission text, `app.setName` default | Desktop `productName`/`executableName`/`CFBundleExecutable`/`CFBundleName`/`appId`/`hermes://` (the `.app`/`.exe` filename stays "Hermes" so the self-updater, which hardcodes `Hermes.app`/`Hermes.exe`, keeps working; `CFBundleName` stays "Hermes" because Electron derives the macOS helper-app names from it — rebranding it crashes the app at launch with "Unable to find helper app") |
 
 A repo-wide audit confirmed no capitalized `"Hermes"` is ever used as a
 functional value and no `subprocess("hermes …")` exec strings exist, so the
@@ -123,9 +123,15 @@ That's it — no accounts, no billing. Your keys and config live locally in
 > right-click → Open (or `xattr -dr com.apple.quarantine` on the app). If the
 > bundle's signature is ever broken, recover with
 > `jarvis desktop --build-only` (electron-builder re-signs correctly), then
-> `./update-jarvis.sh` or re-run the installer to refresh the copy. Known
-> residual: macOS **crash dialogs** show "Hermes" — the executable name is
-> intentionally left upstream so the self-updater keeps working.
+> `./update-jarvis.sh` or re-run the installer to refresh the copy. If the app
+> crashes at launch with **"Unable to find helper app"**, the bundle was built
+> from a source tree whose `CFBundleName` was rebranded (overlay versions
+> before 2026-07-16 did this) — Electron derives the helper-app names from
+> `CFBundleName`, so it must stay "Hermes". Recover with
+> `git -C <jarvis-agent> pull && HERMES_SRC=<hermes-agent> ./update-jarvis.sh`,
+> which reverts the field, rebuilds, and refreshes `/Applications/JARVIS.app`.
+> Known residual: macOS **crash dialogs** show "Hermes" — the executable name
+> is intentionally left upstream so the self-updater keeps working.
 
 Then run `jarvis` to start. Update later with `./update-jarvis.sh`.
 

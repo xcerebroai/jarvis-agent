@@ -142,13 +142,15 @@ D="$SRC/apps/desktop"
 chk "wordmark rebranded to JARVIS"        "grep -q \"WORDMARK = 'JARVIS'\" '$D/src/components/chat/intro.tsx'"
 chk "main.ts APP_NAME default JARVIS"     "grep -q \"|| 'JARVIS'\" '$D/electron/main.ts'"
 chk "CFBundleDisplayName -> JARVIS"       "grep -q '\"CFBundleDisplayName\": \"JARVIS\"' '$D/package.json'"
-chk "CFBundleName -> JARVIS"              "grep -q '\"CFBundleName\": \"JARVIS\"' '$D/package.json'"
 chk "dmg title -> Install JARVIS"         "grep -q '\"title\": \"Install JARVIS\"' '$D/package.json'"
 chk "NS usage text -> JARVIS uses"        "grep -q 'JARVIS uses the microphone' '$D/package.json'"
-# Protected functional identifiers MUST remain Hermes (updater hardcodes them).
+# Protected functional identifiers MUST remain Hermes (updater hardcodes them;
+# CFBundleName drives Electron's macOS helper-app lookup — rebranding it makes
+# the app crash at launch with "Unable to find helper app").
 chk "productName still Hermes (protected)"    "grep -q '\"productName\": \"Hermes\"' '$D/package.json'"
 chk "executableName still Hermes (protected)" "grep -q '\"executableName\": \"Hermes\"' '$D/package.json'"
 chk "CFBundleExecutable still Hermes"         "grep -q '\"CFBundleExecutable\": \"Hermes\"' '$D/package.json'"
+chk "CFBundleName still Hermes (helper apps)" "grep -q '\"CFBundleName\": \"Hermes\"' '$D/package.json'"
 chk "appId still com.nousresearch.hermes"     "grep -q 'com.nousresearch.hermes' '$D/package.json'"
 chk "desktop package.json still valid JSON"   "'$PY' -c 'import json,sys;json.load(open(sys.argv[1],encoding=\"utf-8\"))' '$D/package.json'"
 chk "no 'Hermes Agent' in desktop i18n"       "! grep -rqE 'Hermes Agent|HERMES AGENT' '$D/src/i18n'"
@@ -160,6 +162,31 @@ if bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" >/dev/null 2>&1; then ok "
 printf 'const W=\"HERMES AGENT\";' > "$D/dist/assets/leak.js"
 if bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" >/dev/null 2>&1; then bad "leaked bundle is caught"; else ok "leaked bundle is caught"; fi
 rm -rf "$D/dist"
+
+echo
+echo "== 12. packaged-app helper integrity (macOS launch crash guard) =="
+# Electron derives helper names from Info.plist CFBundleName; electron-builder
+# names the Frameworks helpers from productName. verify-build must catch a
+# drift (the "Unable to find helper app" launch crash) and pass when aligned.
+FAKE="$WORK/fake-src"
+FAPP="$FAKE/apps/desktop/release/mac-arm64/Hermes.app/Contents"
+mkdir -p "$FAPP/Frameworks/Hermes Helper.app" "$FAPP/Frameworks/Hermes Helper (GPU).app"
+mk_plist() {  # <CFBundleName>
+  printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleName</key><string>%s</string></dict></plist>\n' "$1" > "$FAPP/Info.plist"
+}
+mk_plist "Hermes"
+if HERMES_SRC="$FAKE" bash "$OVERLAY_DIR/apply.sh" --verify-build "$FAKE" >/dev/null 2>&1; then
+  ok "matching CFBundleName/helpers pass"
+else
+  bad "matching CFBundleName/helpers pass"
+fi
+mk_plist "JARVIS"
+if HERMES_SRC="$FAKE" bash "$OVERLAY_DIR/apply.sh" --verify-build "$FAKE" >/dev/null 2>&1; then
+  bad "CFBundleName/helper drift is caught"
+else
+  ok "CFBundleName/helper drift is caught"
+fi
+rm -rf "$FAKE"
 
 echo
 echo "──────────────────────────────────────────────"

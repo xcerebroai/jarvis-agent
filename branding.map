@@ -98,20 +98,28 @@ Hermes	JARVIS
 # Desktop (Electron) build-config edits — applied by apply.sh ONLY to
 # apps/desktop/package.json and apps/desktop/electron/main.ts (Tier 1).
 # Each find includes its JSON key / code context so it is unambiguous: it
-# rebrands the VISIBLE app name (macOS dock/menu/About via CFBundle*Name,
-# the dmg install title, the macOS permission-prompt text, and the Electron
-# app.setName default) while never matching the protected functional
-# identifiers on adjacent lines — productName, executableName,
-# CFBundleExecutable, appId (com.nousresearch.hermes), or the hermes://
-# protocol. Those keep the .app/.exe filename as "Hermes" so Hermes's own
-# updater (which hardcodes Hermes.app / Hermes.exe) keeps working.
+# rebrands the VISIBLE app name (macOS dock/menu/About via
+# CFBundleDisplayName, the dmg install title, the macOS permission-prompt
+# text, and the Electron app.setName default) while never matching the
+# protected functional identifiers on adjacent lines — productName,
+# executableName, CFBundleExecutable, CFBundleName, appId
+# (com.nousresearch.hermes), or the hermes:// protocol. Those keep the
+# .app/.exe filename as "Hermes" so Hermes's own updater (which hardcodes
+# Hermes.app / Hermes.exe) keeps working.
+# CFBundleName is FUNCTIONAL on macOS, not just visible: Electron's main
+# delegate (electron_main_delegate_mac.mm) derives the helper-app names it
+# loads from the bundle name ("<CFBundleName> Helper*.app"), while
+# electron-builder names the helpers in Contents/Frameworks from
+# productName ("Hermes Helper*.app"). Rebranding CFBundleName to JARVIS
+# makes the app look for JARVIS-named helpers that don't exist and crash
+# at launch with "Unable to find helper app". Finder/dock still show
+# JARVIS via CFBundleDisplayName.
 # Applied to package.json AND every electron/*.ts file that mentions the brand.
 # Each pattern is context-anchored so it only ever hits VISIBLE strings, never
 # the functional filename/path refs (Hermes.app, Hermes.exe, MacOS/Hermes) or
 # TERM_PROGRAM='Hermes' that Hermes's own updater/uninstaller depend on.
 [desktop]
 "CFBundleDisplayName": "Hermes"	"CFBundleDisplayName": "JARVIS"
-"CFBundleName": "Hermes"	"CFBundleName": "JARVIS"
 "Hermes uses audio capture	"JARVIS uses audio capture
 "Hermes uses the microphone	"JARVIS uses the microphone
 "title": "Install Hermes"	"title": "Install JARVIS"

@@ -119,6 +119,57 @@ resolve_hermes_home() {
   esac
 }
 
+# macOS launch-integrity check: Electron's main delegate derives the helper
+# apps it loads from the bundle's Info.plist CFBundleName
+# ("<CFBundleName> Helper*.app", electron_main_delegate_mac.mm), while
+# electron-builder names the helpers in Contents/Frameworks from productName.
+# If they drift apart the app crashes at launch with "Unable to find helper
+# app". For every packaged .app: every helper name the Info.plist implies
+# must exist in Contents/Frameworks.
+read_bundle_name() {  # <Info.plist> — prints CFBundleName or nothing
+  local plist="$1" py
+  if [ -x /usr/libexec/PlistBuddy ]; then
+    /usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$plist" 2>/dev/null && return 0
+  fi
+  py="$(resolve_python || true)"
+  [ -n "$py" ] && "$py" -c 'import plistlib,sys;print(plistlib.load(open(sys.argv[1],"rb"))["CFBundleName"])' "$plist" 2>/dev/null
+}
+verify_macos_helpers() {
+  local src="$1" rc=0 checked=0 app plist fw bname h suffix want
+  for app in "$src/apps/desktop/release"/mac*/*.app; do
+    [ -d "$app" ] || continue
+    plist="$app/Contents/Info.plist"; fw="$app/Contents/Frameworks"
+    [ -f "$plist" ] && [ -d "$fw" ] || continue
+    bname="$(read_bundle_name "$plist")"
+    if [ -z "$bname" ]; then
+      echo "  ⚠ could not read CFBundleName from ${app##*/} — cannot verify helper apps"
+      rc=1; continue
+    fi
+    checked=$((checked + 1))
+    local helpers=0
+    for h in "$fw"/*\ Helper*.app; do
+      [ -d "$h" ] || continue
+      helpers=$((helpers + 1))
+      # "<anything> Helper<suffix>.app" must exist as "<bname> Helper<suffix>.app"
+      suffix="${h##*/}"; suffix="${suffix#* Helper}"; suffix="${suffix%.app}"
+      want="$fw/$bname Helper$suffix.app"
+      if [ ! -d "$want" ]; then
+        echo "  ⚠ ${app##*/}: Info.plist implies helper \"$bname Helper$suffix.app\" but Frameworks has \"${h##*/}\""
+        echo "    → the app will crash at launch (\"Unable to find helper app\")."
+        echo "    CFBundleName must stay \"Hermes\" — see branding.map [desktop] notes."
+        rc=1
+      fi
+    done
+    if [ "$helpers" -eq 0 ]; then
+      echo "  ⚠ ${app##*/}: no helper apps in Contents/Frameworks at all — broken Electron bundle"
+      rc=1
+    fi
+  done
+  [ "$checked" -gt 0 ] && [ "$rc" -eq 0 ] && \
+    echo "  ✓ helper apps match CFBundleName in $checked packaged macOS bundle(s) — launch-safe"
+  return "$rc"
+}
+
 # Verify the BUILT desktop renderer bundle (apps/desktop/dist) — visible brand
 # leaks and JARVIS wordmark presence. Called after an Electron rebuild.
 verify_desktop_build() {
@@ -127,6 +178,7 @@ verify_desktop_build() {
   echo "◆ JARVIS desktop — verify built renderer bundle"
   if [ ! -d "$dist" ]; then
     echo "  · no built bundle at apps/desktop/dist — desktop not built here (skipping)"
+    verify_macos_helpers "$src" || return 1
     return 0
   fi
   local phrase_hits wordmark rc=0
@@ -144,6 +196,8 @@ verify_desktop_build() {
     echo "  ⚠ JARVIS wordmark NOT found in built bundle — rebrand did not reach the build"
     rc=1
   fi
+  # Packaged-app launch integrity (macOS helper-name derivation).
+  verify_macos_helpers "$src" || rc=1
   if [ "$rc" -eq 0 ]; then
     echo "  ✓ no visible Hermes brand phrases survived in the built desktop bundle"
   else
@@ -411,10 +465,14 @@ done
 
 # --- 3b. Desktop build-config — surgical, key-anchored [desktop] literals ---
 # Applied ONLY to package.json + electron/main.ts. Each pattern includes its
-# JSON key / code context so it rebrands the visible app name (CFBundle*Name,
-# dmg title, permission text, app.setName default) without ever matching the
-# protected productName/executableName/CFBundleExecutable/appId on adjacent
-# lines. Independent JSON validity is asserted after the edit.
+# JSON key / code context so it rebrands the visible app name
+# (CFBundleDisplayName, dmg title, permission text, app.setName default)
+# without ever matching the protected productName/executableName/
+# CFBundleExecutable/CFBundleName/appId on adjacent lines. CFBundleName is
+# protected because Electron derives macOS helper-app names from it
+# (electron_main_delegate_mac.mm) while electron-builder names the helpers
+# from productName — a mismatch crashes at launch ("Unable to find helper
+# app"). Independent JSON validity is asserted after the edit.
 rewrite_desktop_config() {
   perl -CSDA -Mstrict -Mwarnings - "$MAP" "$@" <<'PERL'
 use strict; use warnings;
@@ -530,12 +588,15 @@ scan "desktop-ui" \
 
 # Desktop build config — assert visible fields rebranded AND that the
 # protected functional identifiers are STILL "Hermes" (a change here would
-# break Hermes's own updater, which hardcodes Hermes.app/Hermes.exe).
+# break Hermes's own updater, which hardcodes Hermes.app/Hermes.exe, or —
+# for CFBundleName — Electron's helper-app lookup, which derives
+# "<CFBundleName> Helper*.app" names that must match the productName-named
+# helpers electron-builder puts in Contents/Frameworks).
 DESK_PKG="$SRC/apps/desktop/package.json"
 if [ -f "$DESK_PKG" ]; then
   cfg_bad() { echo "  ⚠ [desktop-config] $1"; LEAKS=$((LEAKS + 1)); }
   grep -q '"CFBundleDisplayName": "JARVIS"' "$DESK_PKG" || cfg_bad "CFBundleDisplayName not rebranded to JARVIS"
-  grep -q '"CFBundleName": "JARVIS"'        "$DESK_PKG" || cfg_bad "CFBundleName not rebranded to JARVIS"
+  grep -q '"CFBundleName": "Hermes"'        "$DESK_PKG" || cfg_bad "CFBundleName changed from Hermes — Electron helper-app lookup will break at launch!"
   grep -q '"productName": "Hermes"'         "$DESK_PKG" || cfg_bad "productName changed from Hermes — bundle/updater name drift!"
   grep -q '"executableName": "Hermes"'      "$DESK_PKG" || cfg_bad "executableName changed from Hermes — updater relaunch will break!"
   grep -q "|| 'JARVIS'" "$SRC/apps/desktop/electron/main.ts" 2>/dev/null || cfg_bad "main.ts APP_NAME default not rebranded to JARVIS"

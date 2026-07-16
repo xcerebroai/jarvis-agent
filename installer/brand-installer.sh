@@ -17,6 +17,12 @@
 #     and the pinned raw.githubusercontent NousResearch install-script source
 #     (we WANT upstream's install.ps1 as the base install; JARVIS is layered on
 #     top by the injected overlay stage — see installer/overlay-stage/).
+#   • the desktop app's CFBundleName (branded later by the overlay stage via
+#     apply.sh/branding.map): it stays "Hermes" because Electron derives the
+#     macOS helper-app names from it (electron_main_delegate_mac.mm) and the
+#     helpers in Contents/Frameworks are named from productName — a mismatch
+#     crashes at launch ("Unable to find helper app"). Only
+#     CFBundleDisplayName (Finder/dock) is rebranded to JARVIS.
 #
 # What it DOES rewrite:
 #   • productName / window title / descriptions / publisher / copyright

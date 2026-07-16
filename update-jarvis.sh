@@ -74,7 +74,25 @@ echo "  source : $SRC"
 # are left completely untouched (hermes update stashes/restores them as usual).
 # Any dirty branded file is backed up first, so nothing is ever lost silently.
 HERMES_HOME="$(resolve_hermes_home "$SRC")"
-MANIFEST="$HERMES_HOME/.jarvis/branded-files.txt"
+
+# The desktop app's ACTIVE source tree ($HERMES_HOME/hermes-agent): the
+# Electron in-app updater rebuilds from it and dittos the result over the
+# installed .app. apply.sh cascades branding onto it; here it also gets its
+# own rebuild + is the preferred source for the launch-point refresh.
+ACTIVE_ROOT=""
+[ -d "$HERMES_HOME/hermes-agent/.git" ] && ACTIVE_ROOT="$(cd "$HERMES_HOME/hermes-agent" && pwd)"
+
+# Per-tree manifest (must match apply.sh's manifest_name): the ACTIVE root
+# keeps legacy "branded-files.txt" (the installer's injected pre-update
+# revert hardcodes it); other trees are path-keyed. Fall back to the legacy
+# name for pre-existing installs that haven't re-applied yet.
+if [ -n "$ACTIVE_ROOT" ] && [ "$SRC" != "$ACTIVE_ROOT" ]; then
+  MANIFEST="$HERMES_HOME/.jarvis/branded-files@$(printf '%s' "$SRC" | cksum | awk '{print $1}').txt"
+  [ ! -f "$MANIFEST" ] && [ -f "$HERMES_HOME/.jarvis/branded-files.txt" ] && \
+    MANIFEST="$HERMES_HOME/.jarvis/branded-files.txt"
+else
+  MANIFEST="$HERMES_HOME/.jarvis/branded-files.txt"
+fi
 if git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if [ ! -f "$MANIFEST" ]; then
     echo "  ! no branded-files manifest at $MANIFEST — running apply.sh once to build it."
@@ -154,45 +172,80 @@ HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh"
 # (#8) macOS output is release/mac*/ (no "-unpacked" suffix) — the old
 # *-unpacked-only glob skipped the rebuild on every Mac, leaving the desktop
 # stale/unbranded after updates.
+# The desktop may ship from TWO trees: $SRC (the CLI's own tree) and the
+# ACTIVE root — the in-app updater rebuilds from the ACTIVE root and dittos
+# over the installed .app, so the launch points must be refreshed from the
+# ACTIVE root's output when it exists, or the next self-update replaces them
+# with whatever that tree builds (observed 2026-07-16: a pristine HERMES).
 DESK_RELEASE="$SRC/apps/desktop/release"
+ACTIVE_RELEASE=""
+[ -n "$ACTIVE_ROOT" ] && [ "$ACTIVE_ROOT" != "$SRC" ] && ACTIVE_RELEASE="$ACTIVE_ROOT/apps/desktop/release"
+built_src=0
 if [ -d "$DESK_RELEASE" ] && { ls -d "$DESK_RELEASE"/*-unpacked >/dev/null 2>&1 || ls -d "$DESK_RELEASE"/mac* >/dev/null 2>&1; }; then
   echo
   echo "◆ Rebuilding JARVIS desktop — this takes a few minutes, don't close."
   if "$UPDATER" desktop --build-only "${@:2}"; then
     echo "  ✓ desktop rebuilt from JARVIS-branded source"
-    HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" || \
-      echo "  ⚠ built desktop bundle still carries brand strings — see warning above"
-    # (#24c) macOS: the /Applications launch point is a real COPY of the
-    # bundle (never a symlink — Launchpad/helper-app resolution both break),
-    # so a rebuild must refresh it or users keep launching the stale app.
-    case "$(uname -s)" in
-      Darwin*)
-        app="$(ls -d "$DESK_RELEASE"/mac*/Hermes.app 2>/dev/null | head -1)"
-        if [ -n "$app" ]; then
-          refreshed=0
-          for tgt in "/Applications/JARVIS.app" "$HOME/Applications/JARVIS.app"; do
-            { [ -e "$tgt" ] || [ -L "$tgt" ]; } || continue
-            rm -rf "$tgt"
-            ditto "$app" "$tgt" 2>/dev/null \
-              && { echo "  ✓ refreshed $tgt (ditto copy)"; refreshed=1; } \
-              || echo "  ⚠ could not refresh $tgt"
-          done
-          if [ "$refreshed" -eq 0 ]; then
-            appdir="/Applications"; [ -w "$appdir" ] || appdir="$HOME/Applications"
-            mkdir -p "$appdir" 2>/dev/null || true
-            ditto "$app" "$appdir/JARVIS.app" 2>/dev/null \
-              && echo "  ✓ JARVIS.app -> $appdir/JARVIS.app (real copy)" \
-              || echo "  ⚠ could not install JARVIS.app into $appdir"
-          fi
-        fi ;;
-    esac
+    built_src=1
   else
     echo "  ⚠ desktop rebuild failed — the app may show HERMES until you run:"
     echo "      $UPDATER desktop --build-only"
   fi
 else
-  echo "  · desktop app was never built on this machine — skipping rebuild."
+  echo "  · desktop app was never built from $SRC — skipping that rebuild."
   echo "    (Build it any time with:  $UPDATER desktop --build-only)"
+fi
+built_active=0
+if [ -n "$ACTIVE_RELEASE" ] && [ -d "$ACTIVE_RELEASE" ]; then
+  ACTIVE_PY="$ACTIVE_ROOT/venv/bin/python"
+  [ -x "$ACTIVE_PY" ] || ACTIVE_PY="$ACTIVE_ROOT/venv/Scripts/python.exe"
+  echo
+  echo "◆ Rebuilding the desktop from the app's ACTIVE tree ($ACTIVE_ROOT)…"
+  if [ -x "$ACTIVE_PY" ] && (cd "$ACTIVE_ROOT" && "$ACTIVE_PY" -m hermes_cli.main desktop --build-only); then
+    echo "  ✓ active-tree desktop rebuilt from JARVIS-branded source"
+    built_active=1
+  else
+    echo "  ⚠ could not rebuild the ACTIVE tree's desktop — the app's next"
+    echo "    self-update may ship it. Rebuild manually:"
+    echo "      cd $ACTIVE_ROOT && venv/bin/python -m hermes_cli.main desktop --build-only"
+  fi
+fi
+if [ "$built_src" -eq 1 ] || [ "$built_active" -eq 1 ]; then
+  # (#24c) macOS: the /Applications launch point is a real COPY of the
+  # bundle (never a symlink — Launchpad/helper-app resolution both break),
+  # so a rebuild must refresh it or users keep launching the stale app.
+  # Prefer the ACTIVE tree's bundle — that is what the app itself ships.
+  case "$(uname -s)" in
+    Darwin*)
+      app=""
+      [ "$built_active" -eq 1 ] && app="$(ls -d "$ACTIVE_RELEASE"/mac*/Hermes.app 2>/dev/null | head -1)"
+      [ -z "$app" ] && app="$(ls -d "$DESK_RELEASE"/mac*/Hermes.app 2>/dev/null | head -1)"
+      if [ -n "$app" ]; then
+        refreshed=0
+        for tgt in "/Applications/JARVIS.app" "$HOME/Applications/JARVIS.app"; do
+          { [ -e "$tgt" ] || [ -L "$tgt" ]; } || continue
+          rm -rf "$tgt"
+          ditto "$app" "$tgt" 2>/dev/null \
+            && { echo "  ✓ refreshed $tgt (ditto copy from ${app%/apps/desktop/release*})"; refreshed=1; } \
+            || echo "  ⚠ could not refresh $tgt"
+        done
+        if [ "$refreshed" -eq 0 ]; then
+          appdir="/Applications"; [ -w "$appdir" ] || appdir="$HOME/Applications"
+          mkdir -p "$appdir" 2>/dev/null || true
+          ditto "$app" "$appdir/JARVIS.app" 2>/dev/null \
+            && echo "  ✓ JARVIS.app -> $appdir/JARVIS.app (real copy)" \
+            || echo "  ⚠ could not install JARVIS.app into $appdir"
+        fi
+      fi ;;
+  esac
+  # Verify the artifacts that SHIP — packaged bundles and the launch points
+  # just refreshed — not only the source tree's dist.
+  [ "$built_src" -eq 1 ] && { JARVIS_CHECK_LAUNCH_POINTS=1 HERMES_SRC="$SRC" \
+    bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" || \
+    echo "  ⚠ a shipped desktop bundle still carries brand strings — see warning above"; }
+  [ "$built_active" -eq 1 ] && { JARVIS_CHECK_LAUNCH_POINTS=1 HERMES_SRC="$ACTIVE_ROOT" \
+    bash "$OVERLAY_DIR/apply.sh" --verify-build "$ACTIVE_ROOT" || \
+    echo "  ⚠ a shipped desktop bundle (active tree) still carries brand strings — see warning above"; }
 fi
 
 echo "◆ JARVIS — update complete"

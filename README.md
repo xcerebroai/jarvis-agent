@@ -62,7 +62,9 @@ behavior. Protected identifiers are masked regardless.
 
 ```
 jarvis-agent/
-  apply.sh            # idempotent; installs skin + rewrites visible strings + verify pass
+  apply.sh            # idempotent; installs skin + rewrites visible strings + verify pass;
+                      # cascades onto $HERMES_HOME/hermes-agent (the desktop app's
+                      # self-rebuild tree) when it differs from the target tree
   branding.map        # find→replace rules (protect / literal / regex / command / word / glyph)
   skins/jarvis.yaml   # CLI skin (deep black + electric blue, gradient JARVIS logo)
   persona/JARVIS.md   # agent identity → seeded once as ~/.hermes/SOUL.md
@@ -130,6 +132,14 @@ That's it — no accounts, no billing. Your keys and config live locally in
 > `CFBundleName`, so it must stay "Hermes". Recover with
 > `git -C <jarvis-agent> pull && HERMES_SRC=<hermes-agent> ./update-jarvis.sh`,
 > which reverts the field, rebuilds, and refreshes `/Applications/JARVIS.app`.
+> If the app suddenly shows a **HERMES AGENT splash / upstream icon** after an
+> in-app update: the app self-rebuilds from `$HERMES_HOME/hermes-agent` (its
+> "active" tree) and dittos the result over the installed .app — if that tree
+> was never branded (e.g. you cloned hermes-agent elsewhere and branded only
+> the clone), the self-update ships pristine HERMES. `apply.sh` now cascades
+> branding onto the active tree automatically, and `./update-jarvis.sh`
+> rebuilds it and refreshes the launch points from it — the same recovery
+> one-liner above fixes this too.
 > Known residual: macOS **crash dialogs** show "Hermes" — the executable name
 > is intentionally left upstream so the self-updater keeps working.
 

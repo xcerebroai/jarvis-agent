@@ -170,40 +170,97 @@ verify_macos_helpers() {
   return "$rc"
 }
 
-# Verify the BUILT desktop renderer bundle (apps/desktop/dist) — visible brand
-# leaks and JARVIS wordmark presence. Called after an Electron rebuild.
+# Verify ONE packaged/installed bundle — the artifact that actually ships.
+# 2026-07-16 lesson: the tree's apps/desktop/dist can be branded while the
+# packaged app carries a pristine renderer built from another tree, so
+# checking the tree alone "passes" against the wrong artifact. Check the
+# bundle's own renderer payload (app.asar.unpacked/dist, falling back to a
+# raw scan of app.asar) and its packed icon.
+verify_shipped_bundle() {  # <.app bundle or *-unpacked dir>
+  local app="$1" rc=0 res="" cand unpacked name
+  name="${app##*/}"
+  for cand in "$app/Contents/Resources" "$app/resources"; do
+    [ -d "$cand" ] && { res="$cand"; break; }
+  done
+  [ -n "$res" ] || return 0   # not a packaged bundle layout we know — skip
+  unpacked="$res/app.asar.unpacked/dist"
+  if [ -d "$unpacked" ]; then
+    if grep -rqE 'Hermes Agent|HERMES AGENT' "$unpacked" 2>/dev/null; then
+      echo "  ⚠ $name ships a PRISTINE renderer (found 'HERMES AGENT' in app.asar.unpacked/dist)"
+      rc=1
+    elif ! grep -rq 'JARVIS' "$unpacked" 2>/dev/null; then
+      echo "  ⚠ $name renderer has no JARVIS wordmark — rebrand did not reach the shipped bundle"
+      rc=1
+    fi
+  elif [ -f "$res/app.asar" ]; then
+    if grep -aqE 'Hermes Agent|HERMES AGENT' "$res/app.asar" 2>/dev/null; then
+      echo "  ⚠ $name ships a PRISTINE renderer (found 'HERMES AGENT' in app.asar)"
+      rc=1
+    elif ! grep -aq 'JARVIS' "$res/app.asar" 2>/dev/null; then
+      echo "  ⚠ $name app.asar has no JARVIS wordmark — rebrand did not reach the shipped bundle"
+      rc=1
+    fi
+  fi
+  # Packed icon must be the JARVIS art (byte-identical to the overlay's copy —
+  # electron-builder copies the .icns verbatim from build.icon).
+  if [ -f "$res/icon.icns" ] && [ -f "$OVERLAY_DIR/installer/assets/icons/icon.icns" ]; then
+    if ! cmp -s "$res/icon.icns" "$OVERLAY_DIR/installer/assets/icons/icon.icns"; then
+      echo "  ⚠ $name packs upstream icon art (Resources/icon.icns ≠ JARVIS icon.icns)"
+      rc=1
+    fi
+  fi
+  [ "$rc" -eq 0 ] && echo "  ✓ shipped bundle OK: $app"
+  return "$rc"
+}
+
+# Verify the BUILT desktop output. Covers the renderer bundle
+# (apps/desktop/dist), macOS helper-app launch integrity, and — crucially —
+# the packaged bundles that ship (release/) plus, when
+# JARVIS_CHECK_LAUNCH_POINTS=1 (set by update-jarvis.sh), the installed
+# launch-point copies in /Applications. Called after an Electron rebuild.
 verify_desktop_build() {
   local src="$1"
   local dist="$src/apps/desktop/dist"
+  local phrase_hits rc=0 b
   echo "◆ JARVIS desktop — verify built renderer bundle"
   if [ ! -d "$dist" ]; then
-    echo "  · no built bundle at apps/desktop/dist — desktop not built here (skipping)"
-    verify_macos_helpers "$src" || return 1
-    return 0
-  fi
-  local phrase_hits wordmark rc=0
-  # Distinctive visible brand phrases must NOT survive in the bundled output.
-  phrase_hits="$(grep -rloE 'Hermes Agent|HERMES AGENT' "$dist" 2>/dev/null | head -5 || true)"
-  if [ -n "$phrase_hits" ]; then
-    echo "  ⚠ visible brand phrase(s) found in built bundle:"
-    printf '%s\n' "$phrase_hits" | sed "s|^|      |; s|$dist|apps/desktop/dist|"
-    rc=1
-  fi
-  # The JARVIS wordmark must be present — proof the rebrand reached the build.
-  if grep -rqE 'JARVIS' "$dist" 2>/dev/null; then
-    echo "  ✓ JARVIS wordmark present in built bundle"
+    echo "  · no built bundle at apps/desktop/dist — desktop not built here"
   else
-    echo "  ⚠ JARVIS wordmark NOT found in built bundle — rebrand did not reach the build"
-    rc=1
+    # Distinctive visible brand phrases must NOT survive in the bundled output.
+    phrase_hits="$(grep -rloE 'Hermes Agent|HERMES AGENT' "$dist" 2>/dev/null | head -5 || true)"
+    if [ -n "$phrase_hits" ]; then
+      echo "  ⚠ visible brand phrase(s) found in built bundle:"
+      printf '%s\n' "$phrase_hits" | sed "s|^|      |; s|$dist|apps/desktop/dist|"
+      rc=1
+    fi
+    # The JARVIS wordmark must be present — proof the rebrand reached the build.
+    if grep -rqE 'JARVIS' "$dist" 2>/dev/null; then
+      echo "  ✓ JARVIS wordmark present in built bundle"
+    else
+      echo "  ⚠ JARVIS wordmark NOT found in built bundle — rebrand did not reach the build"
+      rc=1
+    fi
   fi
   # Packaged-app launch integrity (macOS helper-name derivation).
   verify_macos_helpers "$src" || rc=1
+  # The bundles that actually ship: packaged release output + launch points.
+  for b in "$src/apps/desktop/release"/mac*/*.app \
+           "$src/apps/desktop/release"/*-unpacked; do
+    [ -d "$b" ] || continue
+    verify_shipped_bundle "$b" || rc=1
+  done
+  if [ "${JARVIS_CHECK_LAUNCH_POINTS:-}" = "1" ]; then
+    for b in "/Applications/JARVIS.app" "$HOME/Applications/JARVIS.app"; do
+      [ -d "$b" ] || continue
+      verify_shipped_bundle "$b" || rc=1
+    done
+  fi
   if [ "$rc" -eq 0 ]; then
-    echo "  ✓ no visible Hermes brand phrases survived in the built desktop bundle"
+    echo "  ✓ desktop build + shipped bundles carry JARVIS branding (no brand leaks)"
   else
     echo
     echo "  ##################################################################"
-    echo "  # WARNING: desktop build carries un-rebranded brand strings!      #"
+    echo "  # WARNING: the desktop build or a shipped bundle is un-rebranded! #"
     echo "  # Re-run apply.sh then rebuild:  <jarvis|hermes> desktop --build-only #"
     echo "  ##################################################################"
   fi
@@ -226,9 +283,35 @@ fi
 
 HERMES_HOME="$(resolve_hermes_home "$SRC")"
 
+# The desktop app's ACTIVE source tree. Electron's main process pins
+# ACTIVE_HERMES_ROOT = $HERMES_HOME/hermes-agent and its in-app updater
+# rebuilds from THAT tree (`hermes desktop --build-only`), then dittos the
+# result over the installed .app and relaunches. If that tree isn't branded,
+# any self-update silently ships a pristine HERMES desktop over the branded
+# one — so when it differs from $SRC, apply.sh cascades onto it (section 5).
+ACTIVE_ROOT=""
+if [ -d "$HERMES_HOME/hermes-agent/.git" ]; then
+  ACTIVE_ROOT="$(cd "$HERMES_HOME/hermes-agent" && pwd)"
+fi
+
+# Per-tree manifest name. The ACTIVE root must keep the legacy
+# "branded-files.txt" — the installer's injected pre-update revert
+# (inject-overlay-stage.sh) hardcodes that name against the active root.
+# Any OTHER tree gets a path-keyed manifest so branding two trees never
+# clobbers each other's revert list.
+manifest_name() {  # <src-abs-path>
+  if [ -n "$ACTIVE_ROOT" ] && [ "$1" != "$ACTIVE_ROOT" ]; then
+    printf 'branded-files@%s.txt' "$(printf '%s' "$1" | cksum | awk '{print $1}')"
+  else
+    printf 'branded-files.txt'
+  fi
+}
+
 echo "◆ JARVIS overlay — applying"
 echo "  source : $SRC"
 echo "  data   : $HERMES_HOME"
+[ -n "$ACTIVE_ROOT" ] && [ "$ACTIVE_ROOT" != "$SRC" ] && \
+  echo "  active : $ACTIVE_ROOT (desktop app's self-rebuild tree — branded in section 5)"
 
 # (#13) The skin/config in $HERMES_HOME are PER-USER and shared by every
 # Hermes install on this machine — activating the JARVIS skin rebrands the
@@ -238,6 +321,8 @@ for _other in "${LOCALAPPDATA:-$HOME/AppData/Local}/hermes/hermes-agent" \
               "$HOME/.hermes/hermes-agent" "$HOME/jarvis/hermes-agent"; do
   [ -d "$_other/.git" ] || continue
   [ "$(cd "$_other" 2>/dev/null && pwd)" = "$SRC" ] && continue
+  # The active root is handled by the section-5 cascade, not a warning.
+  [ -n "$ACTIVE_ROOT" ] && [ "$(cd "$_other" 2>/dev/null && pwd)" = "$ACTIVE_ROOT" ] && continue
   echo "  ⚠ another Hermes install exists at: $_other"
   echo "    The CLI skin/config in $HERMES_HOME are shared per-user, so that"
   echo "    install's CLI will show JARVIS branding too. To undo later: remove"
@@ -436,7 +521,12 @@ fi
 # Drop any operator-excluded files, and record the branded set to a manifest
 # so update-jarvis.sh can revert ONLY these files (never unrelated local work).
 MANIFEST_DIR="$HERMES_HOME/.jarvis"; mkdir -p "$MANIFEST_DIR"
-MANIFEST="$MANIFEST_DIR/branded-files.txt"
+MANIFEST="$MANIFEST_DIR/$(manifest_name "$SRC")"
+# Keep the previous manifest for a union-merge below: on an ALREADY-branded
+# tree the grep-selection only finds files still carrying functional Hermes
+# tokens, so writing the manifest fresh would silently drop the visible-string
+# files from the revert list and the next pre-pull revert would miss them.
+OLD_MANIFEST="$(cat "$MANIFEST" 2>/dev/null || true)"
 : > "$MANIFEST"
 FILTERED=(); SKIPPED=0
 for f in "${FILES[@]:-}"; do
@@ -461,6 +551,16 @@ for _asset in assets/banner.png \
   git -C "$SRC" ls-files --error-unmatch "$_asset" >/dev/null 2>&1 || continue
   echo "$_asset" >> "$MANIFEST"
 done
+# Union-merge the previous manifest (see OLD_MANIFEST note above) so a
+# re-apply never shrinks the revert list while the branding is in place.
+if [ -n "$OLD_MANIFEST" ]; then
+  while IFS= read -r rel; do
+    [ -z "$rel" ] && continue
+    [ -f "$SRC/$rel" ] || continue
+    is_excluded "$rel" && continue
+    grep -qxF "$rel" "$MANIFEST" || echo "$rel" >> "$MANIFEST"
+  done <<< "$OLD_MANIFEST"
+fi
 [ ${#FILES[@]} -gt 0 ] && rewrite "${FILES[@]}"
 
 # --- 3b. Desktop build-config — surgical, key-anchored [desktop] literals ---
@@ -611,6 +711,19 @@ if [ "$LEAKS" -gt 0 ]; then
   echo
 else
   echo "  ✓ no visible brand strings survived across all locale + web + cli + desktop surfaces"
+fi
+
+# --- 5. Cascade onto the desktop app's ACTIVE source tree -------------------
+# See the ACTIVE_ROOT note near the top: the Electron app's in-app updater
+# rebuilds from $HERMES_HOME/hermes-agent and dittos the result over the
+# installed .app. An unbranded active tree means any self-update replaces the
+# branded desktop with pristine HERMES (splash, icon) — observed live 2026-07-16.
+if [ -z "${JARVIS_APPLY_NO_CASCADE:-}" ] && [ -n "$ACTIVE_ROOT" ] && [ "$ACTIVE_ROOT" != "$SRC" ]; then
+  echo
+  echo "◆ JARVIS overlay — cascading to the desktop app's active tree"
+  echo "  $ACTIVE_ROOT self-rebuilds the installed app; branding it too."
+  JARVIS_APPLY_NO_CASCADE=1 HERMES_SRC="$ACTIVE_ROOT" HERMES_HOME="$HERMES_HOME" \
+    bash "$OVERLAY_DIR/apply.sh"
 fi
 
 echo "◆ JARVIS overlay — done"

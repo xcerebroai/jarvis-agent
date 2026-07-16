@@ -170,21 +170,32 @@ echo "== 12. packaged-app helper integrity (macOS launch crash guard) =="
 # drift (the "Unable to find helper app" launch crash) and pass when aligned.
 FAKE="$WORK/fake-src"
 FAPP="$FAKE/apps/desktop/release/mac-arm64/Hermes.app/Contents"
-mkdir -p "$FAPP/Frameworks/Hermes Helper.app" "$FAPP/Frameworks/Hermes Helper (GPU).app"
+mkdir -p "$FAPP/Frameworks/Hermes Helper.app" "$FAPP/Frameworks/Hermes Helper (GPU).app" \
+         "$FAPP/Resources/app.asar.unpacked/dist"
+printf 'const W="JARVIS";' > "$FAPP/Resources/app.asar.unpacked/dist/app.js"
 mk_plist() {  # <CFBundleName>
   printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleName</key><string>%s</string></dict></plist>\n' "$1" > "$FAPP/Info.plist"
 }
 mk_plist "Hermes"
 if HERMES_SRC="$FAKE" bash "$OVERLAY_DIR/apply.sh" --verify-build "$FAKE" >/dev/null 2>&1; then
-  ok "matching CFBundleName/helpers pass"
+  ok "matching CFBundleName/helpers/renderer pass"
 else
-  bad "matching CFBundleName/helpers pass"
+  bad "matching CFBundleName/helpers/renderer pass"
 fi
 mk_plist "JARVIS"
 if HERMES_SRC="$FAKE" bash "$OVERLAY_DIR/apply.sh" --verify-build "$FAKE" >/dev/null 2>&1; then
   bad "CFBundleName/helper drift is caught"
 else
   ok "CFBundleName/helper drift is caught"
+fi
+# A shipped bundle whose packed renderer is pristine (built from an unbranded
+# tree — the 2026-07-16 regression) must be caught even when the tree is fine.
+mk_plist "Hermes"
+printf 'const W="HERMES AGENT";' > "$FAPP/Resources/app.asar.unpacked/dist/app.js"
+if HERMES_SRC="$FAKE" bash "$OVERLAY_DIR/apply.sh" --verify-build "$FAKE" >/dev/null 2>&1; then
+  bad "pristine shipped renderer is caught"
+else
+  ok "pristine shipped renderer is caught"
 fi
 rm -rf "$FAKE"
 

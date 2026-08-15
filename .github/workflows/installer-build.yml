@@ -396,3 +396,93 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: gh release upload "${{ github.event.release.tag_name }}" "out/${{ matrix.artifact }}" --clobber
+
+  # --- Attach the terminal-install scripts ----------------------------------
+  # The product page's "prefer the terminal?" panel links these by name at
+  # releases/latest/download/. Nothing used to upload them, so they were
+  # attached by hand and every release that forgot 404'd those links. One job,
+  # not the build matrix, so the two runners cannot race on the same upload.
+  scripts:
+    name: Attach install scripts to the release
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload dist/ install scripts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" dist/jarvis-windows.ps1 dist/jarvis-mac.sh --clobber
+          echo "attached jarvis-windows.ps1 + jarvis-mac.sh to $TAG"
+
+  # --- Verify, then promote -------------------------------------------------
+  # A release's assets are produced BY the release event, so a freshly cut
+  # release is empty for as long as the build takes. If it is already marked
+  # "latest", releases/latest/download/* 404s for that whole window and the
+  # website's download buttons are dead (observed on v1.1.2).
+  #
+  # So releases are cut as PRERELEASE — /latest keeps pointing at the previous
+  # good release — and only promoted here, once every asset is confirmed both
+  # listed AND downloadable. If anything is missing the release stays a
+  # prerelease and the site keeps serving the last good one. See docs/RELEASING.md.
+  finalize:
+    name: Verify assets and promote to latest
+    if: github.event_name == 'release'
+    needs: [build, scripts]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all four assets, then promote
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          REQUIRED="JARVIS-Setup.exe JARVIS-Setup.dmg jarvis-windows.ps1 jarvis-mac.sh"
+
+          have="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+          echo "attached to $TAG:"; printf '%s\n' "$have" | sed 's/^/  /'
+
+          missing=0
+          for a in $REQUIRED; do
+            printf '%s\n' "$have" | grep -qx -- "$a" || {
+              echo "::error::missing release asset: $a"; missing=1; }
+          done
+          [ "$missing" -eq 0 ] || {
+            echo "::error::$TAG stays a prerelease; /latest keeps serving the previous release"
+            exit 1; }
+
+          # Listed is not the same as downloadable.
+          for a in $REQUIRED; do
+            code="$(curl -sSL -o /dev/null -w '%{http_code}' \
+              "https://github.com/$GH_REPO/releases/download/$TAG/$a" || echo 000)"
+            echo "  $a -> HTTP $code"
+            [ "$code" = "200" ] || {
+              echo "::error::$a is listed but not downloadable (HTTP $code)"; exit 1; }
+          done
+
+          gh release edit "$TAG" --prerelease=false --latest
+          echo "promoted $TAG to latest"
+
+      - name: Verify /latest/download serves this release
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The latest pointer propagates through a CDN; retry rather than
+          # trusting a single fixed sleep.
+          for a in JARVIS-Setup.exe JARVIS-Setup.dmg jarvis-windows.ps1 jarvis-mac.sh; do
+            ok=""
+            for _ in 1 2 3 4 5 6; do
+              code="$(curl -sSL -o /dev/null -w '%{http_code}' \
+                "https://github.com/$GH_REPO/releases/latest/download/$a" || echo 000)"
+              [ "$code" = "200" ] && { ok=1; break; }
+              sleep 10
+            done
+            [ -n "$ok" ] || { echo "::error::/latest/download/$a never returned 200"; exit 1; }
+            echo "  /latest/download/$a -> HTTP 200"
+          done
+          echo "all four download links live"

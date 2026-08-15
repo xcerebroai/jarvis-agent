@@ -205,6 +205,67 @@ fi
 rm -rf "$FAKE"
 
 echo
+echo "== 13. update-jarvis.sh self-updates its own checkout =="
+# Overlay fixes are worthless if installed machines never pull them. Nothing
+# used to update the checkout, so a machine could run a week-old apply.sh while
+# the fix sat on main. update-jarvis.sh now pulls itself first — and must do so
+# without ever being able to block, loop, or run half-old/half-new logic.
+#
+# Driven with HERMES_SRC pointing at nothing: self-update runs, then the script
+# exits at "could not locate the Hermes source tree". That error is the marker
+# that it got PAST step 0 rather than blocking there.
+SU="$WORK/selfupdate"
+mkdir -p "$SU" && ( cd "$SU"
+  git init -q --bare origin.git
+  git clone -q origin.git seed 2>/dev/null
+  cp "$OVERLAY_DIR/update-jarvis.sh" seed/update-jarvis.sh
+  cd seed
+  git add -A
+  git -c user.email=t@t -c user.name=t commit -qm init
+  git push -q origin HEAD:main
+  cd ..
+  # The "installed" checkout, then origin moves ahead with a marked build.
+  git clone -q -b main origin.git checkout 2>/dev/null
+  cd seed
+  sed -i '2i echo "SELFUPDATE-NEW-VERSION-RAN"' update-jarvis.sh
+  git add -A
+  git -c user.email=t@t -c user.name=t commit -qm bump
+  git push -q origin HEAD:main
+) >/dev/null 2>&1
+
+SU_OUT="$(HERMES_SRC=/nonexistent-tree bash "$SU/checkout/update-jarvis.sh" 2>&1 || true)"
+chk "stale checkout is pulled"        "echo \"\$SU_OUT\" | grep -q 'overlay updated'"
+chk "re-execs into the new version"   "echo \"\$SU_OUT\" | grep -q 'SELFUPDATE-NEW-VERSION-RAN'"
+chk "re-execs exactly once (no loop)" "[ \"\$(echo \"\$SU_OUT\" | grep -c 'SELFUPDATE-NEW-VERSION-RAN')\" -eq 1 ]"
+chk "proceeds past self-update"       "echo \"\$SU_OUT\" | grep -q 'could not locate the Hermes source tree'"
+
+# Guard: with JARVIS_SELF_UPDATED set it must not fetch, pull or re-exec — this
+# is what stops a bad commit putting a machine in a fetch/exec loop.
+SU_GUARD="$(JARVIS_SELF_UPDATED=1 HERMES_SRC=/nonexistent-tree bash "$SU/checkout/update-jarvis.sh" 2>&1 || true)"
+chk "guard skips the self-update"     "! echo \"\$SU_GUARD\" | grep -q 'checking for overlay updates'"
+
+# Unreachable remote: warn loudly, name the checkout, and CONTINUE. A failed
+# self-update must never cost the user their Hermes update.
+git clone -q -b main "$SU/origin.git" "$SU/broken" >/dev/null 2>&1
+git -C "$SU/broken" remote set-url origin /nonexistent/repo.git
+SU_FAIL="$(HERMES_SRC=/nonexistent-tree bash "$SU/broken/update-jarvis.sh" 2>&1 || true)"
+chk "pull failure warns"              "echo \"\$SU_FAIL\" | grep -q 'could not update the JARVIS overlay checkout'"
+chk "pull failure names the checkout" "echo \"\$SU_FAIL\" | grep -q \"\$SU/broken\""
+chk "pull failure does NOT block"     "echo \"\$SU_FAIL\" | grep -q 'could not locate the Hermes source tree'"
+
+# A checkout that has diverged from main cannot fast-forward; same contract.
+git clone -q -b main "$SU/origin.git" "$SU/diverged" >/dev/null 2>&1
+echo '# local divergence' >> "$SU/diverged/update-jarvis.sh"
+git -C "$SU/diverged" -c user.email=t@t -c user.name=t commit -qam diverge >/dev/null 2>&1
+SU_DIV="$(HERMES_SRC=/nonexistent-tree bash "$SU/diverged/update-jarvis.sh" 2>&1 || true)"
+chk "diverged checkout does NOT block" "echo \"\$SU_DIV\" | grep -q 'could not locate the Hermes source tree'"
+
+# Not a git checkout at all (tarball install): say so, carry on.
+mkdir -p "$SU/plain" && cp "$OVERLAY_DIR/update-jarvis.sh" "$SU/plain/"
+SU_PLAIN="$(HERMES_SRC=/nonexistent-tree bash "$SU/plain/update-jarvis.sh" 2>&1 || true)"
+chk "non-git checkout does NOT block" "echo \"\$SU_PLAIN\" | grep -q 'could not locate the Hermes source tree'"
+
+echo
 echo "──────────────────────────────────────────────"
 echo "  RESULT: $PASS passed, $FAIL failed"
 echo "──────────────────────────────────────────────"

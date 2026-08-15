@@ -19,6 +19,72 @@ set -euo pipefail
 
 OVERLAY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# --- 0. Self-update this overlay checkout ----------------------------------
+# Overlay fixes are useless if installed machines never receive them. Nothing
+# pulled this checkout: `jarvis update` updated *Hermes* and then re-applied
+# whatever branding happened to be on disk, so a machine could sit on a
+# week-old overlay — including the apply.sh that died silently — while the fix
+# had been on main for days. Pull ourselves first, then do the real work.
+#
+# Rules:
+#   * NEVER block the update. Offline, diverged, dirty, no remote, not even a
+#     git checkout — all warn loudly and continue with the on-disk version.
+#     A failed self-update must not cost the user their Hermes update.
+#   * Only re-exec when THIS FILE actually changed. Pulling a new apply.sh does
+#     not need a re-exec (it is invoked fresh later); pulling a new
+#     update-jarvis.sh does, or the rest of this run is the old logic.
+#   * JARVIS_SELF_UPDATED guards it to exactly one re-exec, so a bad commit
+#     cannot put a machine in a fetch/exec loop.
+self_update_overlay() {
+  if [ -n "${JARVIS_SELF_UPDATED:-}" ]; then
+    return 0                      # already re-exec'd once this run
+  fi
+  if [ -n "${JARVIS_NO_SELF_UPDATE:-}" ]; then
+    echo "  · overlay self-update skipped (JARVIS_NO_SELF_UPDATE set)"
+    return 0
+  fi
+  if [ ! -d "$OVERLAY_DIR/.git" ]; then
+    echo "  · overlay at $OVERLAY_DIR is not a git checkout — using it as-is"
+    return 0
+  fi
+
+  local before after out rc=0
+  before="$(git -C "$OVERLAY_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+  local self_before self_after
+  self_before="$(git -C "$OVERLAY_DIR" hash-object update-jarvis.sh 2>/dev/null || echo none)"
+
+  echo "◆ JARVIS — checking for overlay updates"
+  out="$(git -C "$OVERLAY_DIR" fetch --quiet origin 2>&1)" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    out="$(git -C "$OVERLAY_DIR" pull --ff-only --quiet 2>&1)" || rc=$?
+  fi
+
+  if [ "$rc" -ne 0 ]; then
+    echo "  ⚠ could not update the JARVIS overlay checkout:" >&2
+    echo "      $OVERLAY_DIR" >&2
+    [ -n "$out" ] && printf '      %s\n' "$out" >&2
+    echo "    Continuing with the version already on disk. Common causes:" >&2
+    echo "    offline, local changes, or a branch that has diverged from main." >&2
+    echo "    Fix with:  git -C \"$OVERLAY_DIR\" status" >&2
+    return 0
+  fi
+
+  after="$(git -C "$OVERLAY_DIR" rev-parse HEAD 2>/dev/null || echo unknown)"
+  if [ "$before" = "$after" ]; then
+    echo "  ✓ overlay already current ($(printf '%.7s' "$after"))"
+    return 0
+  fi
+  echo "  ✓ overlay updated $(printf '%.7s' "$before") → $(printf '%.7s' "$after")"
+
+  self_after="$(git -C "$OVERLAY_DIR" hash-object update-jarvis.sh 2>/dev/null || echo none)"
+  if [ "$self_before" != "$self_after" ]; then
+    echo "  → update-jarvis.sh itself changed; restarting with the new version"
+    export JARVIS_SELF_UPDATED=1
+    exec bash "$OVERLAY_DIR/update-jarvis.sh" "$@"
+  fi
+}
+self_update_overlay "$@"
+
 resolve_python() {
   for c in "${HERMES_PYTHON:-}" python3 python py; do
     [ -z "$c" ] && continue

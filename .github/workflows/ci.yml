@@ -48,6 +48,24 @@ jobs:
           print("branding.map OK:", secs)
           PY
 
+      - name: "Windows shim intercepts `jarvis update` (finding #9 parity)"
+        run: |
+          # bin/jarvis.cmd MUST hand `jarvis update` to update-jarvis.sh rather
+          # than straight to hermes.exe. A pure passthrough (the shape this file
+          # shipped with) runs upstream's `hermes update` — a git pull over the
+          # branded tree — and de-brands the install for every PowerShell/cmd
+          # user, while Git Bash users stay protected by bin/jarvis. That
+          # asymmetry is invisible in review, so assert it here.
+          grep -q 'update-jarvis.sh' bin/jarvis.cmd || {
+            echo "::error file=bin/jarvis.cmd::jarvis.cmd no longer hands 'update' to update-jarvis.sh — the finding #9 passthrough regression is back"
+            exit 1
+          }
+          grep -q 'JARVIS_NO_UPDATE_WRAP' bin/jarvis.cmd || {
+            echo "::error file=bin/jarvis.cmd::jarvis.cmd update-intercept is missing the JARVIS_NO_UPDATE_WRAP recursion guard"
+            exit 1
+          }
+          echo "jarvis.cmd update-intercept OK"
+
       - name: Banner renders in every fallback mode
         run: |
           for mode in "" "--ascii" "--no-color" "--plain"; do

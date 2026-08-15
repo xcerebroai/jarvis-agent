@@ -267,12 +267,35 @@ if [ "$built_src" -eq 1 ] || [ "$built_active" -eq 1 ]; then
   esac
   # Verify the artifacts that SHIP — packaged bundles and the launch points
   # just refreshed — not only the source tree's dist.
-  [ "$built_src" -eq 1 ] && { JARVIS_CHECK_LAUNCH_POINTS=1 HERMES_SRC="$SRC" \
-    bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" || \
-    echo "  ⚠ a shipped desktop bundle still carries brand strings — see warning above"; }
-  [ "$built_active" -eq 1 ] && { JARVIS_CHECK_LAUNCH_POINTS=1 HERMES_SRC="$ACTIVE_ROOT" \
-    bash "$OVERLAY_DIR/apply.sh" --verify-build "$ACTIVE_ROOT" || \
-    echo "  ⚠ a shipped desktop bundle (active tree) still carries brand strings — see warning above"; }
+  # This check is FATAL, not advisory. It used to be `|| echo "⚠ …"`, so a
+  # bundle that packed upstream art printed a warning mid-run and the update
+  # then finished with a cheerful "complete" — which is exactly how a desktop
+  # app shipped showing the upstream icon at runtime. If the artifact a
+  # customer will actually launch is wrong, the update has not succeeded.
+  verify_rc=0
+  if [ "$built_src" -eq 1 ]; then
+    JARVIS_CHECK_LAUNCH_POINTS=1 HERMES_SRC="$SRC" \
+      bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" || verify_rc=1
+  fi
+  if [ "$built_active" -eq 1 ]; then
+    JARVIS_CHECK_LAUNCH_POINTS=1 HERMES_SRC="$ACTIVE_ROOT" \
+      bash "$OVERLAY_DIR/apply.sh" --verify-build "$ACTIVE_ROOT" || verify_rc=1
+  fi
+  if [ "$verify_rc" -ne 0 ]; then
+    echo "" >&2
+    echo "  ##################################################################" >&2
+    echo "  # SHIPPED DESKTOP BUNDLE FAILED VERIFICATION" >&2
+    echo "  #" >&2
+    echo "  # The packaged app a customer launches carries upstream branding" >&2
+    echo "  # (see the ✗ line above). The source tree is branded correctly, so" >&2
+    echo "  # this is a stale PACKAGED artifact, not a branding failure." >&2
+    echo "  #" >&2
+    echo "  # Force a real repack — apply.sh has already dropped the build" >&2
+    echo "  # stamp, so this will not be skipped as 'up to date':" >&2
+    echo "  #   \"\$UPDATER\" desktop --build-only --force-build" >&2
+    echo "  ##################################################################" >&2
+    exit 1
+  fi
 fi
 
 echo "◆ JARVIS — update complete"

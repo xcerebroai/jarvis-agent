@@ -246,8 +246,14 @@ build_desktop() {
   echo "  this takes a few minutes; don't close."
   if "$RUNTIME" desktop --build-only; then
     echo "  ✓ JARVIS desktop built"
-    HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" || \
-      echo "  ⚠ built bundle carries brand strings — see warning above"
+    # Fatal, not advisory: a bundle that packs upstream art is a broken
+    # install, and warning about it while reporting success is how it shipped.
+    if ! HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC"; then
+      echo "  ✗ the built desktop bundle carries upstream branding (see above)." >&2
+      echo "    apply.sh dropped the build stamp; force a real repack with:" >&2
+      echo "      $RUNTIME desktop --build-only --force-build" >&2
+      return 1
+    fi
     return 0
   fi
   echo "  ⚠ desktop build failed — retry later with:  $RUNTIME desktop --build-only"

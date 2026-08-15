@@ -243,7 +243,19 @@ verify_shipped_bundle() {  # <.app bundle or *-unpacked dir>
   done
   if [ -n "$touch_ref" ] && [ -f "$unpacked/apple-touch-icon.png" ]; then
     if ! cmp -s "$unpacked/apple-touch-icon.png" "$touch_ref"; then
-      echo "  ⚠ $name packs upstream RUNTIME icon (unpacked dist/apple-touch-icon.png ≠ JARVIS art) — dock shows upstream while running"
+      echo "  ✗ $name packs upstream RUNTIME icon (unpacked dist/apple-touch-icon.png ≠ JARVIS art) — dock shows upstream while running"
+      rc=1
+    fi
+  fi
+  # Windows taskbar icon. electron/main.ts builds APP_ICON_PATHS with
+  # `process.resourcesPath/icon.ico` FIRST on Windows (shipped via
+  # extraResources) and only falls back to the padded PNG when it is absent —
+  # so on Windows this file, not apple-touch-icon.png, is what the running app
+  # shows in the taskbar and alt-tab. It was never checked here, which is how a
+  # bundle shipped upstream art at runtime while the PNG check passed.
+  if [ -f "$res/icon.ico" ] && [ -f "$OVERLAY_DIR/installer/assets/icons/icon.ico" ]; then
+    if ! cmp -s "$res/icon.ico" "$OVERLAY_DIR/installer/assets/icons/icon.ico"; then
+      echo "  ✗ $name packs upstream TASKBAR icon (resources/icon.ico ≠ JARVIS art) — taskbar shows upstream while running"
       rc=1
     fi
   fi
@@ -315,8 +327,18 @@ SRC="$(cd "$SRC" && pwd)"
 
 # --verify-build: check the built bundle and exit (no skin/source changes).
 if [ "$MODE" = "verify-build" ]; then
+  # A failed verification is a RESULT, not a crash. Disarm the ERR trap first:
+  # otherwise the non-zero return trips it and prints "apply.sh FAILED … the
+  # tree is PARTIALLY BRANDED", which is both untrue here (verify changes
+  # nothing) and drowns out the ✗ lines that say what is actually wrong.
+  trap - ERR
+  set +e
   verify_desktop_build "$SRC"
-  exit $?
+  vb_rc=$?
+  if [ "$vb_rc" -ne 0 ]; then
+    echo "  ✗ bundle verification FAILED (exit $vb_rc) — see the ✗ line(s) above" >&2
+  fi
+  exit "$vb_rc"
 fi
 
 HERMES_HOME="$(resolve_hermes_home "$SRC")"
@@ -475,6 +497,44 @@ if [ -d "$ICON_DIR" ] && [ -f "$ICON_DIR/icon.ico" ]; then
   [ -f "$ICON_DIR/icon.icns" ] && cp -f "$ICON_DIR/icon.icns" "$HERMES_HOME/.jarvis/jarvis.icns"
   [ -n "$ICON_PNG" ] && cp -f "$ICON_PNG" "$HERMES_HOME/.jarvis/jarvis-icon.png"
   echo "  ✓ icons   -> $HERMES_HOME/.jarvis/ (stable path for shortcuts)"
+
+  # (d) Force a repack when the SHIPPED bundle's runtime icons are stale.
+  #
+  # `jarvis desktop` skips the build when its content stamp matches, and that
+  # stamp is a hash of apps/desktop/ MINUS everything .gitignore excludes —
+  # which excludes apps/desktop/dist/. dist/apple-touch-icon.png is precisely
+  # the file electron-builder packs into app.asar.unpacked and that
+  # electron/main.ts feeds to the window/dock icon, so refreshing it here is
+  # invisible to the stamp: the rebuild reports "up to date (content stamp
+  # matches)" and the bundle keeps whatever icon it was packed with. That is
+  # how a build shipped upstream art at runtime while every static surface
+  # (exe resource, .lnk, Explorer) showed JARVIS.
+  #
+  # Rather than reach into upstream's hash, compare the PACKED artifacts to the
+  # JARVIS art and drop the stamp when they disagree. Precise by construction:
+  # a bundle that is already correct is left alone, so this never forces a
+  # pointless multi-minute Electron rebuild.
+  _stamp="$HERMES_HOME/desktop-build-stamp.json"
+  _stale_icon=""
+  for _rel in \
+    "apps/desktop/release/win-unpacked/resources/app.asar.unpacked/dist/apple-touch-icon.png" \
+    "apps/desktop/release/linux-unpacked/resources/app.asar.unpacked/dist/apple-touch-icon.png"; do
+    _f="$SRC/$_rel"
+    if [ -n "$ICON_PNG" ] && [ -f "$_f" ] && ! cmp -s "$_f" "$ICON_PNG"; then
+      _stale_icon="$_rel"; break
+    fi
+  done
+  # Windows taskbar icon: main.ts APP_ICON_PATHS puts resourcesPath/icon.ico
+  # FIRST on Windows, so this — not the PNG — is what the taskbar shows.
+  if [ -z "$_stale_icon" ] && [ -f "$SRC/apps/desktop/release/win-unpacked/resources/icon.ico" ]; then
+    cmp -s "$SRC/apps/desktop/release/win-unpacked/resources/icon.ico" "$ICON_DIR/icon.ico" \
+      || _stale_icon="apps/desktop/release/win-unpacked/resources/icon.ico"
+  fi
+  if [ -n "$_stale_icon" ] && [ -f "$_stamp" ]; then
+    rm -f "$_stamp"
+    echo "  ! packed bundle carries a stale runtime icon ($_stale_icon)"
+    echo "    → dropped the desktop build stamp so the next build cannot skip"
+  fi
 else
   echo "  · no JARVIS icon set at installer/assets/icons — shortcuts fall back to the exe icon"
 fi

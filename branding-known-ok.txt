@@ -1,0 +1,112 @@
+# branding-known-ok.txt — brand strings that are SUPPOSED to survive apply.sh.
+#
+# tests/brand_scan.py walks the whole post-apply tree and fails on any brand
+# string it finds. Every exception lives here, with a reason. If you cannot
+# write a convincing reason, the string probably needs branding instead —
+# add its file to the curated list in apply.sh.
+#
+# Format:  <path-suffix><TAB><needle>
+#   path-suffix  matched against the end of the repo-relative path
+#   needle       substring of the offending string literal
+# Lines starting with # are comments. Keep the reason directly above its entry.
+
+# --- Branded elsewhere, not by apply.sh ------------------------------------
+# The bootstrap installer (JARVIS-Setup.exe/.dmg) is a separate Tauri app with
+# its own rebrand pass in installer/brand-installer.sh, which runs during
+# installer-build.yml. apply.sh never touches it, so these are expected here
+# and are verified in the installer build instead.
+apps/bootstrap-installer/src-tauri/tauri.conf.json	Installs Hermes Agent on your machine
+apps/bootstrap-installer/src/routes/progress.tsx	Setting up Hermes Agent
+apps/bootstrap-installer/src/routes/welcome.tsx	HERMES AGENT
+
+# --- Functional: rebranding would change behaviour -------------------------
+# A guard, not a label. It compares the ACTIVE skin's agent_name against the
+# stock one to decide whether to forward it as a reply prefix: a default
+# install would otherwise prefix every message identically and shadow the
+# connector's linked-owner fallback. With the JARVIS skin the name is not
+# "Hermes Agent", so it IS forwarded — which is what we want. Rewriting this
+# literal to "JARVIS" would suppress the JARVIS name instead.
+gateway/relay/__init__.py	Hermes Agent
+
+# Per-skin fallback defaults for the BUILT-IN skins (default/dark/light/...).
+# JARVIS ships skins/jarvis.yaml and apply.sh sets display.skin=jarvis, so
+# these values are never read on a branded install. They are upstream's
+# defaults for upstream's skins; rewriting them would misrepresent what those
+# skins are, and would be pure merge friction on every upstream pull.
+hermes_cli/skin_engine.py	Hermes Agent
+
+# The lint rule that validates bundled skill metadata: it asserts the author
+# field equals the literal "Hermes Agent" and the message quotes the expected
+# value. Rebranding either half makes the linter reject every bundled skill
+# upstream ships.
+tools/skill_linter.py	Hermes Agent
+
+# --- Sent to a remote service: NOT safe to change unilaterally -------------
+# bot_name is POSTed to Nous's managed pairing API (POST /v1/telegram/pairings)
+# and to startTelegramOnboarding from the dashboard. The server may validate or
+# key on it, and we cannot verify that from here, so both senders keep the
+# stock value until someone confirms the API accepts an arbitrary name.
+# Revisit together — these two must always agree.
+hermes_cli/telegram_managed_bot.py	Hermes Agent
+web/src/pages/ChannelsPage.tsx	Hermes Agent
+
+# Default client_name for OAuth dynamic client registration. It is submitted to
+# third-party authorization servers and can appear on an existing registration;
+# changing it risks orphaning already-registered clients. Cosmetic upside,
+# real downside — left alone deliberately.
+tools/mcp_oauth.py	Hermes Agent
+
+# --- Wire-protocol / telemetry identifiers --------------------------------
+# X-Title (paired with HTTP-Referer) is OpenRouter's app-attribution header:
+# it is how a request is credited to an application in OpenRouter's public
+# rankings. User-Agent and the codex_cli_rs spoof identify the client to the
+# provider's API. clientInfo.title / client_title are ACP + Codex app-server
+# handshake fields. These are identity ON THE WIRE, not text a customer reads;
+# rewriting them misattributes traffic and can break provider compatibility.
+agent/anthropic_adapter.py	Hermes Agent
+agent/auxiliary_client.py	Hermes Agent
+agent/copilot_acp_client.py	Hermes Agent
+agent/transports/codex_app_server.py	Hermes Agent
+agent/transports/codex_app_server_session.py	Hermes Agent
+plugins/model-providers/ai-gateway/__init__.py	Hermes Agent
+plugins/model-providers/fireworks/__init__.py	Hermes Agent
+plugins/model-providers/kimi-coding/__init__.py	Hermes Agent
+plugins/model-providers/opencode-zen/__init__.py	Hermes Agent
+plugins/image_gen/openrouter/__init__.py	Hermes Agent
+
+# atif_agent_name is written into exported ATIF observability traces. Trace
+# consumers group and compare runs by this value, so changing it silently
+# splits a customer's history in two.
+plugins/observability/nemo_relay/__init__.py	Hermes Agent
+
+# Names of resources provisioned on REMOTE services (a Photon project, an
+# A2A/Spectrum tenant). Renaming the default orphans anything already created
+# under the old name. Both are overridable by config/env if a customer wants
+# the branded name on a fresh setup.
+plugins/platforms/photon/auth.py	Hermes Agent
+plugins/platforms/photon/cli.py	Hermes Agent
+
+# --- Attribution: not ours to rewrite -------------------------------------
+# plugin.yaml `author:` names the humans and upstream project that wrote each
+# plugin — e.g. "Alex Jestin Taylor (@alex-fireworks) + Hermes Agent".
+# Rebranding that claims authorship of other people's work. The `description:`
+# fields live in the same files and cannot be split out without a per-key rule,
+# so the whole manifest is exempt; the cost is catalog text in `jarvis plugins`
+# still reading "… adapter for Hermes Agent".
+plugin.yaml	Hermes Agent
+plugins/platforms/photon/sidecar/package.json	Hermes Agent
+scripts/whatsapp-bridge/package.json	Hermes Agent
+
+# The template a user copies to author their OWN skin. Its agent_name is the
+# example value being demonstrated, and skins/jarvis.yaml is what we actually
+# ship and activate.
+skills/autonomous-ai-agents/hermes-agent/templates/skin.yaml	Hermes Agent
+
+# Upstream's own release tooling: builds Nous's GitHub release notes and titles
+# for the hermes-agent repo. It never runs in a customer install, and we cut
+# JARVIS releases from this overlay's own workflows.
+scripts/release.py	Hermes Agent
+
+# The dashboard OAuth setup error names Nous's identity provider (the service
+# you actually register with), not our product.
+plugins/dashboard_auth/nous/__init__.py	Hermes Agent

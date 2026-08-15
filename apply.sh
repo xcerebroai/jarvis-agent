@@ -542,9 +542,45 @@ for f in \
   hermes_cli/claw.py cli.py \
   hermes_cli/_startup_fast.py \
   gateway/platforms/whatsapp_common.py gateway/platforms/qqbot/adapter.py \
-  gateway/run.py; do
+  gateway/run.py \
+  hermes_cli/status.py hermes_cli/setup.py hermes_cli/doctor.py \
+  hermes_cli/uninstall.py hermes_cli/update_cmd.py \
+  hermes_cli/cli_billing_mixin.py hermes_cli/main.py \
+  hermes_cli/dashboard_auth/login_page.py hermes_cli/session_export_html.py \
+  hermes_cli/completion.py hermes_cli/gateway_windows.py \
+  hermes_cli/pty_bridge.py hermes_cli/kanban_db.py \
+  hermes_cli/projects_cmd.py hermes_cli/model_switch.py \
+  hermes_cli/default_soul.py \
+  hermes_cli/kanban_decompose.py hermes_cli/kanban_specify.py \
+  hermes_cli/profile_describer.py \
+  gateway/relay/command_manifest.py gateway/slash_commands.py \
+  mcp_serve.py tools/environments/local.py \
+  agent/prompt_builder.py agent/agent_init.py \
+  agent/transports/hermes_tools_mcp_server.py \
+  acp_adapter/entry.py acp_adapter/server.py \
+  ui-tui/src/theme.ts ui-tui/src/app/slash/commands/core.ts \
+  ui-tui/src/app/slash/commands/topup.ts ui-tui/src/components/billingOverlay.tsx \
+  scripts/whatsapp-bridge/bridge.js \
+  plugins/memory/hindsight/__init__.py \
+  plugins/google_meet/cli.py plugins/google_meet/meet_bot.py \
+  plugins/google_meet/node/client.py plugins/google_meet/process_manager.py \
+  plugins/google_meet/tools.py \
+  plugins/platforms/a2a/adapter.py plugins/platforms/a2a/protocol.py \
+  plugins/platforms/discord/adapter.py plugins/platforms/email/adapter.py \
+  plugins/platforms/irc/adapter.py plugins/platforms/matrix/adapter.py \
+  plugins/platforms/homeassistant/adapter.py \
+  optional-skills/blockchain/hyperliquid/scripts/hyperliquid_client.py \
+  optional-skills/blockchain/solana/scripts/solana_client.py \
+  optional-skills/finance/stocks/scripts/stocks_client.py \
+  optional-skills/migration/openclaw-migration/scripts/openclaw_to_hermes.py \
+  optional-skills/productivity/canvas/scripts/canvas_api.py \
+  skills/productivity/google-workspace/scripts/google_api.py; do
   add "$SRC/$f"
 done
+# `hermes <verb> --help` descriptions: every subcommand module carries an
+# argparse help/description string with the brand in it.
+while IFS= read -r f; do FILES+=("$f"); done < <(
+  find "$SRC/hermes_cli/subcommands" -maxdepth 1 -name '*.py' 2>/dev/null || true)
 # Desktop (Electron) RENDERER (apps/desktop/src) — blanket-rebrand every file
 # that mentions the brand. Blanket-safe: the renderer has no functional
 # capitalized "Hermes" and no Hermes.app/.exe bundle paths (those live only in
@@ -690,8 +726,13 @@ scan() {
   local f hits
   for f in "$@"; do
     [ -f "$f" ] || continue
+    # The second grep drops [protect]ed identifiers — they are SUPPOSED to
+    # survive, so they are not leaks. "Hermes 3/4" is Nous's LLM family, not
+    # the product: rebranding it would state something untrue about models we
+    # do not ship (see branding.map [protect]).
     hits="$(grep -nE '\bHermes\b|NOUS HERMES|HERMES AGENT' "$f" 2>/dev/null \
-            | grep -vE 'X-Hermes-|HermesCLI|updateHermes|checkHermesUpdate|can_update_hermes' || true)"
+            | grep -vE 'X-Hermes-|HermesCLI|updateHermes|checkHermesUpdate|can_update_hermes' \
+            | grep -vE 'Hermes [34]\b' || true)"
     if [ -n "$hits" ]; then
       LEAKS=$(( LEAKS + $(printf '%s\n' "$hits" | grep -c .) ))
       echo "  ⚠ [$label] leak in ${f#"$SRC"/}:"
@@ -751,7 +792,25 @@ if [ "$LEAKS" -gt 0 ]; then
   echo "  ##################################################################"
   echo
 else
-  echo "  ✓ no visible brand strings survived across all locale + web + cli + desktop surfaces"
+  echo "  ✓ no visible brand strings survived across the curated surfaces"
+fi
+
+# --- 4b. Tree-wide brand scan ----------------------------------------------
+# The check above walks the SAME curated list apply.sh brands, so it can only
+# ever confirm what we already thought of — a brand string in a file nobody
+# listed is invisible to it. That is exactly how upstream v0.20.1's
+# _startup_fast.py put "Hermes Agent" back into `hermes --version` while this
+# pass still reported success. brand_scan.py walks the entire tree instead, so
+# a new upstream file fails here the day it lands. Anything legitimately
+# exempt is justified in branding-known-ok.txt.
+if [ -n "${PY:-}" ] && [ -f "$OVERLAY_DIR/tests/brand_scan.py" ]; then
+  echo
+  if ! "$PY" "$OVERLAY_DIR/tests/brand_scan.py" "$SRC"; then
+    LEAKS=$((LEAKS + 1))
+    echo "  ⚠ tree-wide brand scan found unaccounted strings (see above)"
+  fi
+else
+  echo "  · tree-wide brand scan skipped (no python / scanner not found)"
 fi
 
 # --- 5. Cascade onto the desktop app's ACTIVE source tree -------------------

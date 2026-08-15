@@ -101,3 +101,22 @@ jobs:
 
       - name: Run overlay smoke test
         run: bash tests/overlay_smoke.sh
+
+      - name: Tree-wide brand scan (self-test)
+        run: |
+          # The scanner is the guard against the curated-list blind spot, so
+          # prove the guard itself still works. A scanner that silently stopped
+          # matching would look exactly like a clean tree.
+          tmp="$(mktemp -d)"
+          mkdir -p "$tmp/hermes_cli"
+          printf 'BANNER = "Welcome to Hermes Agent!"\n' > "$tmp/hermes_cli/leak.py"
+          if python3 tests/brand_scan.py "$tmp" >/dev/null 2>&1; then
+            echo "::error::brand_scan.py did NOT flag a planted brand string — the guard is broken"
+            exit 1
+          fi
+          echo "brand_scan.py correctly rejects a planted leak"
+          # And a clean tree must pass.
+          rm -f "$tmp/hermes_cli/leak.py"
+          printf 'BANNER = "Welcome to JARVIS!"\n' > "$tmp/hermes_cli/ok.py"
+          python3 tests/brand_scan.py "$tmp"
+          echo "brand_scan.py accepts a clean tree"

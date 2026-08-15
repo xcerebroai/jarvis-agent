@@ -10,7 +10,8 @@ on:
   push:
     branches: [main]
   schedule:
-    - cron: "37 5 * * 1"   # Mondays 05:37 UTC
+    - cron: "37 5 * * *"   # daily 05:37 UTC (was Mondays — upstream drift
+                           # broke branding mid-week and went unnoticed)
   workflow_dispatch:
 
 permissions:

@@ -55,6 +55,19 @@ Hermes.app
 Hermes.exe
 MacOS/Hermes
 TERM_PROGRAM = 'Hermes'
+# Nous Research's LLM family, NOT the product. The non-agentic-model warning
+# reads "Nous Research Hermes 3 & 4 models are NOT agentic"; without these the
+# [word] rule turned that into "Nous Research JARVIS 3 & 4 models" — a
+# statement about models we do not ship and that do not exist under that name.
+Hermes 3
+Hermes 4
+# NOTE: the updater tags the PATH line it writes into shell rc files with a
+# marker comment, and uninstall.py greps for that same literal to remove it.
+# Both are branded (writer -> "# JARVIS", reader -> '# JARVIS'), so they stay
+# in agreement and uninstall keeps working. It cannot be [protect]ed here even
+# if we wanted to: a leading '#' is this file's own comment syntax. The one
+# cost is that a PATH line written by a pre-rename install is no longer
+# matched, leaving a stale comment in the user's rc file after uninstall.
 
 # Exact multi-word brand → JARVIS. Runs before [word] so "Hermes Agent"
 # collapses to "JARVIS" (not "JARVIS Agent"). Order: most specific first.

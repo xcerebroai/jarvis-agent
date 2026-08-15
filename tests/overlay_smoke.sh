@@ -93,6 +93,11 @@ APPLY1="$(bash "$OVERLAY_DIR/apply.sh" 2>&1)"
 echo "$APPLY1" | grep -E 'rewrote|no visible|WARNING' | sed 's/^/    /'
 chk "verify pass is clean"            "echo \"\$APPLY1\" | grep -q 'no visible brand strings survived'"
 chk "no WARNING banner emitted"       "! echo \"\$APPLY1\" | grep -q 'WARNING'"
+# The curated verify above only re-checks the files apply.sh already brands.
+# The tree-wide scan is what catches a NEW upstream file carrying the brand,
+# so assert it actually ran and actually passed — not merely that apply exited.
+chk "tree-wide brand scan ran"        "echo \"\$APPLY1\" | grep -q 'brand scan'"
+chk "tree-wide brand scan is clean"   "echo \"\$APPLY1\" | grep -q 'no unaccounted brand strings'"
 
 echo
 echo "== 3. no standalone Hermes survives in the 32 locale files =="

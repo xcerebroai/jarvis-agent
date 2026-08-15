@@ -20,10 +20,13 @@ on:
       - ".github/workflows/installer-build.yml"
   release:
     types: [published]
-  # (#22) Weekly canary: upstream drift that breaks the brand/inject anchors
-  # fails loudly here instead of on the next release.
+  # (#22) Daily canary: upstream drift that breaks the brand/inject anchors
+  # fails loudly here instead of on the next release. Weekly was too slow —
+  # upstream v0.20.1 broke the injected overlay stage and the version banner,
+  # and the gap between the last green weekly run and the next release meant
+  # neither was noticed until a release was attempted.
   schedule:
-    - cron: "23 6 * * 2"
+    - cron: "23 6 * * *"
   workflow_dispatch:
     inputs:
       hermes_ref:

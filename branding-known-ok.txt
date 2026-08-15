@@ -41,21 +41,6 @@ hermes_cli/skin_engine.py	Hermes Agent
 # upstream ships.
 tools/skill_linter.py	Hermes Agent
 
-# --- Sent to a remote service: NOT safe to change unilaterally -------------
-# bot_name is POSTed to Nous's managed pairing API (POST /v1/telegram/pairings)
-# and to startTelegramOnboarding from the dashboard. The server may validate or
-# key on it, and we cannot verify that from here, so both senders keep the
-# stock value until someone confirms the API accepts an arbitrary name.
-# Revisit together — these two must always agree.
-hermes_cli/telegram_managed_bot.py	Hermes Agent
-web/src/pages/ChannelsPage.tsx	Hermes Agent
-
-# Default client_name for OAuth dynamic client registration. It is submitted to
-# third-party authorization servers and can appear on an existing registration;
-# changing it risks orphaning already-registered clients. Cosmetic upside,
-# real downside — left alone deliberately.
-tools/mcp_oauth.py	Hermes Agent
-
 # --- Wire-protocol / telemetry identifiers --------------------------------
 # X-Title (paired with HTTP-Referer) is OpenRouter's app-attribution header:
 # it is how a request is credited to an application in OpenRouter's public
@@ -74,18 +59,6 @@ plugins/model-providers/kimi-coding/__init__.py	Hermes Agent
 plugins/model-providers/opencode-zen/__init__.py	Hermes Agent
 plugins/image_gen/openrouter/__init__.py	Hermes Agent
 
-# atif_agent_name is written into exported ATIF observability traces. Trace
-# consumers group and compare runs by this value, so changing it silently
-# splits a customer's history in two.
-plugins/observability/nemo_relay/__init__.py	Hermes Agent
-
-# Names of resources provisioned on REMOTE services (a Photon project, an
-# A2A/Spectrum tenant). Renaming the default orphans anything already created
-# under the old name. Both are overridable by config/env if a customer wants
-# the branded name on a fresh setup.
-plugins/platforms/photon/auth.py	Hermes Agent
-plugins/platforms/photon/cli.py	Hermes Agent
-
 # --- Attribution: not ours to rewrite -------------------------------------
 # plugin.yaml `author:` names the humans and upstream project that wrote each
 # plugin — e.g. "Alex Jestin Taylor (@alex-fireworks) + Hermes Agent".
@@ -95,6 +68,37 @@ plugins/platforms/photon/cli.py	Hermes Agent
 # still reading "… adapter for Hermes Agent".
 plugin.yaml	Hermes Agent
 plugins/platforms/photon/sidecar/package.json	Hermes Agent
+
+# --- REMOTE-IDENTITY -------------------------------------------------------
+# Every entry below is an identity value PERSISTED ON A REMOTE SERVICE, not
+# text rendered locally. Renaming one does not change a label — it points the
+# client at a different identity than the one the customer's existing state is
+# filed under, orphaning or splitting that state. Closing these is a migration
+# (detect old name, reconcile, carry existing records over), not a string
+# rewrite, so it is deliberately out of scope for a leak-closure release.
+# Tracked in: "Remote-identity branding requires migration design".
+#
+# REMOTE-IDENTITY: bot_name POSTed to Nous's managed pairing API
+#   (POST /v1/telegram/pairings) and from the dashboard's
+#   startTelegramOnboarding. The only CUSTOMER-VISIBLE one of the four — it is
+#   the bot's display name in Telegram. These two senders must always agree.
+hermes_cli/telegram_managed_bot.py	Hermes Agent
+web/src/pages/ChannelsPage.tsx	Hermes Agent
+#
+# REMOTE-IDENTITY: name of the project Photon provisions for the operator;
+#   renaming orphans projects already created under the old name.
+plugins/platforms/photon/auth.py	Hermes Agent
+plugins/platforms/photon/cli.py	Hermes Agent
+#
+# REMOTE-IDENTITY: client_name submitted for OAuth dynamic client
+#   registration; renaming can orphan already-registered clients at the
+#   authorization server.
+tools/mcp_oauth.py	Hermes Agent
+#
+# REMOTE-IDENTITY: atif_agent_name written into exported ATIF observability
+#   traces; consumers group and compare runs by it, so renaming splits a
+#   customer's trace history in two.
+plugins/observability/nemo_relay/__init__.py	Hermes Agent
 scripts/whatsapp-bridge/package.json	Hermes Agent
 
 # The template a user copies to author their OWN skin. Its agent_name is the

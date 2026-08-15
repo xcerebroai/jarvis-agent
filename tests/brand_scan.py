@@ -82,8 +82,16 @@ def load_allowlist(path: Path) -> list[tuple[str, str]]:
 
 
 def allowed(rel: str, text: str, entries: list[tuple[str, str]]) -> bool:
+    """The path part matches as a SUBSTRING of the repo-relative path.
+
+    Not endswith: built bundles carry a content hash in the filename
+    (web_dist/assets/ChannelsPage-BGZijnAM.js), so no fixed suffix can name
+    them and the hash changes every build. Substring keeps directory prefixes
+    like `web_dist/assets/` usable. The needle is what makes an entry precise —
+    keep it specific enough that it cannot match a future, unrelated leak.
+    """
     for f, needle in entries:
-        if rel.endswith(f) and needle in text:
+        if f in rel and needle in text:
             return True
     return False
 

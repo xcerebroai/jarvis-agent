@@ -22,7 +22,30 @@
 # Usage:  ./apply.sh [HERMES_SRC]
 # Source-tree resolution:  $HERMES_SRC  ->  $1  ->  autodetect via hermes_cli.
 # User-data dir defaults to ~/.hermes (override with $HERMES_HOME).
-set -euo pipefail
+# -E so the ERR trap below is inherited by functions, subshells and command
+# substitutions — without it, a failure inside a function dies untrapped.
+set -Eeuo pipefail
+
+# Never die silently. `set -e` aborts with no output whatsoever when the failing
+# command printed nothing — e.g. a bare `[ -f "$f" ]` test. That produced a
+# report of apply.sh "stopping mid-run with no error", which is unfalsifiable
+# from the outside and indistinguishable from a hang. Any non-zero now names
+# the line, the command, and warns that the tree is half-rewritten.
+_apply_failed() {
+  local rc=$?
+  echo "" >&2
+  echo "  ##################################################################" >&2
+  echo "  # apply.sh FAILED — exit $rc" >&2
+  echo "  #   line:    ${BASH_LINENO[0]:-?}" >&2
+  echo "  #   command: ${BASH_COMMAND}" >&2
+  echo "  #" >&2
+  echo "  # The source tree is very likely PARTIALLY BRANDED: some files were" >&2
+  echo "  # rewritten and some were not. Fix the cause and re-run apply.sh —" >&2
+  echo "  # it is idempotent, so a clean re-run repairs the tree." >&2
+  echo "  ##################################################################" >&2
+  exit "$rc"
+}
+trap _apply_failed ERR
 
 # Ensure any child Python/Perl emits UTF-8 even on a legacy Windows console
 # (cp1252), so ◆/✓/box-art output never raises UnicodeEncodeError.
@@ -523,7 +546,30 @@ PERL
 # Curated customer-visible surface. Globs adapt if upstream adds locale files.
 echo "  rewriting customer-visible strings…"
 FILES=()
-add() { [ -f "$1" ] && FILES+=("$1"); }
+# Skip curated files this tree does not have, and REPORT them rather than
+# swallowing them silently.
+#
+# The `return 0` is load-bearing. `add() { [ -f "$1" ] && FILES+=("$1"); }`
+# returns the status of the failed test when the file is absent, and under
+# `set -e` a function returning non-zero as a simple command kills the script
+# instantly and without a word. That is precisely how apply.sh died right after
+# "rewriting customer-visible strings…" on an older upstream checkout that
+# predates hermes_cli/_startup_fast.py — a file the curated list gained in
+# v1.1.2. Every curated entry is a landmine on any tree that lacks it.
+#
+# Absent files are legitimate: the overlay supports a range of upstream
+# revisions and not every revision has every file. But a MISSING entry can also
+# mean upstream renamed something and the branding silently stopped applying,
+# so the count is surfaced after the rewrite instead of being invisible.
+MISSING_CURATED=()
+add() {
+  if [ -f "$1" ]; then
+    FILES+=("$1")
+  else
+    MISSING_CURATED+=("${1#"$SRC"/}")
+  fi
+  return 0
+}
 # Dashboard (React app + server-side strings it renders)
 add "$SRC/web/index.html"
 add "$SRC/web/src/App.tsx"
@@ -637,7 +683,24 @@ if [ -n "$OLD_MANIFEST" ]; then
     grep -qxF "$rel" "$MANIFEST" || echo "$rel" >> "$MANIFEST"
   done <<< "$OLD_MANIFEST"
 fi
-[ ${#FILES[@]} -gt 0 ] && rewrite "${FILES[@]}"
+# `[ ... ] && rewrite ...` would itself return non-zero when FILES is empty and
+# take the whole script down under set -e. Use a real if.
+if [ ${#FILES[@]} -gt 0 ]; then
+  rewrite "${FILES[@]}"
+fi
+
+# Curated entries this tree does not have. Not fatal — the overlay spans a range
+# of upstream revisions — but if the count is large or a file you expect is
+# listed, upstream probably moved it and that surface is no longer branded.
+if [ ${#MISSING_CURATED[@]} -gt 0 ]; then
+  echo "  · ${#MISSING_CURATED[@]} curated file(s) absent from this tree (skipped):"
+  printf '      %s\n' "${MISSING_CURATED[@]}" | head -12
+  if [ ${#MISSING_CURATED[@]} -gt 12 ]; then
+    echo "      … and $(( ${#MISSING_CURATED[@]} - 12 )) more"
+  fi
+  echo "    (expected on older upstream revisions; if one looks wrong, upstream"
+  echo "     may have renamed it and that surface is no longer being branded.)"
+fi
 
 # --- 3b. Desktop build-config — surgical, key-anchored [desktop] literals ---
 # Applied ONLY to package.json + electron/main.ts. Each pattern includes its

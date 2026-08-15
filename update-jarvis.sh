@@ -96,7 +96,12 @@ fi
 if git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   if [ ! -f "$MANIFEST" ]; then
     echo "  ! no branded-files manifest at $MANIFEST — running apply.sh once to build it."
-    HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh" >/dev/null 2>&1 || true
+    # Quiet on success, but never swallow a failure: discarding stderr here is
+    # how a broken apply.sh stays invisible until the branding is already gone.
+    _seed_log="$(HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh" 2>&1)" || {
+      echo "  ! apply.sh failed while building the manifest — output follows:" >&2
+      printf '%s\n' "$_seed_log" | tail -20 >&2
+    }
   fi
   if [ -f "$MANIFEST" ]; then
     ts="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
@@ -161,8 +166,30 @@ if [ "$rc" -ne 0 ]; then
 fi
 
 # --- 3. Re-apply JARVIS branding to the fresh upstream ---------------------
+# Step 1 reverted the branded files to pristine, so if this re-apply fails the
+# install is left as bare HERMES — or, worse, half-rewritten. Under `set -e`
+# that used to abort the whole script with no message at all, which reads to a
+# user as "it just went back to the prompt". Never again: report it loudly,
+# say exactly what state the tree is in, and give the one command that fixes it.
 echo "  → re-applying JARVIS overlay…"
-HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh"
+apply_rc=0
+HERMES_SRC="$SRC" bash "$OVERLAY_DIR/apply.sh" || apply_rc=$?
+if [ "$apply_rc" -ne 0 ]; then
+  echo "" >&2
+  echo "  ##################################################################" >&2
+  echo "  # JARVIS BRANDING FAILED — apply.sh exited $apply_rc" >&2
+  echo "  #" >&2
+  echo "  # Upstream was updated, but the re-brand did not finish. This tree" >&2
+  echo "  # is PARTIALLY BRANDED: some surfaces say JARVIS, some say Hermes." >&2
+  echo "  #   tree: $SRC" >&2
+  echo "  #" >&2
+  echo "  # Re-run the branding (it is idempotent, and safe to repeat):" >&2
+  echo "  #   HERMES_SRC=\"$SRC\" bash \"$OVERLAY_DIR/apply.sh\"" >&2
+  echo "  #" >&2
+  echo "  # apply.sh prints the failing line and command above." >&2
+  echo "  ##################################################################" >&2
+  exit "$apply_rc"
+fi
 
 # --- 4. Rebuild the desktop app so it isn't left rebuilt un-branded ---------
 # `hermes update` (step 2) runs `hermes desktop --build-only` from PRISTINE

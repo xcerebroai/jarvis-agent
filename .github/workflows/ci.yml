@@ -102,6 +102,55 @@ jobs:
       - name: Run overlay smoke test
         run: bash tests/overlay_smoke.sh
 
+      - name: apply.sh survives a curated file the tree does not have
+        run: |
+          # Regression test for the silent abort. `add() { [ -f "$1" ] && ...; }`
+          # returns the failed test when a curated file is absent, and under
+          # `set -e` a function returning non-zero kills the script with NO
+          # output — apply.sh stopped dead after "rewriting customer-visible
+          # strings…" on any upstream older than the newest curated entry.
+          # Every file added to the curated list is a landmine on such a tree,
+          # so assert the whole class, not the one file that happened to fire.
+          set -e
+          git clone --quiet --depth 1 https://github.com/NousResearch/hermes-agent /tmp/hsrc
+          # Simulate an older upstream: delete curated files this tree "predates".
+          rm -f /tmp/hsrc/hermes_cli/_startup_fast.py \
+                /tmp/hsrc/hermes_cli/status.py \
+                /tmp/hsrc/gateway/relay/command_manifest.py
+          out="$(HERMES_SRC=/tmp/hsrc HERMES_HOME=/tmp/hhome bash apply.sh 2>&1)" || {
+            echo "$out" | tail -30
+            echo "::error::apply.sh died when a curated file was missing — the set -e landmine is back"
+            exit 1
+          }
+          echo "$out" | grep -q 'curated file(s) absent' || {
+            echo "$out" | tail -20
+            echo "::error::apply.sh did not report the skipped curated files"
+            exit 1
+          }
+          echo "$out" | grep -E 'rewrote [0-9]+ file\(s\)|curated file\(s\) absent'
+          echo "apply.sh tolerated and reported the missing curated files"
+          rm -rf /tmp/hsrc /tmp/hhome
+
+      - name: apply.sh reports failures instead of dying silently
+        run: |
+          # The ERR trap must name the line and command. A regression here is
+          # invisible by construction, so prove it with a deliberate break.
+          set -e
+          # Inject AFTER the trap is installed — a failure before that point is
+          # untrapped by definition and would test nothing.
+          sed '/^trap _apply_failed ERR$/a false  # deliberate failure for the trap test' \
+            apply.sh > /tmp/apply-broken.sh
+          grep -q 'deliberate failure' /tmp/apply-broken.sh || {
+            echo "::error::could not inject the failure — is the 'trap _apply_failed ERR' line still there?"
+            exit 1; }
+          err="$(bash /tmp/apply-broken.sh 2>&1 || true)"
+          for want in 'apply.sh FAILED' 'command:' 'PARTIALLY BRANDED'; do
+            echo "$err" | grep -q "$want" || {
+              echo "$err" | tail -20
+              echo "::error::ERR trap output is missing: $want"; exit 1; }
+          done
+          echo "ERR trap reports line, command, and the partial-branding warning"
+
       - name: Tree-wide brand scan (self-test)
         run: |
           # The scanner is the guard against the curated-list blind spot, so
@@ -120,3 +169,69 @@ jobs:
           printf 'BANNER = "Welcome to JARVIS!"\n' > "$tmp/hermes_cli/ok.py"
           python3 tests/brand_scan.py "$tmp"
           echo "brand_scan.py accepts a clean tree"
+
+  # --- The platform the bug shipped on --------------------------------------
+  # apply.sh is executed on customer machines through
+  # PowerShell -> jarvis.cmd -> Git Bash, and CI only ever ran it on
+  # ubuntu/macOS. A Windows Git Bash runner is the only place the MSYS
+  # perl/sed/grep combination, CRLF handling, and the Windows Store `python3`
+  # stub on PATH are all exercised together.
+  windows-gitbash:
+    name: apply.sh under Windows Git Bash
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash          # GitHub's `bash` on windows-latest IS Git Bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show the interpreters apply.sh will resolve
+        run: |
+          for c in perl python3 python py sed grep awk; do
+            printf '%s: ' "$c"; command -v "$c" || echo "(not found)"
+          done
+          # A real customer machine often has the Microsoft Store python3 stub
+          # first on PATH; it is not a working interpreter. resolve_python()
+          # must skip it rather than pick it.
+          python3 -c 'import yaml' 2>/dev/null \
+            && echo "python3 has pyyaml" \
+            || echo "python3 unusable here (expected on a stock runner)"
+
+      - name: Install pyyaml for a usable interpreter
+        shell: pwsh
+        run: python -m pip install --quiet pyyaml
+
+      - name: Clone upstream Hermes
+        run: git clone --quiet --depth 1 https://github.com/NousResearch/hermes-agent /tmp/hsrc
+
+      - name: apply.sh runs clean under Git Bash
+        run: |
+          set -e
+          out="$(HERMES_SRC=/tmp/hsrc HERMES_HOME=/tmp/hhome bash apply.sh 2>&1)" || {
+            echo "$out" | tail -40
+            echo "::error::apply.sh failed under Windows Git Bash"; exit 1; }
+          echo "$out" | grep -E 'rewrote [0-9]+ file\(s\)|curated surfaces|unaccounted|curated file\(s\) absent'
+          echo "$out" | grep -q 'no visible brand strings survived' || {
+            echo "$out" | tail -40
+            echo "::error::verify pass did not report clean under Git Bash"; exit 1; }
+
+      - name: apply.sh is idempotent under Git Bash
+        run: |
+          set -e
+          out="$(HERMES_SRC=/tmp/hsrc HERMES_HOME=/tmp/hhome bash apply.sh 2>&1)"
+          echo "$out" | grep -q 'rewrote 0 file(s)' || {
+            echo "$out" | grep -E 'rewrote [0-9]+ file'
+            echo "::error::second apply rewrote files — not idempotent on Windows (line endings?)"
+            exit 1; }
+          echo "second apply rewrote 0 files"
+
+      - name: apply.sh survives a missing curated file under Git Bash
+        run: |
+          set -e
+          git -C /tmp/hsrc checkout -- . 2>/dev/null || true
+          rm -f /tmp/hsrc/hermes_cli/_startup_fast.py
+          out="$(HERMES_SRC=/tmp/hsrc HERMES_HOME=/tmp/hhome2 bash apply.sh 2>&1)" || {
+            echo "$out" | tail -30
+            echo "::error::apply.sh died on a missing curated file under Git Bash"; exit 1; }
+          echo "$out" | grep -q 'curated file(s) absent' \
+            && echo "reported the missing curated file"

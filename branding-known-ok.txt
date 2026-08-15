@@ -84,6 +84,12 @@ plugins/platforms/photon/sidecar/package.json	Hermes Agent
 #   the bot's display name in Telegram. These two senders must always agree.
 hermes_cli/telegram_managed_bot.py	Hermes Agent
 web/src/pages/ChannelsPage.tsx	Hermes Agent
+#   ...and the same call compiled into the shipped dashboard bundle. An
+#   installed tree has hermes_cli/web_dist/ (CI's fresh clone does not), so
+#   without this the scan fails on every real install while passing in CI.
+#   Keyed on the call name, not the brand alone, so an unrelated leak in the
+#   same bundle is still caught.
+web_dist/assets/	startTelegramOnboarding
 #
 # REMOTE-IDENTITY: name of the project Photon provisions for the operator;
 #   renaming orphans projects already created under the old name.

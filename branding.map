@@ -72,6 +72,17 @@ Hermes 4
 # Exact multi-word brand → JARVIS. Runs before [word] so "Hermes Agent"
 # collapses to "JARVIS" (not "JARVIS Agent"). Order: most specific first.
 [literal]
+# Box-art headers. These sit inside a fixed-width frame drawn with │ … │, so a
+# plain rename leaves the right-hand border 6 columns short and the banner
+# visibly crooked on `jarvis status`. "Hermes Agent" -> "JARVIS" is exactly 6
+# narrower and ⚕/◆ are both single-width, so pad the replacement by 6 to keep
+# the frame square. MUST stay above the generic rule below — [literal] entries
+# apply in file order, and the generic one would otherwise consume them first.
+# (The trailing spaces are significant; branding.map does not trim them.)
+⚕ Hermes Agent Status	◆ JARVIS Status      
+⚕ Hermes Agent Uninstaller	◆ JARVIS Uninstaller      
+⚕ Hermes Agent Setup Wizard	◆ JARVIS Setup Wizard      
+your Hermes Agent installation.	your JARVIS installation.      
 Hermes Agent - Dashboard	JARVIS - Dashboard
 NOUS HERMES	JARVIS
 HERMES AGENT	JARVIS

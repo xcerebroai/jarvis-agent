@@ -540,6 +540,7 @@ for f in \
   hermes_cli/commands.py hermes_cli/__init__.py hermes_cli/auth.py \
   hermes_cli/cli_commands_mixin.py hermes_cli/config.py hermes_cli/gateway.py \
   hermes_cli/claw.py cli.py \
+  hermes_cli/_startup_fast.py \
   gateway/platforms/whatsapp_common.py gateway/platforms/qqbot/adapter.py \
   gateway/run.py; do
   add "$SRC/$f"
@@ -712,7 +713,8 @@ scan "web"            "$SRC/web/index.html" "$SRC/web/src/App.tsx" "$SRC/web/src
 scan "cli/gateway"    \
   "$SRC/hermes_cli/web_server.py" "$SRC/hermes_cli/banner.py" \
   "$SRC/hermes_cli/commands.py"   "$SRC/hermes_cli/cli_commands_mixin.py" \
-  "$SRC/gateway/platforms/whatsapp_common.py" "$SRC/cli.py"
+  "$SRC/gateway/platforms/whatsapp_common.py" "$SRC/cli.py" \
+  "$SRC/hermes_cli/_startup_fast.py"
 
 # Desktop renderer surfaces (i18n + intro) — pure visible strings.
 DESKI18N=(); while IFS= read -r f; do DESKI18N+=("$f"); done < <(

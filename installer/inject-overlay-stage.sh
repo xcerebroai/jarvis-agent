@@ -154,7 +154,12 @@ async fn jarvis_overlay_run(
         &script,
         &script_args,
         hermes_home,
-        None,
+        // cancel_rx: upstream took `Option<Receiver<()>>` by value until
+        // v0.20.1, then changed it to `&mut Option<Receiver<()>>` so a stage
+        // can hand the receiver back. The overlay stage has no cancellation
+        // channel, so an owned `None` is still the right value — it just has
+        // to be passed by mutable reference now.
+        &mut None,
         Some("jarvis-overlay".to_string()),
     )
     .await?;

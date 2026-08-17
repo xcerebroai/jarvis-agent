@@ -229,13 +229,23 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ env.JARVIS_SIGN_IDENTITY }}
         run: npx tauri build --bundles dmg
 
-      # Unsigned build — NO Apple env (empty APPLE_CERTIFICATE would make Tauri
-      # try to import a nonexistent cert and fail); Tauri ad-hoc signs instead.
+      # Unsigned build — no Apple certificate env (an empty APPLE_CERTIFICATE
+      # would make Tauri try to import a nonexistent cert and fail), but the
+      # signing identity MUST be the explicit ad-hoc "-": without any identity
+      # Tauri skips codesign entirely and the .app ships with only the Rust
+      # linker's implicit signature on the binary — no bundle seal, no sealed
+      # resources. Gatekeeper treats that as an INVALID signature, not an
+      # unsigned app, and draws the unbypassable "JARVIS is damaged and can't
+      # be opened" dialog (v1.1.6 shipped exactly this). With "-", Tauri
+      # ad-hoc signs the whole bundle before the dmg is built, downgrading the
+      # dialog to the "Apple could not verify..." one that has an Open Anyway
+      # path in System Settings.
       - name: Build (macOS — dmg, unsigned/ad-hoc)
         if: runner.os == 'macOS' && env.HAS_APPLE != 'yes' && env.HAS_APPLE_P12 != 'yes'
         working-directory: hermes-src/apps/bootstrap-installer
         env:
           HERMES_BUILD_PIN_COMMIT: ${{ steps.clone.outputs.sha }}
+          APPLE_SIGNING_IDENTITY: "-"
         run: npx tauri build --bundles dmg
 
       # --- Stage the artifact under a stable JARVIS-Setup name ---------------
@@ -256,6 +266,27 @@ jobs:
           dmg="$(find hermes-src/apps/bootstrap-installer/src-tauri/target/release/bundle/dmg -name '*.dmg' | head -1)"
           [ -n "$dmg" ] || { echo "::error::no .dmg produced"; find hermes-src/apps/bootstrap-installer/src-tauri/target/release/bundle -maxdepth 2 | head -50; exit 1; }
           mkdir -p out && cp "$dmg" "out/JARVIS-Setup.dmg"
+
+      # The dmg must never ship an app that fails codesign verification: a
+      # bundle with a missing or partial (linker-only) signature draws
+      # Gatekeeper's unbypassable "damaged" dialog instead of the bypassable
+      # "unidentified developer" one. Every signing path — Developer ID or
+      # ad-hoc — must leave a bundle that verifies clean.
+      - name: Verify app signature inside dmg (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          MNT="$(mktemp -d)"
+          hdiutil attach out/JARVIS-Setup.dmg -nobrowse -readonly -mountpoint "$MNT" >/dev/null
+          trap 'hdiutil detach "$MNT" >/dev/null 2>&1 || true' EXIT
+          APP="$(find "$MNT" -maxdepth 1 -name '*.app' | head -1)"
+          [ -n "$APP" ] || { echo "::error::no .app found in JARVIS-Setup.dmg"; ls -la "$MNT"; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$APP" || {
+            echo "::error::$APP fails codesign verification — this dmg would draw the 'JARVIS is damaged' dialog. Is APPLE_SIGNING_IDENTITY set (\"-\" for ad-hoc)?"
+            exit 1
+          }
+          echo "bundle signature verifies: Gatekeeper will classify it as unsigned/unnotarized (bypassable), not damaged"
 
       # --- macOS notarization (notarytool) — DORMANT until secrets exist ------
       # Always runs on macOS so the skip reason is visible in the log; the work

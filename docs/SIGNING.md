@@ -3,9 +3,26 @@
 The installers this repo publishes — `JARVIS-Setup.exe` and `JARVIS-Setup.dmg` —
 are currently **unsigned**. They work, but the first launch shows a scary OS
 warning: SmartScreen on Windows ("Windows protected your PC"), Gatekeeper on
-macOS ("cannot be opened because the developer cannot be verified"). The
-xcerebro.ai/jarvis page tells users how to click through, which is the honest
-short-term answer but costs real installs.
+macOS ("Apple could not verify "JARVIS" is free of malware…", cleared via
+System Settings → Privacy & Security → Open Anyway). The xcerebro.ai/jarvis
+page tells users how to click through, which is the honest short-term answer
+but costs real installs.
+
+**The macOS bundle must always be at least ad-hoc signed.** The unsigned build
+path in `installer-build.yml` sets `APPLE_SIGNING_IDENTITY: "-"` so Tauri
+ad-hoc signs the whole bundle before building the dmg. Without it Tauri skips
+codesign and the app carries only the Rust linker's implicit signature — no
+bundle seal — which Gatekeeper treats as an *invalid* signature and blocks
+with the unbypassable **"JARVIS is damaged and can't be opened"** dialog
+(shipped in ≤ v1.1.6; measured on macOS 26.5.2, fixed in v1.1.7). A
+"Verify app signature inside dmg" CI step now fails any build whose bundle
+does not pass `codesign --verify --deep --strict`.
+
+Upstream's `Hermes-Setup.dmg` avoids all of this by being Developer ID signed
+**and notarized** (verified by inspection: `spctl` says "accepted,
+source=Notarized Developer ID") — that is the end state the credentials below
+buy; ad-hoc signing only restores the bypassable warning, it does not remove
+it.
 
 `.github/workflows/installer-build.yml` already contains the full signing and
 notarization machinery. **It is dormant**: every path is gated on repository

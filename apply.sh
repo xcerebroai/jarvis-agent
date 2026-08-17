@@ -247,6 +247,17 @@ verify_shipped_bundle() {  # <.app bundle or *-unpacked dir>
       rc=1
     fi
   fi
+  # The window title. This is what the OS shows as the window caption AND as
+  # the taskbar button's label, so a pristine one reads "Hermes" right next to
+  # the JARVIS icon. It comes from apps/desktop/index.html, which the overlay
+  # did not brand (it branded web/index.html — the dashboard's, a different
+  # file), so the packed renderer shipped <title>Hermes</title>.
+  if [ -f "$unpacked/index.html" ]; then
+    if grep -q '<title>[^<]*Hermes' "$unpacked/index.html" 2>/dev/null; then
+      echo "  ✗ $name packs an unbranded window TITLE (dist/index.html <title> still says Hermes) — taskbar label reads Hermes"
+      rc=1
+    fi
+  fi
   # Windows taskbar icon. electron/main.ts builds APP_ICON_PATHS with
   # `process.resourcesPath/icon.ico` FIRST on Windows (shipped via
   # extraResources) and only falls back to the padded PNG when it is absent —
@@ -763,7 +774,8 @@ for f in \
   optional-skills/productivity/canvas/scripts/canvas_api.py \
   skills/productivity/google-workspace/scripts/google_api.py \
   scripts/desktop-update/ui.html scripts/desktop-update/windows.ps1 \
-  scripts/desktop-update/posix.sh; do
+  scripts/desktop-update/posix.sh \
+  apps/desktop/index.html apps/desktop/dist/index.html; do
   add "$SRC/$f"
 done
 # `hermes <verb> --help` descriptions: every subcommand module carries an

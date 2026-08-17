@@ -292,6 +292,32 @@ if [ -f "$PS1F" ]; then
 fi
 
 echo
+echo "== 15. in-app updater re-brands after updating =="
+# The Desktop's self-update runs scripts/desktop-update/windows.ps1, which
+# drives `python -m hermes_cli.main update` directly — deliberately bypassing
+# the jarvis shim, so neither the shim interception nor the [command] rewrite
+# can see it. Unwrapped, it reverts every branded file and repacks the Desktop
+# from pristine source (observed 0.20.1 → 0.20.2: 241 files de-branded, packed
+# renderer shipped "HERMES AGENT"). apply.sh injects a guarded re-brand after
+# the update step so the install the updater relaunches is branded.
+PS1U="$SRC/scripts/desktop-update/windows.ps1"
+if [ -f "$PS1U" ]; then
+  chk "updater patched with re-brand"    "grep -q 'Invoke-JarvisRebrand' '$PS1U'"
+  chk "exactly one function definition"  "[ \"\$(grep -c 'function Invoke-JarvisRebrand' '$PS1U')\" -eq 1 ]"
+  chk "exactly one call site"            "[ \"\$(grep -c '^    Invoke-JarvisRebrand ' '$PS1U')\" -eq 1 ]"
+  # Guarded: a failed re-brand must never fail the user's update.
+  chk "re-brand is wrapped in try/catch" "grep -q 'jarvis: re-brand failed' '$PS1U'"
+  # Re-running apply must not inject a second copy.
+  bash "$OVERLAY_DIR/apply.sh" >/dev/null 2>&1 || true
+  chk "injection is idempotent"          "[ \"\$(grep -c 'function Invoke-JarvisRebrand' '$PS1U')\" -eq 1 ]"
+  # If upstream reshapes the script the anchor disappears — that must be
+  # reported, not silently skipped, or the in-app path goes unwrapped again.
+  chk "anchor still present upstream"    "grep -qF '# -- 4. Truthful completion' '$PS1U'"
+else
+  ok "windows.ps1 absent on this upstream (skipped)"
+fi
+
+echo
 echo "──────────────────────────────────────────────"
 echo "  RESULT: $PASS passed, $FAIL failed"
 echo "──────────────────────────────────────────────"

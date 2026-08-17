@@ -539,6 +539,87 @@ else
   echo "  · no JARVIS icon set at installer/assets/icons — shortcuts fall back to the exe icon"
 fi
 
+# --- 2b. Close the in-app updater's de-branding hole -----------------------
+# The Desktop's in-app self-update does NOT go through the jarvis shim. It runs
+# scripts/desktop-update/windows.ps1, which drives the update with
+#   python -m hermes_cli.main update ...
+# deliberately bypassing venv\Scripts\hermes.exe (the script says why: the
+# running shim is locked/quarantined mid-update). So the shim interception that
+# protects `jarvis update` cannot see it, and the [command] rewrite cannot
+# either — there is no `hermes update` command string to rewrite.
+#
+# The result is upstream's updater running unwrapped: it reverts the branded
+# files, pulls, and repacks the Desktop from pristine source. Observed on
+# 0.20.1 → 0.20.2: 241 files de-branded and the packed renderer shipped
+# "HERMES AGENT".
+#
+# Fix: re-apply the overlay immediately after the update step, inside the
+# updater itself — the same revert → update → re-apply order update-jarvis.sh
+# uses, just driven from the other entry point. Inserted AFTER the retry block
+# so both attempts are covered.
+#
+# The injected code is wrapped in try/catch and every lookup is guarded: if the
+# overlay or Git Bash cannot be found it returns silently. A failed re-brand
+# must never fail the user's update — an unbranded install is recoverable, a
+# broken updater is not.
+patch_inapp_updater() {
+  local ps1="$SRC/scripts/desktop-update/windows.ps1"
+  [ -f "$ps1" ] || return 0
+  if grep -q 'Invoke-JarvisRebrand' "$ps1"; then
+    echo "  ✓ in-app updater already re-brands after update (idempotent)"
+    return 0
+  fi
+  local anchor='    # -- 4. Truthful completion'
+  if ! grep -qF "$anchor" "$ps1"; then
+    echo "  ⚠ in-app updater: anchor '# -- 4. Truthful completion' not found —"
+    echo "    upstream reshaped windows.ps1; the in-app update path is NOT wrapped."
+    INAPP_PATCH_FAILED=1
+    return 0
+  fi
+  perl -i -pe '
+    if (/^    # -- 4\. Truthful completion/ && !$done) {
+      $done = 1;
+      print <<"PSX";
+    # --- JARVIS: re-apply branding after the unwrapped upstream update ------
+    # Injected by the JARVIS overlay (apply.sh). The update above runs
+    # upstream`s updater directly, which reverts every branded file. Re-apply
+    # the overlay here so the install this updater is about to relaunch is
+    # branded. Fully guarded: any failure leaves the update itself untouched.
+    function Invoke-JarvisRebrand([string]\$Root) {
+      try {
+        \$ov = @("\$env:LOCALAPPDATA\\hermes\\jarvis-agent",
+                "\$env:USERPROFILE\\.hermes\\jarvis-agent",
+                "\$env:USERPROFILE\\jarvis\\jarvis-agent") |
+               Where-Object { Test-Path (Join-Path \$_ "apply.sh") } | Select-Object -First 1
+        if (-not \$ov) { Write-HandoffLog "jarvis: no overlay checkout found; skipping re-brand"; return }
+        \$bash = @("\$env:ProgramFiles\\Git\\bin\\bash.exe",
+                  "\$env:LOCALAPPDATA\\Programs\\Git\\bin\\bash.exe") |
+                 Where-Object { Test-Path \$_ } | Select-Object -First 1
+        if (-not \$bash) { Write-HandoffLog "jarvis: no Git Bash found; skipping re-brand"; return }
+        \$env:HERMES_SRC = (\$Root -replace "\\\\", "/")
+        \$applySh = ((Join-Path \$ov "apply.sh") -replace "\\\\", "/")
+        Write-HandoffLog "jarvis: re-applying branding via \$applySh"
+        & \$bash \$applySh 2>&1 | ForEach-Object { Write-HandoffLog "jarvis: \$_" }
+        Write-HandoffLog "jarvis: re-brand exit \$LASTEXITCODE"
+      } catch {
+        Write-HandoffLog "jarvis: re-brand failed (\$(\$_.Exception.Message)); update itself is unaffected"
+      }
+    }
+    Invoke-JarvisRebrand \$InstallRoot
+
+PSX
+    }
+  ' "$ps1"
+  if grep -q 'Invoke-JarvisRebrand' "$ps1"; then
+    echo "  ✓ in-app updater patched to re-brand after updating"
+  else
+    echo "  ⚠ in-app updater patch did not apply — the in-app path stays unwrapped"
+    INAPP_PATCH_FAILED=1
+  fi
+}
+INAPP_PATCH_FAILED=0
+patch_inapp_updater
+
 # --- 3. Rewrite customer-visible strings ----------------------------------
 # One proven-safe profile applies every rule class from branding.map.
 rewrite() {

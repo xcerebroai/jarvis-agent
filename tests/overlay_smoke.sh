@@ -266,6 +266,32 @@ SU_PLAIN="$(HERMES_SRC=/nonexistent-tree bash "$SU/plain/update-jarvis.sh" 2>&1 
 chk "non-git checkout does NOT block" "echo \"\$SU_PLAIN\" | grep -q 'could not locate the Hermes source tree'"
 
 echo
+echo "== 14. in-app updater splash is branded =="
+# The updater splash is the LAST thing a user sees before the app restarts, and
+# it shipped unbranded for the whole 0.20.x line: window title "Hermes",
+# "Updating Hermes", "Hermes will open once done". It is served from the
+# CHECKOUT (scripts/desktop-update/ui.html in an Edge window, WinForms card in
+# windows.ps1) — not from downloaded pristine code — so the overlay can reach
+# it. tests/brand_scan.py cannot catch this class: it searches for "Hermes
+# Agent", and these strings are bare "Hermes".
+UI="$SRC/scripts/desktop-update/ui.html"
+PS1F="$SRC/scripts/desktop-update/windows.ps1"
+if [ -f "$UI" ]; then
+  chk "splash window title rebranded"   "grep -q '<title>JARVIS</title>' '$UI'"
+  chk "splash heading rebranded"        "grep -q 'Updating JARVIS' '$UI'"
+  chk "splash subtitle rebranded"       "grep -q 'JARVIS will open once done' '$UI'"
+  chk "no bare Hermes left in splash"   "! grep -qE '\\bHermes\\b' '$UI'"
+else
+  ok "splash ui.html absent on this upstream (skipped)"
+fi
+if [ -f "$PS1F" ]; then
+  chk "WinForms fallback card rebranded" "grep -q 'Updating JARVIS' '$PS1F'"
+  # Hermes.exe is a PROTECTED functional filename — the real binary name the
+  # updater starts. It must survive; rebranding it breaks the relaunch.
+  chk "Hermes.exe filename preserved"    "grep -q 'Hermes.exe' '$PS1F'"
+fi
+
+echo
 echo "──────────────────────────────────────────────"
 echo "  RESULT: $PASS passed, $FAIL failed"
 echo "──────────────────────────────────────────────"

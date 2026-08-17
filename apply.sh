@@ -680,13 +680,29 @@ for f in \
   optional-skills/finance/stocks/scripts/stocks_client.py \
   optional-skills/migration/openclaw-migration/scripts/openclaw_to_hermes.py \
   optional-skills/productivity/canvas/scripts/canvas_api.py \
-  skills/productivity/google-workspace/scripts/google_api.py; do
+  skills/productivity/google-workspace/scripts/google_api.py \
+  scripts/desktop-update/ui.html scripts/desktop-update/windows.ps1 \
+  scripts/desktop-update/posix.sh; do
   add "$SRC/$f"
 done
 # `hermes <verb> --help` descriptions: every subcommand module carries an
 # argparse help/description string with the brand in it.
 while IFS= read -r f; do FILES+=("$f"); done < <(
   find "$SRC/hermes_cli/subcommands" -maxdepth 1 -name '*.py' 2>/dev/null || true)
+
+# The SHIPPED dashboard bundle (hermes_cli/web_dist). This is what the web
+# dashboard actually serves — web/src is only its source. It is untracked build
+# output, so `git checkout --` during an update does NOT restore it and the
+# revert/re-apply cycle never covered it: upstream 0.20.2 shipped a fresh
+# pristine bundle and the dashboard's browser tab went back to reading
+# "Hermes Agent - Dashboard". Filenames carry a content hash, so match by glob.
+#
+# Safe to rebrand despite being minified: the [word] rule is boundary-guarded,
+# so standalone "Hermes" inside prose strings is rewritten while glued
+# identifiers (updateHermes — also [protect]ed — updatingHermes, HermesCLI)
+# cannot match.
+while IFS= read -r f; do FILES+=("$f"); done < <(
+  find "$SRC/hermes_cli/web_dist" \( -name '*.js' -o -name '*.html' \) 2>/dev/null || true)
 # Desktop (Electron) RENDERER (apps/desktop/src) — blanket-rebrand every file
 # that mentions the brand. Blanket-safe: the renderer has no functional
 # capitalized "Hermes" and no Hermes.app/.exe bundle paths (those live only in
@@ -855,7 +871,8 @@ scan() {
     # do not ship (see branding.map [protect]).
     hits="$(grep -nE '\bHermes\b|NOUS HERMES|HERMES AGENT' "$f" 2>/dev/null \
             | grep -vE 'X-Hermes-|HermesCLI|updateHermes|checkHermesUpdate|can_update_hermes' \
-            | grep -vE 'Hermes [34]\b' || true)"
+            | grep -vE 'Hermes [34]\b' \
+            | grep -vE 'Hermes\.(exe|app|icns|ico)|MacOS/Hermes' || true)"
     if [ -n "$hits" ]; then
       LEAKS=$(( LEAKS + $(printf '%s\n' "$hits" | grep -c .) ))
       echo "  ⚠ [$label] leak in ${f#"$SRC"/}:"
@@ -879,6 +896,25 @@ scan "cli/gateway"    \
   "$SRC/hermes_cli/commands.py"   "$SRC/hermes_cli/cli_commands_mixin.py" \
   "$SRC/gateway/platforms/whatsapp_common.py" "$SRC/cli.py" \
   "$SRC/hermes_cli/_startup_fast.py"
+
+# The in-app updater's own splash. This is the LAST thing a user sees before
+# the app restarts, and it ran unbranded for the whole 0.20.x line: window
+# title "Hermes", "Updating Hermes", "Hermes will open once done" — from
+# scripts/desktop-update/ui.html (served in an Edge window) and the WinForms
+# fallback card in windows.ps1.
+#
+# It is scanned HERE rather than left to tests/brand_scan.py because that
+# scanner deliberately searches for "Hermes Agent" — bare "Hermes" appears in
+# paths and identifiers everywhere, so it cannot be a needle there. This scan
+# greps \bHermes\b, which is exactly what catches this class. If upstream
+# reshapes the updater UI, this fails instead of shipping silently.
+scan "updater-ui" \
+  "$SRC/scripts/desktop-update/ui.html" \
+  "$SRC/scripts/desktop-update/windows.ps1" \
+  "$SRC/scripts/desktop-update/posix.sh"
+
+# The SHIPPED dashboard bundle — what the browser actually loads.
+scan "dashboard-dist" "$SRC/hermes_cli/web_dist/index.html"
 
 # Desktop renderer surfaces (i18n + intro) — pure visible strings.
 DESKI18N=(); while IFS= read -r f; do DESKI18N+=("$f"); done < <(

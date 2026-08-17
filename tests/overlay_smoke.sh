@@ -111,6 +111,40 @@ APPLY2="$(bash "$OVERLAY_DIR/apply.sh" 2>&1)"
 chk "2nd apply rewrote 0 file(s)"     "echo \"\$APPLY2\" | grep -q 'rewrote 0 file(s)'"
 
 echo
+echo "== 4b. SOUL.md seeding: pristine defaults replaced, customized preserved =="
+# Upstream's runtime seeds its default SOUL.md during install BEFORE the
+# overlay stage runs. ≤ v1.1.7 the seed-if-absent guard therefore never fired
+# and fresh installs kept the Hermes identity. Three contracts:
+#   (a) a SOUL.md matching this tree's live DEFAULT_SOUL_MD is replaced
+#   (b) the exact wording historical (≤ v1.1.7) installs left on disk is
+#       replaced via the pinned hash — the live constant is branded by now,
+#       so only the pin can catch it (this is the customer update path)
+#   (c) anything an operator wrote is never touched
+"$PY" - "$SRC/hermes_cli/default_soul.py" "$HOME_DIR/SOUL.md" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("_ds", sys.argv[1])
+mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)
+open(sys.argv[2], "w", encoding="utf-8").write(mod.DEFAULT_SOUL_MD)
+PY
+SOUL_A="$(bash "$OVERLAY_DIR/apply.sh" 2>&1)"
+chk "live tree default replaced by persona"    "cmp -s '$HOME_DIR/SOUL.md' '$OVERLAY_DIR/persona/JARVIS.md'"
+chk "replacement was reported"                 "echo \"\$SOUL_A\" | grep -q 'replaced pristine upstream default'"
+
+# (b) the on-disk wording every ≤ v1.1.7 install carries (a test fixture —
+# allowlisted in branding-known-ok.txt, never shipped to a customer surface).
+cat > "$HOME_DIR/SOUL.md" <<'FIXTURE'
+You are Hermes Agent, an intelligent AI assistant created by Nous Research. You are helpful, knowledgeable, and direct. You assist users with a wide range of tasks including answering questions, writing and editing code, analyzing information, creative work, and executing actions via your tools. You communicate clearly, admit uncertainty when appropriate, and prioritize being genuinely useful over being verbose unless otherwise directed below. Be targeted and efficient in your exploration and investigations.
+FIXTURE
+bash "$OVERLAY_DIR/apply.sh" >/dev/null 2>&1
+chk "≤v1.1.7 on-disk default replaced (pinned hash)" "cmp -s '$HOME_DIR/SOUL.md' '$OVERLAY_DIR/persona/JARVIS.md'"
+
+# (c) operator work is sacred.
+printf 'You are ATLAS, a fully customized persona the operator wrote.\n' > "$HOME_DIR/SOUL.md"
+SOUL_C="$(bash "$OVERLAY_DIR/apply.sh" 2>&1)"
+chk "customized SOUL left untouched"           "grep -q 'You are ATLAS' '$HOME_DIR/SOUL.md'"
+chk "preservation was reported"                "echo \"\$SOUL_C\" | grep -q 'customized by operator (left as-is)'"
+
+echo
 echo "== 5. protected identifiers preserved =="
 chk "X-Hermes-Session-Token intact"   "grep -q 'X-Hermes-Session-Token' '$SRC/hermes_cli/web_server.py'"
 chk "updateHermes identifier intact"  "grep -q 'updateHermes' '$SRC/web/src/App.tsx'"

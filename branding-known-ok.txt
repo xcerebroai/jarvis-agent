@@ -128,3 +128,18 @@ acp_registry/agent.json	Hermes Agent
 # The dashboard OAuth setup error names Nous's identity provider (the service
 # you actually register with), not our product.
 plugins/dashboard_auth/nous/__init__.py	Hermes Agent
+
+# "Nous Portal" is the real third-party login/billing service the customer
+# holds an account with (owner decision 2026-08-17, same principle as the
+# Moonshot/Kimi provider names and the ACP manifest): renaming it would
+# misdirect customers about whose account they are using. Not a scanner
+# needle today — recorded so a future needle widening does not "fix" it.
+hermes_cli/auth.py	Nous Portal
+hermes_cli/models.py	Nous Portal
+hermes_cli/providers.py	Nous Portal
+hermes_cli/cli_billing_mixin.py	Nous Portal
+
+# tests/overlay_smoke.sh embeds the exact SOUL.md wording upstream's runtime
+# seeded in ≤ v1.1.7 installs, as the fixture proving apply.sh replaces a
+# pristine default (pinned-hash path). Test-only; never a customer surface.
+tests/overlay_smoke.sh	Hermes Agent

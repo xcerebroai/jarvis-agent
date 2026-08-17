@@ -406,14 +406,63 @@ mkdir -p "$HERMES_HOME/skins"
 cp -f "$OVERLAY_DIR/skins/jarvis.yaml" "$HERMES_HOME/skins/jarvis.yaml"
 echo "  ✓ skin    -> $HERMES_HOME/skins/jarvis.yaml"
 
-# Seed the JARVIS persona as SOUL.md — but ONLY if absent, so re-applying
-# after an update never clobbers an operator's customized SOUL.md.
+# Seed the JARVIS persona as SOUL.md. Absent -> seed. Present -> replace ONLY
+# when provably pristine: upstream's runtime writes its default SOUL.md during
+# install BEFORE this overlay stage runs (≤ v1.1.7 shipped that race, so fresh
+# installs introduced themselves as Hermes), which means "already present" does
+# not imply "the operator wrote it". Pristine = normalized content matches a
+# known upstream default: a pinned hash of the wording historical installers
+# left behind, or the live DEFAULT_SOUL_MD / legacy templates in this tree's
+# hermes_cli/default_soul.py. Anything else is operator work — never touched.
+# No python -> can't prove pristine -> preserve (the safe failure).
 if [ -f "$OVERLAY_DIR/persona/JARVIS.md" ]; then
+  SOUL_PY="$(resolve_python || true)"
+  SOUL_SEED=""
   if [ ! -f "$HERMES_HOME/SOUL.md" ]; then
+    SOUL_SEED="seeded"
+  elif [ -n "$SOUL_PY" ] && SOUL_PATH="$HERMES_HOME/SOUL.md" \
+       DEFAULT_SOUL_SRC="$SRC/hermes_cli/default_soul.py" "$SOUL_PY" - <<'PY'
+import hashlib, importlib.util, os, sys
+
+def norm(s):
+    return "\n".join(l.rstrip() for l in s.replace("\r\n", "\n").strip().split("\n"))
+
+try:
+    soul = open(os.environ["SOUL_PATH"], encoding="utf-8", errors="replace").read()
+except OSError:
+    sys.exit(1)
+
+# Normalized sha256 of the default every installer ≤ v1.1.7 left behind
+# (upstream runtime wording as of hermes-agent 51de5c9). Pinned so the
+# v1.1.7 -> v1.1.8 update path replaces it even though the live tree's
+# constant has been branded to JARVIS by then and no longer matches.
+PINNED = {
+    "2765a846e1bb371d78d3b93b403dfb0f8d1ba1a9895edb5f608367abfe81194d",
+}
+if hashlib.sha256(norm(soul).encode("utf-8")).hexdigest() in PINNED:
+    sys.exit(0)
+
+# The live default + legacy scaffolds from this tree — covers upstream
+# rewording the default faster than we re-pin. Loaded straight from the file
+# to avoid importing the hermes_cli package (heavy, side-effectful).
+try:
+    spec = importlib.util.spec_from_file_location("_ds", os.environ["DEFAULT_SOUL_SRC"])
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+except Exception:
+    sys.exit(1)
+if norm(soul) == norm(mod.DEFAULT_SOUL_MD) or mod.is_legacy_template_soul(soul):
+    sys.exit(0)
+sys.exit(1)
+PY
+  then
+    SOUL_SEED="replaced pristine upstream default"
+  fi
+  if [ -n "$SOUL_SEED" ]; then
     cp -f "$OVERLAY_DIR/persona/JARVIS.md" "$HERMES_HOME/SOUL.md"
-    echo "  ✓ persona -> $HERMES_HOME/SOUL.md (seeded)"
+    echo "  ✓ persona -> $HERMES_HOME/SOUL.md ($SOUL_SEED)"
   else
-    echo "  · persona -> $HERMES_HOME/SOUL.md already present (left as-is)"
+    echo "  · persona -> $HERMES_HOME/SOUL.md customized by operator (left as-is)"
   fi
 fi
 

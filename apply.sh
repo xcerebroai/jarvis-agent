@@ -232,6 +232,22 @@ verify_shipped_bundle() {  # <.app bundle or *-unpacked dir>
       rc=1
     fi
   fi
+  # macOS menu-bar name: the app menu title comes from the LOCALIZED
+  # CFBundleName (en.lproj/InfoPlist.strings), which extraResources ships into
+  # Contents/Resources. The raw Info.plist CFBundleName must stay "Hermes"
+  # (helper lookup), so WITHOUT this file the menu bar reads "Hermes" beside a
+  # fully branded window — the macOS analog of the window-title leak.
+  if [ "$res" = "$app/Contents/Resources" ]; then
+    if [ -f "$res/en.lproj/InfoPlist.strings" ]; then
+      grep -q 'CFBundleName = "JARVIS"' "$res/en.lproj/InfoPlist.strings" 2>/dev/null || {
+        echo "  ⚠ $name ships en.lproj/InfoPlist.strings without CFBundleName=JARVIS — menu bar reads Hermes"
+        rc=1
+      }
+    else
+      echo "  ⚠ $name has no en.lproj/InfoPlist.strings — macOS menu bar reads Hermes"
+      rc=1
+    fi
+  fi
   # Runtime dock/window icon: electron/main.ts APP_ICON_PATHS feeds the packed
   # dist/apple-touch-icon.png to app.dock.setIcon() — the bundle's icon.icns
   # being JARVIS does NOT cover this; a pristine copy here means the RUNNING
@@ -994,6 +1010,82 @@ if [ ${#DESK_CFG[@]} -gt 0 ]; then
   fi
 fi
 
+# --- 3c. macOS menu-bar name (localized CFBundleName) ----------------------
+# The macOS app menu takes its title from the bundle's LOCALIZED CFBundleName
+# (Resources/en.lproj/InfoPlist.strings), while Electron's helper-app lookup
+# reads the RAW Info.plist value. CFBundleName must stay "Hermes" for that
+# lookup (see rewrite_desktop_config above), so the menu bar read "Hermes"
+# beside a fully branded window. A localized override renames the menu
+# without touching what Chromium resolves: display changes, lookup does not.
+if [ -d "$SRC/apps/desktop" ]; then
+  mkdir -p "$SRC/apps/desktop/build/en.lproj"
+  _lproj="$SRC/apps/desktop/build/en.lproj/InfoPlist.strings"
+  printf 'CFBundleName = "JARVIS";\nCFBundleDisplayName = "JARVIS";\n' > "$_lproj.tmp"
+  if ! cmp -s "$_lproj.tmp" "$_lproj" 2>/dev/null; then
+    mv -f "$_lproj.tmp" "$_lproj"
+    echo "  ✓ menu-bar name: build/en.lproj/InfoPlist.strings -> JARVIS"
+  else
+    rm -f "$_lproj.tmp"
+  fi
+  # Ship it: extraResources lands in Contents/Resources on macOS. Idempotent —
+  # a no-op when the entry is already in package.json.
+  if [ -n "$PY" ] && [ -f "$DESK_PKG" ]; then
+    "$PY" - "$DESK_PKG" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+pkg = json.load(open(path, encoding="utf-8"))
+extra = pkg.setdefault("build", {}).setdefault("extraResources", [])
+entry = {"from": "build/en.lproj", "to": "en.lproj"}
+if entry not in extra:
+    extra.append(entry)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(pkg, fh, indent=2, ensure_ascii=False)
+        fh.write("\n")
+    print("  ✓ menu-bar name: extraResources ships en.lproj into the bundle")
+PYEOF
+  fi
+fi
+
+# --- 3d. Updater-splash brand mark ------------------------------------------
+# The splash's animated loader is upstream's signature Fourier-curve mark —
+# the TEXT was branded in v1.1.5 but the glyph still read as upstream's.
+# Swap the svg mount for the JARVIS mark (data-URI, offline-safe) with a CSS
+# pulse. Guarded on the upstream mount line, so it is idempotent and simply
+# skips (verify below flags it) if upstream reshapes the splash.
+_splash="$SRC/scripts/desktop-update/ui.html"
+_mark_png=""
+for _p in "$OVERLAY_DIR/installer/assets/icons/128x128.png" \
+          "$OVERLAY_DIR/installer/assets/icons/icon-512.png"; do
+  [ -f "$_p" ] && { _mark_png="$_p"; break; }
+done
+if [ -f "$_splash" ] && [ -n "$_mark_png" ] && [ -n "$PY" ] \
+   && grep -q "appendChild(svg)" "$_splash"; then
+  "$PY" - "$_splash" "$_mark_png" <<'PYEOF'
+import base64, sys
+path, png = sys.argv[1], sys.argv[2]
+s = open(path, encoding="utf-8").read()
+b64 = base64.b64encode(open(png, "rb").read()).decode()
+anchor = ".wrap { animation: hermes-fade-in 0.45s ease-out both; }"
+pulse = (anchor
+         + "\n  /* jarvis-splash-mark */"
+         + "\n  #loader img { width: 100%; height: 100%; object-fit: contain;"
+         + " animation: jarvis-pulse 2.2s ease-in-out infinite; }"
+         + "\n  @keyframes jarvis-pulse { 0%, 100% { opacity: .55;"
+         + " transform: scale(.96); } 50% { opacity: 1; transform: scale(1); } }")
+if "jarvis-splash-mark" not in s:
+    s = s.replace(anchor, pulse, 1)
+mount = "document.getElementById('loader').appendChild(svg)"
+mark = ("{ const mark = document.createElement('img'); mark.alt = ''; "
+        "mark.src = 'data:image/png;base64," + b64 + "'; "
+        "document.getElementById('loader').appendChild(mark) }")
+s = s.replace(mount, mark, 1)
+s = s.replace("render(performance.now())",
+              "/* svg loader not mounted: JARVIS mark pulses via CSS */", 1)
+open(path, "w", encoding="utf-8").write(s)
+print("  ✓ splash: upstream loader glyph -> JARVIS mark")
+PYEOF
+fi
+
 # --- 4. Verify pass -------------------------------------------------------
 # Grep EVERY customer-visible surface for a surviving standalone brand token.
 # Locale files (dashboard i18n + chat catalogs) are pure visible strings, so
@@ -1083,6 +1175,20 @@ if [ -f "$DESK_PKG" ]; then
   grep -q '"productName": "Hermes"'         "$DESK_PKG" || cfg_bad "productName changed from Hermes — bundle/updater name drift!"
   grep -q '"executableName": "Hermes"'      "$DESK_PKG" || cfg_bad "executableName changed from Hermes — updater relaunch will break!"
   grep -q "|| 'JARVIS'" "$SRC/apps/desktop/electron/main.ts" 2>/dev/null || cfg_bad "main.ts APP_NAME default not rebranded to JARVIS"
+  if grep -q '"Hermes uses the camera' "$DESK_PKG"; then
+    cfg_bad "camera permission text still says Hermes (visible macOS permission dialog)"
+  fi
+  grep -q '"to": "en.lproj"' "$DESK_PKG" || cfg_bad "extraResources missing en.lproj — macOS menu bar will read Hermes"
+  if [ -f "$SRC/apps/desktop/build/en.lproj/InfoPlist.strings" ]; then
+    grep -q 'CFBundleName = "JARVIS"' "$SRC/apps/desktop/build/en.lproj/InfoPlist.strings" \
+      || cfg_bad "InfoPlist.strings present but CFBundleName is not JARVIS"
+  else
+    cfg_bad "build/en.lproj/InfoPlist.strings missing — macOS menu bar will read Hermes"
+  fi
+  if [ -f "$SRC/scripts/desktop-update/ui.html" ]; then
+    grep -q 'jarvis-splash-mark' "$SRC/scripts/desktop-update/ui.html" \
+      || cfg_bad "updater splash still mounts upstream's loader glyph"
+  fi
 fi
 
 if [ "$LEAKS" -gt 0 ]; then

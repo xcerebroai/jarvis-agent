@@ -210,8 +210,11 @@ echo "== 12. packaged-app helper integrity (macOS launch crash guard) =="
 FAKE="$WORK/fake-src"
 FAPP="$FAKE/apps/desktop/release/mac-arm64/Hermes.app/Contents"
 mkdir -p "$FAPP/Frameworks/Hermes Helper.app" "$FAPP/Frameworks/Hermes Helper (GPU).app" \
-         "$FAPP/Resources/app.asar.unpacked/dist"
+         "$FAPP/Resources/app.asar.unpacked/dist" "$FAPP/Resources/en.lproj"
 printf 'const W="JARVIS";' > "$FAPP/Resources/app.asar.unpacked/dist/app.js"
+# A correctly built bundle ships the localized menu-bar name (v1.1.10) —
+# without it verify_shipped_bundle rightly fails the macOS menu-bar check.
+printf 'CFBundleName = "JARVIS";\n' > "$FAPP/Resources/en.lproj/InfoPlist.strings"
 mk_plist() {  # <CFBundleName>
   printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleName</key><string>%s</string></dict></plist>\n' "$1" > "$FAPP/Info.plist"
 }
@@ -227,6 +230,16 @@ if HERMES_SRC="$FAKE" bash "$OVERLAY_DIR/apply.sh" --verify-build "$FAKE" >/dev/
 else
   ok "CFBundleName/helper drift is caught"
 fi
+# v1.1.10: a mac bundle without the localized menu-bar name must be caught —
+# that is exactly the "menu bar reads Hermes" leak shipping silently.
+mk_plist "Hermes"
+rm -f "$FAPP/Resources/en.lproj/InfoPlist.strings"
+if HERMES_SRC="$FAKE" bash "$OVERLAY_DIR/apply.sh" --verify-build "$FAKE" >/dev/null 2>&1; then
+  bad "missing menu-bar lproj is caught"
+else
+  ok "missing menu-bar lproj is caught"
+fi
+printf 'CFBundleName = "JARVIS";\n' > "$FAPP/Resources/en.lproj/InfoPlist.strings"
 # A shipped bundle whose packed renderer is pristine (built from an unbranded
 # tree — the 2026-07-16 regression) must be caught even when the tree is fine.
 mk_plist "Hermes"
@@ -338,6 +351,15 @@ if [ -f "$UI" ]; then
   chk "splash heading rebranded"        "grep -q 'Updating JARVIS' '$UI'"
   chk "splash subtitle rebranded"       "grep -q 'JARVIS will open once done' '$UI'"
   chk "no bare Hermes left in splash"   "! grep -qE '\\bHermes\\b' '$UI'"
+  # The glyph, not just the text: upstream's Fourier-curve loader is its brand
+  # mark. apply.sh swaps the svg mount for the JARVIS mark (data-URI + pulse).
+  chk "splash glyph is the JARVIS mark"  "grep -q 'jarvis-splash-mark' '$UI'"
+  chk "upstream loader glyph unmounted"  "! grep -q 'appendChild(svg)' '$UI'"
+  # macOS menu-bar name: localized CFBundleName override must be staged and
+  # shipped via extraResources (raw CFBundleName stays Hermes for helpers).
+  chk "menu-bar InfoPlist.strings staged" "grep -q 'CFBundleName = \"JARVIS\"' '$SRC/apps/desktop/build/en.lproj/InfoPlist.strings'"
+  chk "extraResources ships en.lproj"     "grep -q '\"to\": \"en.lproj\"' '$SRC/apps/desktop/package.json'"
+  chk "camera permission text rebranded"  "! grep -q '\"Hermes uses the camera' '$SRC/apps/desktop/package.json'"
 else
   ok "splash ui.html absent on this upstream (skipped)"
 fi

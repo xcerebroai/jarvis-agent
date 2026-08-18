@@ -56,7 +56,21 @@ self_update_overlay() {
   echo "◆ JARVIS — checking for overlay updates"
   out="$(git -C "$OVERLAY_DIR" fetch --quiet origin 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ]; then
-    out="$(git -C "$OVERLAY_DIR" pull --ff-only --quiet 2>&1)" || rc=$?
+    if git -C "$OVERLAY_DIR" symbolic-ref --short -q HEAD >/dev/null; then
+      out="$(git -C "$OVERLAY_DIR" pull --ff-only --quiet 2>&1)" || rc=$?
+    else
+      # Installer-provisioned checkouts sit DETACHED at the release's pinned
+      # overlay commit (JARVIS_OVERLAY_REF): right at install time (apply the
+      # exact tested overlay), fatal at update time — `git pull` cannot
+      # advance a detached HEAD, so those machines never received another
+      # overlay fix (found live: a v1.1.7 install still ran the old apply.sh
+      # after `jarvis update`). Fetch main explicitly (the pin may have been
+      # fetched with a narrow refspec) and move onto it.
+      out="$(git -C "$OVERLAY_DIR" fetch --quiet origin main 2>&1)" || rc=$?
+      if [ "$rc" -eq 0 ]; then
+        out="$(git -C "$OVERLAY_DIR" checkout -q -B main FETCH_HEAD 2>&1)" || rc=$?
+      fi
+    fi
   fi
 
   if [ "$rc" -ne 0 ]; then
@@ -277,7 +291,10 @@ built_src=0
 if [ -d "$DESK_RELEASE" ] && { ls -d "$DESK_RELEASE"/*-unpacked >/dev/null 2>&1 || ls -d "$DESK_RELEASE"/mac* >/dev/null 2>&1; }; then
   echo
   echo "◆ Rebuilding JARVIS desktop — this takes a few minutes, don't close."
-  if "$UPDATER" desktop --build-only "${@:2}"; then
+  # No user flags forwarded: `--yes` etc. belong to the `hermes update` step,
+  # and `hermes desktop` rejects unknown arguments — forwarding them failed
+  # the whole rebuild with an argparse usage error.
+  if "$UPDATER" desktop --build-only; then
     echo "  ✓ desktop rebuilt from JARVIS-branded source"
     built_src=1
   else

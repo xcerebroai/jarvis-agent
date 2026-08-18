@@ -261,7 +261,9 @@ mkdir -p "$SU" && ( cd "$SU"
   # The "installed" checkout, then origin moves ahead with a marked build.
   git clone -q -b main origin.git checkout 2>/dev/null
   cd seed
-  sed -i '2i echo "SELFUPDATE-NEW-VERSION-RAN"' update-jarvis.sh
+  # awk, not `sed -i '2i ...'`: BSD sed rejects that syntax, which made these
+  # checks fail on every Mac while passing in CI.
+  awk 'NR==2{print "echo \"SELFUPDATE-NEW-VERSION-RAN\""}1' update-jarvis.sh > u.tmp && mv u.tmp update-jarvis.sh
   git add -A
   git -c user.email=t@t -c user.name=t commit -qm bump
   git push -q origin HEAD:main
@@ -272,6 +274,27 @@ chk "stale checkout is pulled"        "echo \"\$SU_OUT\" | grep -q 'overlay upda
 chk "re-execs into the new version"   "echo \"\$SU_OUT\" | grep -q 'SELFUPDATE-NEW-VERSION-RAN'"
 chk "re-execs exactly once (no loop)" "[ \"\$(echo \"\$SU_OUT\" | grep -c 'SELFUPDATE-NEW-VERSION-RAN')\" -eq 1 ]"
 chk "proceeds past self-update"       "echo \"\$SU_OUT\" | grep -q 'could not locate the Hermes source tree'"
+
+# Installer-provisioned machines are DETACHED at the release's pinned overlay
+# commit. `git pull` cannot advance a detached HEAD, so before the fix these
+# machines silently never received another overlay update (a live v1.1.7
+# install still ran the old apply.sh after `jarvis update`). Simulate: detach
+# the checkout at the stale commit, move origin ahead, run — the script must
+# land on origin's main and re-exec into the new version.
+( cd "$SU"
+  git clone -q -b main origin.git detached 2>/dev/null
+  git -C detached checkout -q --detach HEAD
+  git -C detached branch -q -D main
+  cd seed
+  awk 'NR==2{print "echo \"SELFUPDATE-DETACHED-RAN\""}1' update-jarvis.sh > u.tmp && mv u.tmp update-jarvis.sh
+  git add -A
+  git -c user.email=t@t -c user.name=t commit -qm detached-bump
+  git push -q origin HEAD:main
+) >/dev/null 2>&1
+SU_DET="$(HERMES_SRC=/nonexistent-tree bash "$SU/detached/update-jarvis.sh" 2>&1 || true)"
+chk "detached (installer-pinned) checkout is advanced" "echo \"\$SU_DET\" | grep -q 'overlay updated'"
+chk "detached checkout re-execs into the new version"  "echo \"\$SU_DET\" | grep -q 'SELFUPDATE-DETACHED-RAN'"
+chk "detached checkout lands on main"                  "[ \"\$(git -C \"$SU/detached\" symbolic-ref --short -q HEAD)\" = main ]"
 
 # Guard: with JARVIS_SELF_UPDATED set it must not fetch, pull or re-exec — this
 # is what stops a bad commit putting a machine in a fetch/exec loop.

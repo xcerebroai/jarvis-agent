@@ -197,6 +197,15 @@ pristine.
   (`voice.realtime.review_projects.index_path`); it is omitted entirely when
   unconfigured.
 
+## Appearance default
+
+Fresh JARVIS desktop installs use the built-in **JARVIS** skin automatically:
+deep black surfaces with electric-blue accents. The palette is available in
+Settings → Appearance and paints on the first frame. Existing user-selected
+themes and per-profile overrides remain unchanged and continue to persist.
+Settings → **Reset to defaults** clears those theme overrides and restores the
+JARVIS skin. If a stored theme is missing or invalid, JARVIS is the safe fallback.
+
 ## Testing & CI
 
 `tests/overlay_smoke.sh` clones upstream Hermes into a throwaway home, applies

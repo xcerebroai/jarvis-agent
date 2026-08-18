@@ -191,6 +191,13 @@ if [ -f "$FEATURE_REVERT" ] && git -C "$SRC" rev-parse --is-inside-work-tree >/d
     || echo "  ⚠ realtime-voice revert reported an issue; continuing (apply.sh re-applies after)."
 fi
 
+APPEARANCE_REVERT="$OVERLAY_DIR/features/jarvis-appearance/apply-feature.sh"
+if [ -f "$APPEARANCE_REVERT" ] && git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "  → reverting JARVIS appearance feature before update…"
+  HERMES_SRC="$SRC" HERMES_HOME="$HERMES_HOME" bash "$APPEARANCE_REVERT" revert "$SRC" \
+    || echo "  ⚠ JARVIS appearance revert reported an issue; continuing."
+fi
+
 # Per-tree manifest (must match apply.sh's manifest_name): the ACTIVE root
 # keeps legacy "branded-files.txt" (the installer's injected pre-update
 # revert hardcodes it); other trees are path-keyed. Fall back to the legacy

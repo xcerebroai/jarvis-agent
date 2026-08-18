@@ -1,0 +1,170 @@
+diff --git a/apps/desktop/src/app/settings/index.tsx b/apps/desktop/src/app/settings/index.tsx
+index dddfe74..91a5ec5 100644
+--- a/apps/desktop/src/app/settings/index.tsx
++++ b/apps/desktop/src/app/settings/index.tsx
+@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils'
+ import { $commandPaletteOpen, openCommandPalettePage } from '@/store/command-palette'
+ import { bindingsFor } from '@/store/keybinds'
+ import { notifyError } from '@/store/notifications'
++import { resetSkinPreferences } from '@/themes/context'
+ 
+ import { useRouteEnumParam } from '../hooks/use-route-enum-param'
+ import { OverlayIconButton } from '../overlays/overlay-chrome'
+@@ -153,6 +154,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
+ 
+     try {
+       await saveHermesConfig(await getHermesConfigDefaults())
++      resetSkinPreferences()
+       triggerHaptic('success')
+       onConfigSaved?.()
+     } catch (err) {
+diff --git a/apps/desktop/src/themes/context.tsx b/apps/desktop/src/themes/context.tsx
+index 2091593..71f6a20 100644
+--- a/apps/desktop/src/themes/context.tsx
++++ b/apps/desktop/src/themes/context.tsx
+@@ -69,6 +69,14 @@ const profilePref = <T extends string>(record: string, legacy: string, normalize
+ export const skinPref = profilePref(PROFILE_SKINS_KEY, SKIN_KEY, normalizeSkin)
+ export const modePref = profilePref(PROFILE_MODES_KEY, MODE_KEY, normalizeMode)
+ 
++/** Reset every profile's skin assignment to the product default. */
++export function resetSkinPreferences(): void {
++  if (typeof window === 'undefined') return
++  window.localStorage.removeItem(SKIN_KEY)
++  window.localStorage.removeItem(PROFILE_SKINS_KEY)
++  window.dispatchEvent(new StorageEvent('storage'))
++}
++
+ /** Everything a peer window could change that this one has to repaint for. */
+ const APPEARANCE_KEYS = new Set([SKIN_KEY, PROFILE_SKINS_KEY, MODE_KEY, PROFILE_MODES_KEY])
+ 
+diff --git a/apps/desktop/src/themes/presets.test.ts b/apps/desktop/src/themes/presets.test.ts
+index 9cb1b86..82d2c55 100644
+--- a/apps/desktop/src/themes/presets.test.ts
++++ b/apps/desktop/src/themes/presets.test.ts
+@@ -1,6 +1,6 @@
+ import { describe, expect, it } from 'vitest'
+ 
+-import { BUILTIN_THEME_LIST, DEFAULT_TYPOGRAPHY, EMOJI_FALLBACK } from './presets'
++import { BUILTIN_THEME_LIST, DEFAULT_SKIN_NAME, DEFAULT_TYPOGRAPHY, EMOJI_FALLBACK, jarvisTheme } from './presets'
+ 
+ // #40364: none of the UI text/mono fonts carry emoji glyphs, so every font
+ // stack must end with a color-emoji fallback or emoji render as tofu on
+@@ -31,3 +31,17 @@ describe('theme typography emoji fallback (#40364)', () => {
+     expect(EMOJI_FALLBACK).toContain('Noto Color Emoji')
+   })
+ })
++
++describe('JARVIS product theme', () => {
++  it('is the built-in fallback with complete core styling', () => {
++    expect(DEFAULT_SKIN_NAME).toBe('jarvis')
++    expect(BUILTIN_THEME_LIST[0]).toBe(jarvisTheme)
++    expect(jarvisTheme.colors).toMatchObject({
++      background: '#05070B',
++      foreground: '#D9E6F2',
++      primary: '#3B82F6',
++      sidebarBackground: '#03050A',
++      userBubble: '#0B1A30'
++    })
++  })
++})
+diff --git a/apps/desktop/src/themes/presets.ts b/apps/desktop/src/themes/presets.ts
+index 4643818..c22da37 100644
+--- a/apps/desktop/src/themes/presets.ts
++++ b/apps/desktop/src/themes/presets.ts
+@@ -23,6 +23,40 @@ const NOUS_BLUE = '#0053FD'
+ const PSYCHE_BLUE = '#1540B1'
+ const PSYCHE_WARM = '#FFE6CB'
+ 
++/** JARVIS — product default for the white-label JARVIS distribution. */
++export const jarvisTheme: DesktopTheme = {
++  name: 'jarvis',
++  label: 'JARVIS',
++  description: 'Deep black surfaces with electric blue accents',
++  colors: {
++    background: '#05070B',
++    foreground: '#D9E6F2',
++    card: '#0A0F16',
++    cardForeground: '#D9E6F2',
++    muted: '#111826',
++    mutedForeground: '#7A8CA3',
++    popover: '#0A0F16',
++    popoverForeground: '#D9E6F2',
++    primary: '#3B82F6',
++    primaryForeground: '#EFF6FF',
++    secondary: '#1E3A5F',
++    secondaryForeground: '#D9E6F2',
++    accent: '#60A5FA',
++    accentForeground: '#05070B',
++    border: '#1E3A5F',
++    input: '#111826',
++    ring: '#3B82F6',
++    midground: '#3B82F6',
++    composerRing: '#3B82F6',
++    destructive: '#EF4444',
++    destructiveForeground: '#FEE2E2',
++    sidebarBackground: '#03050A',
++    sidebarBorder: '#162A46',
++    userBubble: '#0B1A30',
++    userBubbleBorder: '#1E4E86'
++  }
++}
++
+ const nousTint = (pct: number) => `color-mix(in srgb, ${NOUS_BLUE} ${pct}%, #FFFFFF)`
+ const nousTintTransparent = (pct: number) => `color-mix(in srgb, ${NOUS_BLUE} ${pct}%, transparent)`
+ 
+@@ -277,6 +311,7 @@ export const slateTheme: DesktopTheme = {
+ }
+ 
+ export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
++  jarvis: jarvisTheme,
+   nous: nousTheme,
+   midnight: midnightTheme,
+   ember: emberTheme,
+@@ -288,4 +323,4 @@ export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
+ export const BUILTIN_THEME_LIST = Object.values(BUILTIN_THEMES)
+ 
+ /** Skin used when nothing is persisted or the persisted name is retired. */
+-export const DEFAULT_SKIN_NAME = 'nous'
++export const DEFAULT_SKIN_NAME = 'jarvis'
+diff --git a/apps/desktop/src/themes/profile-theme.test.ts b/apps/desktop/src/themes/profile-theme.test.ts
+index ce4a46d..8e25367 100644
+--- a/apps/desktop/src/themes/profile-theme.test.ts
++++ b/apps/desktop/src/themes/profile-theme.test.ts
+@@ -1,6 +1,6 @@
+ import { beforeEach, describe, expect, it } from 'vitest'
+ 
+-import { modePref, skinPref } from './context'
++import { modePref, resetSkinPreferences, skinPref } from './context'
+ import { DEFAULT_SKIN_NAME } from './presets'
+ 
+ // Skin and mode share one per-profile contract, so assert it once over both.
+@@ -46,3 +46,29 @@ describe.each(cases)('per-profile $name', ({ pref, fallback, a, b, junk }) => {
+     expect(pref.resolve('work')).toBe(fallback)
+   })
+ })
++
++describe('JARVIS skin default', () => {
++  beforeEach(() => window.localStorage.clear())
++
++  it('is used for first launch and invalid persisted values', () => {
++    expect(DEFAULT_SKIN_NAME).toBe('jarvis')
++    expect(skinPref.resolve('default')).toBe('jarvis')
++    window.localStorage.setItem('hermes-desktop-theme-v2', 'missing-theme')
++    expect(skinPref.resolve('default')).toBe('jarvis')
++  })
++
++  it('does not override valid global or per-profile user choices', () => {
++    skinPref.assign('default', 'midnight')
++    skinPref.assign('work', 'ember')
++    expect(skinPref.resolve('default')).toBe('midnight')
++    expect(skinPref.resolve('work')).toBe('ember')
++  })
++
++  it('restores JARVIS when settings are reset to defaults', () => {
++    skinPref.assign('default', 'midnight')
++    skinPref.assign('work', 'ember')
++    resetSkinPreferences()
++    expect(skinPref.resolve('default')).toBe('jarvis')
++    expect(skinPref.resolve('work')).toBe('jarvis')
++  })
++})

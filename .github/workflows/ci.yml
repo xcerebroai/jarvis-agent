@@ -24,7 +24,8 @@ jobs:
             installer/brand-installer.sh installer/inject-overlay-stage.sh installer/gen-icons.sh \
             installer/overlay-stage/jarvis-overlay.sh \
             features/realtime-voice/apply-feature.sh tests/feature_realtime_voice.sh \
-            features/jarvis-appearance/apply-feature.sh tests/feature_jarvis_appearance.sh
+            features/jarvis-appearance/apply-feature.sh tests/feature_jarvis_appearance.sh \
+            tests/smoke_guard.sh
 
       - name: Validate skin YAML + branding.map + banner (no third-party deps)
         run: |
@@ -106,14 +107,23 @@ jobs:
       - name: Install pyyaml
         run: python3 -m pip install --quiet pyyaml
 
-      - name: Run overlay smoke test
-        run: bash tests/overlay_smoke.sh
+      # Run every suite behind the PATH tripwire (tests/smoke_guard.sh). A test
+      # suite that can mutate the host on a quoting slip needs a guard, not just
+      # a fix for the one slip: section 16's heading once contained backticks
+      # inside double quotes, so PRINTING the title executed a real
+      # `jarvis update` and de-branded a live install. The guard shadows
+      # jarvis/hermes on PATH and fails the build if any suite reaches for them.
+      - name: Tripwire self-test (the guard must actually trip)
+        run: bash tests/smoke_guard.sh --self-test
+
+      - name: Run overlay smoke test (tripwire armed)
+        run: bash tests/smoke_guard.sh tests/overlay_smoke.sh
 
       - name: Realtime voice feature layer (apply/idempotency/revert/drift/secrets)
-        run: bash tests/feature_realtime_voice.sh
+        run: bash tests/smoke_guard.sh tests/feature_realtime_voice.sh
 
       - name: JARVIS appearance default (apply/idempotency/revert/drift)
-        run: bash tests/feature_jarvis_appearance.sh
+        run: bash tests/smoke_guard.sh tests/feature_jarvis_appearance.sh
 
       - name: apply.sh survives a curated file the tree does not have
         run: |

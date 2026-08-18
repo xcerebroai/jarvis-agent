@@ -160,6 +160,22 @@ if [ -z "$SRC" ] || [ ! -d "$SRC" ]; then
 fi
 SRC="$(cd "$SRC" && pwd)"
 
+# Locate the packaged desktop executable for this platform, if one exists.
+# Used both to snapshot "was there a launchable app before the update" and to
+# assert there still is one afterwards.
+packaged_desktop_exe() {
+  local rel="$1/apps/desktop/release" c
+  for c in "$rel"/mac*/JARVIS.app/Contents/MacOS/* "$rel"/mac*/Hermes.app/Contents/MacOS/*            "$rel/win-unpacked/Hermes.exe" "$rel/win-ia32-unpacked/Hermes.exe"            "$rel/win-arm64-unpacked/Hermes.exe"            "$rel/linux-unpacked/hermes" "$rel/linux-unpacked/Hermes"; do
+    [ -e "$c" ] && { printf '%s
+' "$c"; return 0; }
+  done
+  return 1
+}
+# Snapshot BEFORE anything is touched: if the user had a launchable desktop app
+# going in, they must have one coming out. If they never had one (CLI-only
+# install), nothing is required of the update.
+DESKTOP_EXE_BEFORE="$(packaged_desktop_exe "$SRC" || true)"
+
 echo "◆ JARVIS — updating Hermes upstream, then re-branding"
 echo "  source : $SRC"
 
@@ -262,6 +278,67 @@ else
   echo "    apply.sh re-brands afterward regardless."
 fi
 
+# --- 1b. Release the venv before updating ----------------------------------
+# `hermes update` has to replace venv/Scripts/hermes.exe (it quarantines the
+# running shim first). Any process holding that file makes the quarantine fail,
+# and the updater then falls back to a ZIP re-download of the whole tree — a
+# much more destructive path that has been observed leaving the packaged
+# desktop bundle deleted (12 consecutive "Could not quarantine hermes.exe
+# (PermissionError: another process is holding it open)" in one run).
+#
+# The DESKTOP app is the obvious holder, but the GATEWAY is the one that gets
+# missed: it is a long-lived background python that imports hermes_cli and
+# keeps the venv open, and it survives closing the app. Stop both.
+#
+# Best-effort throughout: if we cannot stop something, the update still runs
+# (and upstream's own guard reports the lock). Set JARVIS_NO_STOP_SERVICES=1
+# to skip this entirely.
+release_venv_holders() {
+  [ -n "${JARVIS_NO_STOP_SERVICES:-}" ] && { echo "  · not stopping services (JARVIS_NO_STOP_SERVICES set)"; return 0; }
+  local stopped=0
+
+  # The gateway, via its own CLI so managed/service installs are handled
+  # properly rather than being killed out from under their supervisor.
+  if [ -n "${UPDATER:-}" ]; then
+    if JARVIS_NO_UPDATE_WRAP=1 "$UPDATER" gateway stop >/dev/null 2>&1; then
+      echo "  → stopped the gateway (it holds the venv open during an update)"
+      stopped=1
+    fi
+  fi
+
+  # Anything still holding the venv: the desktop app and stray gateway/CLI
+  # processes. Matched on the install's own path so we never touch another
+  # install's processes on the same machine.
+  case "${OS:-}${OSTYPE:-}$(uname -s 2>/dev/null)" in
+    *Windows_NT*|*msys*|*cygwin*|*MINGW*|*MSYS*)
+      # The script is written to a file rather than passed with -Command: the
+      # nested bash/PowerShell quoting required to inline it is a bug factory.
+      local ps1 win_src
+      ps1="$(mktemp -t jarvis-stop-XXXXXX.ps1 2>/dev/null || echo "${TMPDIR:-/tmp}/jarvis-stop.$$.ps1")"
+      win_src="$(cd "$SRC" && pwd -W 2>/dev/null || echo "$SRC")"
+      cat > "$ps1" <<'PS1'
+param([string]$Root)
+# Only processes belonging to THIS install are stopped, so a second install on
+# the same machine is never disturbed.
+Get-Process -Name Hermes,JARVIS -ErrorAction SilentlyContinue |
+  Where-Object { $_.Path -and $_.Path.StartsWith($Root, [System.StringComparison]::OrdinalIgnoreCase) } |
+  Stop-Process -Force -ErrorAction SilentlyContinue
+Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+  Where-Object { $_.CommandLine -and $_.CommandLine -like "*$Root*" -and $_.CommandLine -match "hermes_cli|tui_gateway" } |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+PS1
+      powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass         -File "$(cygpath -w "$ps1" 2>/dev/null || echo "$ps1")" -Root "$win_src" >/dev/null 2>&1 && stopped=1
+      rm -f "$ps1"
+      ;;
+    *)
+      pkill -f "$SRC/venv/bin/hermes" >/dev/null 2>&1 && stopped=1
+      pkill -f "$SRC/venv/bin/python" >/dev/null 2>&1 && stopped=1
+      ;;
+  esac
+  [ "$stopped" -eq 1 ] && sleep 2
+  return 0
+}
+
 # --- 2. Update Hermes ------------------------------------------------------
 echo "  → running 'hermes update'…"
 UPDATER="$(command -v hermes 2>/dev/null || command -v jarvis 2>/dev/null || true)"
@@ -269,6 +346,8 @@ if [ -z "$UPDATER" ]; then
   echo "ERROR: neither 'hermes' nor 'jarvis' found on PATH to run the update." >&2
   exit 127
 fi
+release_venv_holders
+
 # JARVIS_NO_UPDATE_WRAP=1 stops the jarvis shim's `update` interception from
 # recursing back here when $UPDATER resolves to the jarvis shim (finding #9).
 # (#7) On failure, re-apply branding BEFORE exiting: step 1 reverted the
@@ -415,6 +494,70 @@ if [ "$built_src" -eq 1 ] || [ "$built_active" -eq 1 ]; then
     echo "  ##################################################################" >&2
     exit 1
   fi
+fi
+
+# --- 6. FINAL GATE: the app the user launches must exist and be branded -----
+# An update that exits 0 and leaves an unlaunchable app is the silent failure
+# this whole pipeline exists to kill. It has happened: a degraded run (the venv
+# was locked, so upstream fell back to a ZIP re-download) removed the packaged
+# bundle, and because `hermes update` treats a desktop build failure as
+# NON-FATAL the update still reported success. Branding and features verified
+# fine — nobody checked the artifact you double-click.
+#
+# Two assertions, because --verify-build alone is not enough: it inspects the
+# bundles it FINDS, so a bundle that is missing entirely passes it vacuously.
+final_desktop_gate() {
+  [ -n "${JARVIS_SKIP_FINAL_VERIFY:-}" ] && { echo "  · final desktop verify skipped (JARVIS_SKIP_FINAL_VERIFY set)"; return 0; }
+
+  local now rc=0
+  now="$(packaged_desktop_exe "$SRC" || true)"
+
+  # (a) existence — only demanded if there was an app here before.
+  if [ -n "$DESKTOP_EXE_BEFORE" ] && [ -z "$now" ]; then
+    echo "" >&2
+    echo "  ##################################################################" >&2
+    echo "  # UPDATE LEFT NO LAUNCHABLE DESKTOP APP" >&2
+    echo "  #" >&2
+    echo "  # Before this update:  $DESKTOP_EXE_BEFORE" >&2
+    echo "  # After:               (nothing under apps/desktop/release)" >&2
+    echo "  #" >&2
+    echo "  # The packaged bundle was removed and not rebuilt. This usually" >&2
+    echo "  # means the desktop repack failed — most often because something" >&2
+    echo "  # still held the venv open, which pushes the updater onto its ZIP" >&2
+    echo "  # fallback. Shortcuts now point at a file that does not exist." >&2
+    echo "  #" >&2
+    echo "  # Rebuild it:" >&2
+    echo "  #   \"$UPDATER\" desktop --build-only --force-build" >&2
+    echo "  ##################################################################" >&2
+    return 1
+  fi
+  [ -z "$now" ] && { echo "  · no packaged desktop app on this install (CLI-only) — nothing to verify"; return 0; }
+
+  # (b) branding of what actually ships.
+  echo "  → verifying the packaged desktop bundle…"
+  JARVIS_CHECK_LAUNCH_POINTS=1 HERMES_SRC="$SRC"     bash "$OVERLAY_DIR/apply.sh" --verify-build "$SRC" || rc=1
+  if [ "$rc" -ne 0 ]; then
+    echo "" >&2
+    echo "  ##################################################################" >&2
+    echo "  # PACKAGED DESKTOP BUNDLE FAILED VERIFICATION" >&2
+    echo "  #   $now" >&2
+    echo "  #" >&2
+    echo "  # The source tree updated and re-branded correctly, but the app a" >&2
+    echo "  # user launches does not match it (see the ✗ line above)." >&2
+    echo "  #" >&2
+    echo "  # apply.sh has dropped the desktop build stamp, so a rebuild will" >&2
+    echo "  # not be skipped as \"up to date\":" >&2
+    echo "  #   \"$UPDATER\" desktop --build-only --force-build" >&2
+    echo "  ##################################################################" >&2
+    return 1
+  fi
+  echo "  ✓ packaged desktop app present and branded"
+  return 0
+}
+
+if ! final_desktop_gate; then
+  echo "◆ JARVIS — update FAILED its final desktop check (see above)" >&2
+  exit 1
 fi
 
 echo "◆ JARVIS — update complete"

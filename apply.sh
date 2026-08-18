@@ -1220,6 +1220,26 @@ else
   echo "  · tree-wide brand scan skipped (no python / scanner not found)"
 fi
 
+# --- 4c. Realtime voice feature layer --------------------------------------
+# The overlay's SECOND mechanism (alongside branding): layer the configurable
+# OpenAI Realtime speech-to-speech voice assistant onto the pristine tree —
+# new source files + a focused tracked-file patch + documented config defaults.
+# Idempotent. It FAILS LOUDLY on upstream drift and ships nothing partial (it
+# refuses to half-apply). A voice-feature drift is surfaced as a prominent
+# warning here but does NOT fail the whole rebrand — the CLI/dashboard install
+# must still succeed; the drift is caught (and fails) in CI + the feature test.
+FEATURE_APPLY="$OVERLAY_DIR/features/realtime-voice/apply-feature.sh"
+if [ -f "$FEATURE_APPLY" ]; then
+  echo
+  if HERMES_SRC="$SRC" HERMES_HOME="$HERMES_HOME" bash "$FEATURE_APPLY" apply "$SRC"; then
+    :
+  else
+    echo "  ⚠ realtime-voice feature did NOT apply (see the drift banner above)." >&2
+    echo "    Branding is complete; voice support stays inert until the patch is" >&2
+    echo "    rebuilt against current upstream (features/realtime-voice/README.md)." >&2
+  fi
+fi
+
 # --- 5. Cascade onto the desktop app's ACTIVE source tree -------------------
 # See the ACTIVE_ROOT note near the top: the Electron app's in-app updater
 # rebuilds from $HERMES_HOME/hermes-agent and dittos the result over the

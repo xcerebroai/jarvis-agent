@@ -1,0 +1,882 @@
+diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
+index 520c19382..87e21cc39 100644
+--- a/apps/desktop/electron/main.ts
++++ b/apps/desktop/electron/main.ts
+@@ -13651,6 +13651,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
+   updateStreamThrottleFromActiveWork()
+ })
+ 
++// The renderer's voice supervisor reports when the global speech-to-speech
++// session is live. While it is, chat windows stay unthrottled (WebRTC/audio/
++// timers keep full cadence) even when minimized/backgrounded — the same
++// per-window setBackgroundThrottling authority used for streaming turns. See
++// stream-throttle.ts.
++ipcMain.on('hermes:voice-active', (_event, active) => {
++  streamThrottle.setVoiceActive(Boolean(active))
++})
++
+ ipcMain.on('hermes:titlebar-theme', (_event, payload) => {
+   if (!payload || !isHexColor(payload.background) || !isHexColor(payload.foreground)) {
+     return
+diff --git a/apps/desktop/electron/preload.ts b/apps/desktop/electron/preload.ts
+index f573ca24d..ab6cb2154 100644
+--- a/apps/desktop/electron/preload.ts
++++ b/apps/desktop/electron/preload.ts
+@@ -199,6 +199,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
+   watchDirectory: dir => ipcRenderer.invoke('hermes:watchDirectory', dir),
+   stopPreviewFileWatch: id => ipcRenderer.invoke('hermes:stopPreviewFileWatch', id),
+   setActiveWork: payload => ipcRenderer.send('hermes:active-work', payload),
++  setVoiceActive: active => ipcRenderer.send('hermes:voice-active', Boolean(active)),
+   setTitleBarTheme: payload => ipcRenderer.send('hermes:titlebar-theme', payload),
+   setNativeTheme: mode => ipcRenderer.send('hermes:native-theme', mode),
+   setTranslucency: payload => ipcRenderer.send('hermes:translucency', payload),
+diff --git a/apps/desktop/electron/stream-throttle.test.ts b/apps/desktop/electron/stream-throttle.test.ts
+index fc41bcf16..57979c6ab 100644
+--- a/apps/desktop/electron/stream-throttle.test.ts
++++ b/apps/desktop/electron/stream-throttle.test.ts
+@@ -132,6 +132,45 @@ test('repeated busy reports do not re-apply or stack timers', () => {
+   assert.equal(timers.pendingCount, 1)
+ })
+ 
++test('a live voice session unthrottles the main window (backgroundThrottling false) with no turn in flight', () => {
++  const timers = makeTimers()
++  const throttle = createStreamThrottle(timers)
++  const win = makeWindow()
++  throttle.register(win)
++
++  // Idle default: throttling allowed (backgroundThrottling true).
++  assert.deepEqual(win.calls, [true])
++
++  // Voice comes online — WebRTC/audio/timers must not be throttled even when
++  // the window is minimized, so backgroundThrottling is forced false.
++  throttle.setVoiceActive(true)
++  assert.deepEqual(win.calls, [true, false])
++  assert.equal(throttle.isUnthrottled(), true)
++
++  // Ending voice re-throttles after the trailing delay.
++  throttle.setVoiceActive(false)
++  assert.deepEqual(win.calls, [true, false])
++  timers.fire()
++  assert.deepEqual(win.calls, [true, false, true])
++  assert.equal(throttle.isUnthrottled(), false)
++})
++
++test('voice active keeps windows unthrottled even as a streaming turn ends', () => {
++  const timers = makeTimers()
++  const throttle = createStreamThrottle(timers)
++  const win = makeWindow()
++  throttle.register(win)
++
++  throttle.setVoiceActive(true)
++  throttle.update(true)
++  assert.deepEqual(win.calls, [true, false])
++
++  // The turn ends but voice is still live — no trailing re-throttle is armed.
++  throttle.update(false)
++  assert.equal(timers.pendingCount, 0)
++  assert.equal(throttle.isUnthrottled(), true)
++})
++
+ test('closed and destroyed windows drop out without throwing', () => {
+   const timers = makeTimers()
+   const throttle = createStreamThrottle(timers)
+diff --git a/apps/desktop/electron/stream-throttle.ts b/apps/desktop/electron/stream-throttle.ts
+index 912b40b91..9342e3022 100644
+--- a/apps/desktop/electron/stream-throttle.ts
++++ b/apps/desktop/electron/stream-throttle.ts
+@@ -44,6 +44,11 @@ export interface StreamThrottle {
+   register(win: ThrottleWindowLike & { on?: (event: string, fn: () => void) => void }): void
+   /** Report whether any turn is in flight across all renderers. */
+   update(busy: boolean): void
++  /** Report whether the global voice speech-to-speech session is live. While it
++   * is, chat windows stay unthrottled so WebRTC/audio/timers keep full cadence
++   * even when the window is minimized/backgrounded. Merged with the
++   * turn-in-flight edge: either driver alone keeps the windows unthrottled. */
++  setVoiceActive(active: boolean): void
+ }
+ 
+ export function createStreamThrottle(
+@@ -53,6 +58,10 @@ export function createStreamThrottle(
+   const windows = new Set<ThrottleWindowLike>()
+   let unthrottled = false
+   let trailing: unknown = null
++  // Independent drivers of the unthrottle edge. A turn in flight OR a live
++  // voice session each pin the windows unthrottled.
++  let turnBusy = false
++  let voiceActive = false
+ 
+   function apply(win: ThrottleWindowLike) {
+     if (win.isDestroyed()) {
+@@ -80,6 +89,38 @@ export function createStreamThrottle(
+     }
+   }
+ 
++  // A turn in flight OR a live voice session pins the windows unthrottled. On
++  // the merged ON edge we unthrottle immediately; on the merged OFF edge we keep
++  // full cadence for a short trailing window so a final flush paints, then let
++  // Chromium's default throttling return.
++  function recompute() {
++    const wantUnthrottled = turnBusy || voiceActive
++
++    if (wantUnthrottled) {
++      if (trailing !== null) {
++        timers.clearTimeout(trailing)
++        trailing = null
++      }
++
++      if (!unthrottled) {
++        unthrottled = true
++        applyAll()
++      }
++
++      return
++    }
++
++    if (!unthrottled || trailing !== null) {
++      return
++    }
++
++    trailing = timers.setTimeout(() => {
++      trailing = null
++      unthrottled = false
++      applyAll()
++    }, delayMs)
++  }
++
+   return {
+     isUnthrottled: () => unthrottled,
+ 
+@@ -90,30 +131,13 @@ export function createStreamThrottle(
+     },
+ 
+     update(busy) {
+-      if (busy) {
+-        if (trailing !== null) {
+-          timers.clearTimeout(trailing)
+-          trailing = null
+-        }
+-
+-        if (!unthrottled) {
+-          unthrottled = true
+-          applyAll()
+-        }
+-
+-        return
+-      }
+-
+-      if (!unthrottled || trailing !== null) {
+-        return
+-      }
++      turnBusy = busy
++      recompute()
++    },
+ 
+-      // Trailing edge: keep full cadence briefly so the final flush paints.
+-      trailing = timers.setTimeout(() => {
+-        trailing = null
+-        unthrottled = false
+-        applyAll()
+-      }, delayMs)
++    setVoiceActive(active) {
++      voiceActive = active
++      recompute()
+     }
+   }
+ }
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
+index 449471dc0..6a32b0238 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
++++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
+@@ -1,9 +1,10 @@
+ import { useStore } from '@nanostores/react'
+-import { useCallback, useEffect, useRef, useState } from 'react'
++import { useCallback, useEffect, useRef } from 'react'
+ 
+ import { useI18n } from '@/i18n'
+ import { chatMessageText, collectUnspokenTurnSpeech } from '@/lib/chat-messages'
+ import { triggerHaptic } from '@/lib/haptics'
++import { voiceSupervisor } from '@/lib/voice/voice-supervisor'
+ import { clearWakeIndicator, syncWakeIndicatorWithVoice } from '@/lib/wake-indicator'
+ import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/store/composer'
+ import { resetBrowseState } from '@/store/composer-input-history'
+@@ -18,6 +19,7 @@ import { useComposerScope } from '../scope'
+ import type { ChatBarProps } from '../types'
+ 
+ import { useAutoSpeakReplies } from './use-auto-speak-replies'
++import { useVoiceSession } from './use-voice-session'
+ import { useVoiceConversation } from './use-voice-conversation'
+ import { useVoiceRecorder } from './use-voice-recorder'
+ 
+@@ -39,11 +41,34 @@ interface UseComposerVoiceArgs {
+   target: ComposerTarget
+ }
+ 
++// One-shot latch for auto-starting voice on launch. Module-level ON PURPOSE: it
++// must survive every remount source that would otherwise re-arm voice — gateway
++// reconnects, session switches, composer remounts, profile switches, and React
++// StrictMode's development double-mount. A ref/state would reset on each of
++// those; a module singleton is scoped to the renderer process, so voice starts
++// exactly once per app launch. Only the main composer ever reaches it. The
++// deterministic greeting is spoken NATIVELY by the persistent Realtime session
++// on its first connect (see realtime-config's REALTIME_GREETING and the
++// supervisor's launch-greeting suppression) — never through the old TTS path.
++let launchGreetingStarted = false
++
++/** Reset the once-per-launch voice-start latch between tests. */
++export function __resetLaunchGreetingForTests(): void {
++  launchGreetingStarted = false
++}
++
+ /**
+  * The composer's voice engine: push-to-talk dictation (transcript → draft), the
+- * full voice-conversation loop, and auto-speak of replies. Self-contained — it
+- * consumes the draft/submit primitives passed in but nothing depends back on it,
+- * so it lifts cleanly out of ChatBar.
++ * on-screen controls for the GLOBAL voice conversation, and auto-speak of
++ * replies.
++ *
++ * The voice assistant's live Realtime session is owned by a desktop-level supervisor, NOT by
++ * this hook — every mounted composer is a VIEW of that one global session, so a
++ * tab switch, route change, or remount never closes it and two composers never
++ * spin up two mics. This hook only forwards control intents (start/end/stopTurn/
++ * toggleMute) to the singleton and renders its state. The composer-bound chained
++ * fallback below runs only for the MAIN composer, and only after INITIAL Realtime
++ * setup failed — never as a silent replacement of a working global session.
+  */
+ export function useComposerVoice({
+   busy,
+@@ -61,7 +86,6 @@ export function useComposerVoice({
+   const { t } = useI18n()
+   // A tile's composer speaks ITS transcript, not the primary chat's.
+   const { $messages } = useComposerScope()
+-  const [voiceConversationActive, setVoiceConversationActive] = useState(false)
+   const lastSpokenIdRef = useRef<string | null>(null)
+   const ownsWakeIndicatorRef = useRef(false)
+   const voiceStartRequest = useStore($voiceConversationStartRequest)
+@@ -122,28 +146,38 @@ export function useComposerVoice({
+     await onSubmit(text)
+   }
+ 
++  // DEFAULT transport: the ONE global voice Realtime session, owned by the
++  // desktop-level supervisor. This hook only subscribes to its state and (for the
++  // main composer) registers the foreground routing delegate for `use_jarvis`.
++  const voice = useVoiceSession({ onSubmit, target })
++  const voiceConversationActive = voice.active
++  // The composer-bound chained fallback drives the controls only for the MAIN
++  // composer, and only once initial Realtime setup has failed globally.
++  const usingFallback = target === 'main' && voice.fallback
++
+   const wakePausedRef = useRef(false)
+   // Resolves once the in-flight wake.pause round-trip completes (mic released by
+-  // the wake listener). The conversation awaits this before opening its own mic
+-  // so the two never contend for the device — on Windows especially, opening the
+-  // capture device while the wake listener still holds it makes getUserMedia
+-  // fail and the conversation never starts listening.
++  // the wake listener). The chained conversation awaits this before opening its
++  // own mic so the two never contend — on Windows especially, opening the capture
++  // device while the wake listener still holds it makes getUserMedia fail.
+   const wakePauseBarrierRef = useRef<Promise<void> | null>(null)
+ 
+-  const conversation = useVoiceConversation({
++  // FALLBACK transport: the chained MediaRecorder → STT → agent → TTS loop.
++  // Only enabled once Realtime has proven unavailable for THIS renderer launch,
++  // so the two never contend for the microphone. Its `enabled` edge is the global
++  // fallback flag, not a tab switch, so switching sessions never toggles it.
++  const chainedConversation = useVoiceConversation({
+     busy,
+     consumePendingResponse,
+-    enabled: voiceConversationActive,
+-    onFatalError: () => setVoiceConversationActive(false),
++    enabled: usingFallback,
++    // A chained failure too → end the voice session entirely (mic off, controls dismissed).
++    onFatalError: () => voiceSupervisor.end(),
+     // Speaking over the model mid-generation interrupts the in-flight turn —
+     // the same seam as the Stop button — so the interjection becomes the next
+     // turn instead of waiting behind a reply the user already rejected.
+     onInterrupt,
+-    // A spoken stop command ("stop", "never mind", "goodbye", …) ends the
+-    // hands-free conversation. Flipping the flag is the authoritative off
+-    // switch — the enabled=false prop + effect below drive conversation.end()
+-    // teardown (mic close, wake re-arm).
+-    onStopWord: () => setVoiceConversationActive(false),
++    // A spoken stop command ("stop", "never mind", "goodbye", …) ends the voice session.
++    onStopWord: () => voiceSupervisor.end(),
+     onSubmit: submitVoiceTurn,
+     onTranscribeAudio,
+     pendingResponse: pendingTurnResponse,
+@@ -152,6 +186,24 @@ export function useComposerVoice({
+     beforeMicOpen: () => wakePauseBarrierRef.current ?? undefined
+   })
+ 
++  // The transport currently driving the on-screen controls: the global Realtime
++  // session, or the composer-bound chained fallback once Realtime has failed.
++  const conversation = usingFallback
++    ? {
++        level: chainedConversation.level,
++        muted: chainedConversation.muted,
++        status: chainedConversation.status,
++        stopTurn: chainedConversation.stopTurn,
++        toggleMute: chainedConversation.toggleMute
++      }
++    : {
++        level: voice.level,
++        muted: voice.muted,
++        status: voice.status,
++        stopTurn: voice.stopTurn,
++        toggleMute: voice.toggleMute
++      }
++
+   // eslint-disable-next-line no-restricted-syntax -- ownership token used only by unmount cleanup
+   useEffect(() => {
+     if (target !== 'main') {
+@@ -172,33 +224,52 @@ export function useComposerVoice({
+     []
+   )
+ 
+-  // The `composer.voice` hotkey (Ctrl+B) toggles the conversation. Starting
+-  // with STT unconfigured lets the conversation surface its own "configure
+-  // speech-to-text" notice rather than silently no-opping.
++  // The `composer.voice` hotkey (Ctrl+B) toggles the GLOBAL conversation.
+   const toggleVoiceConversation = useCallback(() => {
+     if (disabled) {
+       return
+     }
+ 
+     if (voiceConversationActive) {
+-      setVoiceConversationActive(false)
+-      void conversation.end()
++      voiceSupervisor.end()
+     } else {
+-      setVoiceConversationActive(true)
++      voiceSupervisor.start()
+     }
+-  }, [conversation, disabled, voiceConversationActive])
++  }, [disabled, voiceConversationActive])
+ 
+   useEffect(
+     () => onComposerVoiceToggleRequest(toggled => toggled === target && toggleVoiceConversation()),
+     [target, toggleVoiceConversation]
+   )
+ 
++  // External start seam (wake.detected → wiring's requestVoiceConversationStart).
++  // Only the main composer consumes it, and start() is idempotent + durable.
+   useEffect(() => {
+     if (target === 'main' && !disabled && takeVoiceConversationStart(voiceStartRequest) && !voiceConversationActive) {
+-      setVoiceConversationActive(true)
++      voiceSupervisor.start()
+     }
+   }, [disabled, target, voiceConversationActive, voiceStartRequest])
+ 
++  // Launch auto-start: the first time the MAIN composer is usable — mounted and
++  // its gateway open (disabled=false ⇔ gatewayOpen for the main bar) — ask the
++  // supervisor to auto-start the persistent voice session IF (and only if)
++  // `voice.realtime.auto_start` is configured. The public default leaves it off,
++  // so this preserves the current no-auto-start launch behavior; when enabled,
++  // the session on its first connect speaks the rotating greeting NATIVELY (see
++  // realtime-config) and then keeps listening — no old TTS path involved.
++  // Latched at module scope so it fires once per renderer launch, never on
++  // reconnect, session/profile switch, remount, or the StrictMode double-effect.
++  // Tiles never qualify. maybeAutoStart() is idempotent against the durable
++  // supervisor, so a remount can't double-start it.
++  useEffect(() => {
++    if (target !== 'main' || disabled || launchGreetingStarted) {
++      return
++    }
++
++    launchGreetingStarted = true
++    void voiceSupervisor.maybeAutoStart()
++  }, [disabled, target])
++
+   const resumeWakeIfPaused = useCallback(() => {
+     if (!wakePausedRef.current) {
+       return
+@@ -207,7 +278,7 @@ export function useComposerVoice({
+     wakePausedRef.current = false
+     wakePauseBarrierRef.current = null
+     // Reconcile, don't just resume: the wake word is a persistent setting, so
+-    // ending a voice chat must re-arm the listener whenever config says
++    // ending the chained chat must re-arm the listener whenever config says
+     // enabled — including when the raw resume loses the mic-release race.
+     void resumeWakeAfterVoice()
+   }, [])
+@@ -230,19 +301,22 @@ export function useComposerVoice({
+     return barrier
+   }, [])
+ 
++  // Wake ownership for the CHAINED fallback only — the Realtime supervisor owns
++  // wake for its own live mic. Driven by the fallback edge (not the global active
++  // edge), so switching sessions never pauses/resumes the ear.
+   useEffect(() => {
+-    if (voiceConversationActive) {
++    if (usingFallback) {
+       pauseWakeForVoice()
+     } else {
+       resumeWakeIfPaused()
+     }
+-  }, [pauseWakeForVoice, resumeWakeIfPaused, voiceConversationActive])
++  }, [pauseWakeForVoice, resumeWakeIfPaused, usingFallback])
+ 
+-  // 'Say "stop" to end the voice chat.' notice when the conversation starts.
+-  // Phrase comes from voice.stop_phrases (first entry) so a custom phrase
+-  // renders correctly; a null phrase (stop_phrases: []) shows no notice.
++  // 'Say "stop" to end the voice chat.' notice — only for the chained fallback,
++  // where a spoken stop phrase actually ends the conversation. Phrase comes from
++  // voice.stop_phrases (first entry); a null phrase (stop_phrases: []) shows none.
+   useEffect(() => {
+-    if (!voiceConversationActive) {
++    if (!usingFallback) {
+       return
+     }
+ 
+@@ -256,18 +330,14 @@ export function useComposerVoice({
+         message: t.notifications.voice.sayStopToEnd(phrase)
+       })
+     }
+-  }, [t, voiceConversationActive])
++  }, [t, usingFallback])
+ 
+   useEffect(() => resumeWakeIfPaused, [resumeWakeIfPaused])
+ 
+   // Explicit start/end for the on-screen conversation controls (the hotkey uses
+-  // the gated toggle above).
+-  const startConversation = useCallback(() => setVoiceConversationActive(true), [])
+-
+-  const endConversation = useCallback(() => {
+-    setVoiceConversationActive(false)
+-    void conversation.end()
+-  }, [conversation])
++  // the gated toggle above). Both drive the GLOBAL supervisor.
++  const startConversation = useCallback(() => voiceSupervisor.start(), [])
++  const endConversation = useCallback(() => voiceSupervisor.end(), [])
+ 
+   const handleToggleAutoSpeak = useCallback(() => {
+     void setAutoSpeakReplies(!$autoSpeakReplies.get()).catch(error =>
+diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
+index 80f62d9a9..596f7506f 100644
+--- a/apps/desktop/src/global.d.ts
++++ b/apps/desktop/src/global.d.ts
+@@ -224,6 +224,10 @@ declare global {
+       watchDirectory?: (dir: string) => Promise<HermesPreviewWatch>
+       stopPreviewFileWatch: (id: string) => Promise<boolean>
+       setActiveWork?: (payload: HermesActiveWork) => void
++      /** Report whether the global voice speech-to-speech session is live, so the
++       *  main process keeps chat windows unthrottled while it runs (even when
++       *  minimized/backgrounded). Optional: older shells predate the voice feature. */
++      setVoiceActive?: (active: boolean) => void
+       setTitleBarTheme?: (payload: HermesTitleBarTheme) => void
+       setNativeTheme?: (mode: 'dark' | 'light' | 'system') => void
+       setTranslucency?: (payload: { intensity: number }) => void
+diff --git a/apps/desktop/src/hermes.ts b/apps/desktop/src/hermes.ts
+index 2defd9e73..94696e543 100644
+--- a/apps/desktop/src/hermes.ts
++++ b/apps/desktop/src/hermes.ts
+@@ -53,6 +53,9 @@ import type {
+   ProfileSetupCommand,
+   ProfileSoul,
+   ProfilesResponse,
++  RealtimeProjectReviewResponse,
++  RealtimeTokenResponse,
++  RealtimeVoiceConfigResponse,
+   SessionInfo,
+   SessionMessage,
+   SessionMessagesResponse,
+@@ -201,6 +204,9 @@ export type {
+   ProfileSoul,
+   ProfilesResponse,
+   ProjectFolder,
++  RealtimeProjectReviewResponse,
++  RealtimeTokenResponse,
++  RealtimeVoiceConfigResponse,
+   ProjectInfo,
+   ProjectsPayload,
+   RpcEvent,
+@@ -1953,6 +1959,61 @@ export function speakText(text: string): Promise<AudioSpeakResponse> {
+   })
+ }
+ 
++/**
++ * Mint a short-lived OpenAI Realtime ephemeral client secret for the desktop's
++ * production speech-to-speech transport. The standing key stays server-side;
++ * this returns only the ephemeral token + non-secret session metadata the
++ * WebRTC layer needs. Profile-scoped like the other audio endpoints.
++ */
++export function mintRealtimeToken(overrides?: {
++  model?: string
++  voice?: string
++}): Promise<RealtimeTokenResponse> {
++  return window.hermesDesktop.api<RealtimeTokenResponse>({
++    ...profileScoped(),
++    path: '/api/audio/realtime/token',
++    method: 'POST',
++    body: { model: overrides?.model, voice: overrides?.voice },
++    // The mint blocks on an outbound OpenAI round-trip (server bounds it at
++    // 15s); allow headroom over the default 15s Electron backend timeout.
++    timeoutMs: 20_000
++  })
++}
++
++/**
++ * Resolve the configurable voice identity from config.yaml (`voice.realtime.*`).
++ * No secrets — assistant name, user name, wake phrase, voice, delivery,
++ * greetings, auto-start, and whether the optional review tool is configured.
++ */
++export function getRealtimeVoiceConfig(): Promise<RealtimeVoiceConfigResponse> {
++  return window.hermesDesktop.api<RealtimeVoiceConfigResponse>({
++    ...profileScoped(),
++    path: '/api/audio/realtime/config',
++    method: 'POST',
++    body: {},
++    timeoutMs: 5_000
++  })
++}
++
++/**
++ * Compact fast-path review of the operator's configured local project index
++ * (`voice.realtime.review_projects.index_path`). Returns 404 when no index is
++ * configured, in which case the renderer omits the `review_projects` tool.
++ */
++export function getRealtimeProjectReview(options: {
++  query?: string
++  status?: string
++  limit?: number
++} = {}): Promise<RealtimeProjectReviewResponse> {
++  return window.hermesDesktop.api<RealtimeProjectReviewResponse>({
++    ...profileScoped(),
++    path: '/api/audio/realtime/project-review',
++    method: 'POST',
++    body: options,
++    timeoutMs: 5_000
++  })
++}
++
+ export function getElevenLabsVoices(profile?: null | string): Promise<ElevenLabsVoicesResponse> {
+   return window.hermesDesktop.api<ElevenLabsVoicesResponse>({
+     path: '/api/audio/elevenlabs/voices',
+diff --git a/apps/desktop/src/types/hermes.ts b/apps/desktop/src/types/hermes.ts
+index c180cb08a..9be69f573 100644
+--- a/apps/desktop/src/types/hermes.ts
++++ b/apps/desktop/src/types/hermes.ts
+@@ -29,6 +29,58 @@ export interface AudioSpeakResponse {
+   provider?: string
+ }
+ 
++/** Ephemeral OpenAI Realtime session secret minted by the backend. Carries only
++ *  the short-lived token + non-secret session metadata — never the standing key. */
++export interface RealtimeTokenResponse {
++  ok: boolean
++  /** Ephemeral client secret used as the Bearer for the WebRTC SDP exchange. */
++  value: string
++  /** Unix seconds the ephemeral secret expires (null when OpenAI omits it). */
++  expires_at?: number | null
++  model: string
++  voice: string
++  session_id?: string
++}
++
++/** The configurable voice identity resolved server-side from config.yaml
++ *  (`voice.realtime.*`). No secrets. Defaults are the public product defaults:
++ *  JARVIS / no user name / "hey jarvis" / Marin / concise neutral delivery. */
++export interface RealtimeVoiceConfigResponse {
++  ok: boolean
++  enabled: boolean
++  assistant_name: string
++  user_name: string
++  wake_phrase: string
++  auto_start: boolean
++  model: string
++  voice: string
++  delivery: string
++  greetings: string[]
++  review_projects_enabled: boolean
++}
++
++export interface RealtimeProjectReviewProject {
++  name: string
++  status: string
++  priority: string
++  note: string
++  next_action: string
++  tasks_done: number
++  tasks_total: number
++  target_end: string
++}
++
++export interface RealtimeProjectReviewResponse {
++  ok: boolean
++  source: string
++  updated: string
++  total_projects: number
++  status_counts: Record<string, number>
++  matches: number
++  projects: RealtimeProjectReviewProject[]
++  detail_retained: boolean
++}
++
+ export interface ElevenLabsVoice {
+   label: string
+   name: string
+diff --git a/hermes_cli/web_models.py b/hermes_cli/web_models.py
+index 2a44cfef0..8833f5319 100644
+--- a/hermes_cli/web_models.py
++++ b/hermes_cli/web_models.py
+@@ -306,6 +306,26 @@ class TTSSpeakRequest(BaseModel):
+     text: str
+ 
+ 
++class RealtimeTokenRequest(BaseModel):
++    """Optional overrides for the OpenAI Realtime ephemeral-secret mint.
++
++    Both default server-side from ``voice.realtime`` in config.yaml (falling
++    back to the product defaults gpt-realtime-2.1 / marin) so the desktop can
++    POST an empty body and still get a valid speech-to-speech session.
++    """
++
++    model: Optional[str] = None
++    voice: Optional[str] = None
++
++
++class RealtimeProjectReviewRequest(BaseModel):
++    """Compact lookup for the optional Realtime voice project-index fast path."""
++
++    query: Optional[str] = None
++    status: Optional[str] = None
++    limit: int = 5
++
++
+ # --- from web_server.py (originally lines 11549-11551) ---
+ 
+ class OAuthSubmitBody(BaseModel):
+diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
+index 219df2771..321628597 100644
+--- a/hermes_cli/web_server.py
++++ b/hermes_cli/web_server.py
+@@ -1528,6 +1528,8 @@ from hermes_cli.web_models import (  # noqa: F401
+     LearningNodeEdit,
+     DebugShareRequest,
+     TTSSpeakRequest,
++    RealtimeTokenRequest,
++    RealtimeProjectReviewRequest,
+     OAuthSubmitBody,
+     BulkDeleteSessions,
+     SessionImport,
+@@ -5173,6 +5175,220 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+     }
+ 
+ 
++# --- Desktop Realtime speech-to-speech voice (JARVIS overlay feature) ---------
++# Three endpoints power the desktop's optional browser WebRTC voice transport:
++#   * POST /api/audio/realtime/config          — the configurable voice identity
++#   * POST /api/audio/realtime/token           — mint a short-lived ephemeral
++#                                                 client secret (never the key)
++#   * POST /api/audio/realtime/project-review  — the optional project-index fast
++#                                                 path (disabled unless a local
++#                                                 index is configured)
++# All heavy/testable logic lives in hermes_cli/realtime_voice.py; these handlers
++# only resolve the profile scope + standing key and shape the HTTP responses.
++_REALTIME_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets"
++# Bound the outbound mint so a hung OpenAI edge can't wedge the desktop's
++# voice-start (mirrors the ElevenLabs-voices fetch bound).
++_REALTIME_MINT_TIMEOUT_S = 15
++# Log the standing-key-missing case at most once per process — never log the key
++# itself or the ephemeral value.
++_realtime_mint_error_logged_once = False
++
++
++@app.post("/api/audio/realtime/config")
++async def realtime_voice_config(profile: Optional[str] = None):
++    """Return the configurable voice identity (config.yaml ``voice.realtime.*``).
++
++    No secrets: assistant name, user name, wake phrase, voice, delivery,
++    greetings, auto-start, and whether the optional review tool is configured.
++    The public defaults are JARVIS / no user name / "hey jarvis" / marin.
++    """
++    from hermes_cli import realtime_voice
++    from hermes_constants import get_hermes_home
++
++    with _config_profile_scope(profile):
++        config = load_config() or {}
++        home = get_hermes_home()
++
++    return realtime_voice.resolve_voice_config(home, config)
++
++
++@app.post("/api/audio/realtime/token")
++async def mint_realtime_token(
++    payload: Optional[RealtimeTokenRequest] = None,
++    profile: Optional[str] = None,
++):
++    """Mint a short-lived OpenAI Realtime ephemeral client secret.
++
++    The desktop's production voice transport is a browser WebRTC
++    speech-to-speech session against OpenAI Realtime. The browser must never
++    see the standing ``OPENAI_API_KEY``; instead it authenticates its WebRTC
++    SDP exchange with a short-lived *ephemeral* secret minted here.
++
++    The standing key is read from the requested profile's scope
++    (``resolve_openai_audio_api_key`` — ``VOICE_TOOLS_OPENAI_KEY`` then
++    ``OPENAI_API_KEY``), used only as the Bearer for the outbound mint, and
++    never returned or logged. Only the ephemeral value + non-secret session
++    metadata the renderer needs are returned.
++    """
++    global _realtime_mint_error_logged_once
++
++    from hermes_cli import realtime_voice
++    from hermes_constants import get_hermes_home
++
++    body = payload or RealtimeTokenRequest()
++
++    # Config-only scope (await-safe): resolves the requested profile's .env /
++    # credential pool and config.yaml defaults, matching the profile the
++    # settings UI writes to. A bad profile raises 400/404 here and is re-raised.
++    with _config_profile_scope(profile):
++        from tools.tool_backend_helpers import resolve_openai_audio_api_key
++
++        defaults = realtime_voice.resolve_token_defaults(get_hermes_home(), load_config() or {})
++        api_key = (resolve_openai_audio_api_key() or "").strip()
++
++    model = (body.model or "").strip() or defaults["model"]
++    voice = (body.voice or "").strip() or defaults["voice"]
++
++    if not api_key:
++        # Phrase kept recognizable to the renderer's error summarizer so the
++        # user gets an actionable "add your OpenAI key" toast rather than a raw
++        # 400. The standing key is absent — nothing to leak.
++        raise HTTPException(
++            status_code=400,
++            detail=(
++                "Realtime voice needs an OpenAI key: neither "
++                "VOICE_TOOLS_OPENAI_KEY nor OPENAI_API_KEY is set."
++            ),
++        )
++
++    request_body = json.dumps(
++        {
++            "session": {
++                "type": "realtime",
++                "model": model,
++                "audio": {"output": {"voice": voice}},
++            }
++        }
++    ).encode("utf-8")
++    request = urllib.request.Request(
++        _REALTIME_CLIENT_SECRETS_URL,
++        data=request_body,
++        method="POST",
++        headers={
++            "Authorization": f"Bearer {api_key}",
++            "Content-Type": "application/json",
++        },
++    )
++
++    loop = asyncio.get_running_loop()
++
++    def _fetch() -> Dict[str, Any]:
++        with urllib.request.urlopen(request, timeout=_REALTIME_MINT_TIMEOUT_S) as response:
++            return json.loads(response.read().decode("utf-8"))
++
++    try:
++        data = await loop.run_in_executor(None, _fetch)
++    except urllib.error.HTTPError as exc:
++        # Sanitize: the upstream error body can echo request context. Surface a
++        # stable, key-free reason keyed on status. 401/403 → the standing key is
++        # bad; other codes → an upstream failure.
++        if exc.code in (401, 403):
++            if not _realtime_mint_error_logged_once:
++                _log.warning("Realtime token mint rejected by OpenAI (auth)")
++                _realtime_mint_error_logged_once = True
++            raise HTTPException(
++                status_code=502,
++                detail="OpenAI rejected the API key for Realtime voice.",
++            )
++        _log.warning("Realtime token mint failed (HTTP %s)", exc.code)
++        raise HTTPException(
++            status_code=502,
++            detail=f"Could not start Realtime voice session (HTTP {exc.code}).",
++        )
++    except HTTPException:
++        raise
++    except Exception:
++        _log.exception("Realtime token mint failed")
++        raise HTTPException(
++            status_code=502,
++            detail="Could not start Realtime voice session.",
++        )
++
++    # OpenAI returns the ephemeral secret as ``value`` (GA client_secrets) or,
++    # on older shapes, nested under ``client_secret.value``. Never fall through
++    # to any field that could carry the standing key.
++    value = ""
++    if isinstance(data, dict):
++        raw_value = data.get("value")
++        if isinstance(raw_value, str):
++            value = raw_value.strip()
++        if not value:
++            secret = data.get("client_secret")
++            if isinstance(secret, dict) and isinstance(secret.get("value"), str):
++                value = secret["value"].strip()
++
++    if not value:
++        _log.warning("Realtime token mint returned no ephemeral value")
++        raise HTTPException(
++            status_code=502,
++            detail="Realtime voice session did not return a token.",
++        )
++
++    session = data.get("session") if isinstance(data, dict) else None
++    session_id = ""
++    if isinstance(session, dict) and isinstance(session.get("id"), str):
++        session_id = session["id"]
++    expires_at = data.get("expires_at") if isinstance(data, dict) else None
++
++    return {
++        "ok": True,
++        "value": value,
++        "expires_at": expires_at if isinstance(expires_at, (int, float)) else None,
++        "model": model,
++        "voice": voice,
++        "session_id": session_id,
++    }
++
++
++@app.post("/api/audio/realtime/project-review")
++async def realtime_project_review(
++    payload: Optional[RealtimeProjectReviewRequest] = None,
++    profile: Optional[str] = None,
++):
++    """Compact, deterministic review of the operator's configured project index.
++
++    Reads the local JSON index at ``voice.realtime.review_projects.index_path``.
++    There is no built-in default path: when no index is configured (or the file
++    is absent) the endpoint 404s and the renderer omits the tool entirely.
++    """
++    from hermes_cli import realtime_voice
++    from hermes_constants import get_hermes_home
++
++    request = payload or RealtimeProjectReviewRequest()
++
++    with _config_profile_scope(profile):
++        config = load_config() or {}
++        source = realtime_voice.resolve_index_path(get_hermes_home(), config)
++
++    if source is None or not source.exists():
++        raise HTTPException(
++            status_code=404,
++            detail="No project index is configured (voice.realtime.review_projects.index_path).",
++        )
++
++    try:
++        data = json.loads(source.read_text(encoding="utf-8"))
++    except Exception:
++        raise HTTPException(status_code=502, detail="The configured project index could not be read.")
++
++    return realtime_voice.build_project_review(
++        data,
++        query=request.query,
++        status_filter=request.status,
++        limit=request.limit,
++    )
++
++
+ def _split_text_for_speak_stream(text: str, cap: int) -> list:
+     """Split *text* into provider-cap-sized pieces on sentence boundaries.
+ 

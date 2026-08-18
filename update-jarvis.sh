@@ -162,6 +162,20 @@ HERMES_HOME="$(resolve_hermes_home "$SRC")"
 ACTIVE_ROOT=""
 [ -d "$HERMES_HOME/hermes-agent/.git" ] && ACTIVE_ROOT="$(cd "$HERMES_HOME/hermes-agent" && pwd)"
 
+# --- 0b. Revert the realtime-voice feature BEFORE the pull ------------------
+# The feature layer patches tracked files and drops in overlay-owned untracked
+# files. Left in place, the tracked patch would be autostashed by `hermes
+# update` and replayed onto new upstream — the exact conflict the overlay
+# avoids for branding. So revert it (scoped `git checkout` of the feature's own
+# tracked files + removal of ONLY its declared untracked files) first; apply.sh
+# re-applies it after the pull (section 4c). Never touches operator files.
+FEATURE_REVERT="$OVERLAY_DIR/features/realtime-voice/apply-feature.sh"
+if [ -f "$FEATURE_REVERT" ] && git -C "$SRC" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "  → reverting realtime-voice feature before update…"
+  HERMES_SRC="$SRC" HERMES_HOME="$HERMES_HOME" bash "$FEATURE_REVERT" revert "$SRC" \
+    || echo "  ⚠ realtime-voice revert reported an issue; continuing (apply.sh re-applies after)."
+fi
+
 # Per-tree manifest (must match apply.sh's manifest_name): the ACTIVE root
 # keeps legacy "branded-files.txt" (the installer's injected pre-update
 # revert hardcodes it); other trees are path-keyed. Fall back to the legacy

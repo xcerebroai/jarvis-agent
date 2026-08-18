@@ -56,7 +56,22 @@ self_update_overlay() {
   echo "◆ JARVIS — checking for overlay updates"
   out="$(git -C "$OVERLAY_DIR" fetch --quiet origin 2>&1)" || rc=$?
   if [ "$rc" -eq 0 ]; then
-    if git -C "$OVERLAY_DIR" symbolic-ref --short -q HEAD >/dev/null; then
+    local branch
+    branch="$(git -C "$OVERLAY_DIR" symbolic-ref --short -q HEAD || true)"
+    if [ "$branch" = "main" ]; then
+      # Tracking-independent advance. The detached-checkout path below lands
+      # machines on a local `main` created from FETCH_HEAD with NO upstream
+      # tracking configured, where `git pull --ff-only` dies with "no tracking
+      # information" — and the never-block rule then left the machine stuck
+      # one update behind, permanently (found live on the second update after
+      # the v1.1.9 remediation). fetch + merge FETCH_HEAD needs no tracking.
+      out="$(git -C "$OVERLAY_DIR" fetch --quiet origin main 2>&1)" || rc=$?
+      if [ "$rc" -eq 0 ]; then
+        out="$(git -C "$OVERLAY_DIR" merge --ff-only --quiet FETCH_HEAD 2>&1)" || rc=$?
+      fi
+    elif [ -n "$branch" ]; then
+      # A deliberately non-main branch (developer checkout): honor its own
+      # tracking config; a failure warns and continues as before.
       out="$(git -C "$OVERLAY_DIR" pull --ff-only --quiet 2>&1)" || rc=$?
     else
       # Installer-provisioned checkouts sit DETACHED at the release's pinned

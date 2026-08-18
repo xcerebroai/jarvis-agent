@@ -1,8 +1,8 @@
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 520c19382..87e21cc39 100644
+index 632e5db..255d076 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
-@@ -13651,6 +13651,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
+@@ -13902,6 +13902,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
    updateStreamThrottleFromActiveWork()
  })
  
@@ -19,7 +19,7 @@ index 520c19382..87e21cc39 100644
    if (!payload || !isHexColor(payload.background) || !isHexColor(payload.foreground)) {
      return
 diff --git a/apps/desktop/electron/preload.ts b/apps/desktop/electron/preload.ts
-index f573ca24d..ab6cb2154 100644
+index 7065843..f28be95 100644
 --- a/apps/desktop/electron/preload.ts
 +++ b/apps/desktop/electron/preload.ts
 @@ -199,6 +199,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
@@ -31,7 +31,7 @@ index f573ca24d..ab6cb2154 100644
    setNativeTheme: mode => ipcRenderer.send('hermes:native-theme', mode),
    setTranslucency: payload => ipcRenderer.send('hermes:translucency', payload),
 diff --git a/apps/desktop/electron/stream-throttle.test.ts b/apps/desktop/electron/stream-throttle.test.ts
-index fc41bcf16..57979c6ab 100644
+index fc41bcf..57979c6 100644
 --- a/apps/desktop/electron/stream-throttle.test.ts
 +++ b/apps/desktop/electron/stream-throttle.test.ts
 @@ -132,6 +132,45 @@ test('repeated busy reports do not re-apply or stack timers', () => {
@@ -81,7 +81,7 @@ index fc41bcf16..57979c6ab 100644
    const timers = makeTimers()
    const throttle = createStreamThrottle(timers)
 diff --git a/apps/desktop/electron/stream-throttle.ts b/apps/desktop/electron/stream-throttle.ts
-index 912b40b91..9342e3022 100644
+index 912b40b..9342e30 100644
 --- a/apps/desktop/electron/stream-throttle.ts
 +++ b/apps/desktop/electron/stream-throttle.ts
 @@ -44,6 +44,11 @@ export interface StreamThrottle {
@@ -184,7 +184,7 @@ index 912b40b91..9342e3022 100644
    }
  }
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
-index 449471dc0..6a32b0238 100644
+index 449471d..6a32b02 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
 @@ -1,9 +1,10 @@
@@ -452,10 +452,10 @@ index 449471dc0..6a32b0238 100644
    const handleToggleAutoSpeak = useCallback(() => {
      void setAutoSpeakReplies(!$autoSpeakReplies.get()).catch(error =>
 diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
-index 80f62d9a9..596f7506f 100644
+index 58d65d8..79afaa8 100644
 --- a/apps/desktop/src/global.d.ts
 +++ b/apps/desktop/src/global.d.ts
-@@ -224,6 +224,10 @@ declare global {
+@@ -225,6 +225,10 @@ declare global {
        watchDirectory?: (dir: string) => Promise<HermesPreviewWatch>
        stopPreviewFileWatch: (id: string) => Promise<boolean>
        setActiveWork?: (payload: HermesActiveWork) => void
@@ -465,9 +465,9 @@ index 80f62d9a9..596f7506f 100644
 +      setVoiceActive?: (active: boolean) => void
        setTitleBarTheme?: (payload: HermesTitleBarTheme) => void
        setNativeTheme?: (mode: 'dark' | 'light' | 'system') => void
-       setTranslucency?: (payload: { intensity: number }) => void
+       setTranslucency?: (payload: TranslucencyState) => void
 diff --git a/apps/desktop/src/hermes.ts b/apps/desktop/src/hermes.ts
-index 2defd9e73..94696e543 100644
+index 2defd9e..94696e5 100644
 --- a/apps/desktop/src/hermes.ts
 +++ b/apps/desktop/src/hermes.ts
 @@ -53,6 +53,9 @@ import type {
@@ -553,7 +553,7 @@ index 2defd9e73..94696e543 100644
    return window.hermesDesktop.api<ElevenLabsVoicesResponse>({
      path: '/api/audio/elevenlabs/voices',
 diff --git a/apps/desktop/src/types/hermes.ts b/apps/desktop/src/types/hermes.ts
-index c180cb08a..9be69f573 100644
+index ce407dd..548dd3f 100644
 --- a/apps/desktop/src/types/hermes.ts
 +++ b/apps/desktop/src/types/hermes.ts
 @@ -29,6 +29,58 @@ export interface AudioSpeakResponse {
@@ -616,7 +616,7 @@ index c180cb08a..9be69f573 100644
    label: string
    name: string
 diff --git a/hermes_cli/web_models.py b/hermes_cli/web_models.py
-index 2a44cfef0..8833f5319 100644
+index 2a44cfe..8833f53 100644
 --- a/hermes_cli/web_models.py
 +++ b/hermes_cli/web_models.py
 @@ -306,6 +306,26 @@ class TTSSpeakRequest(BaseModel):
@@ -647,7 +647,7 @@ index 2a44cfef0..8833f5319 100644
  
  class OAuthSubmitBody(BaseModel):
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 219df2771..321628597 100644
+index edc62c8..fbc1d06 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
 @@ -1528,6 +1528,8 @@ from hermes_cli.web_models import (  # noqa: F401
@@ -659,7 +659,7 @@ index 219df2771..321628597 100644
      OAuthSubmitBody,
      BulkDeleteSessions,
      SessionImport,
-@@ -5173,6 +5175,220 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+@@ -5255,6 +5257,220 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
      }
  
  

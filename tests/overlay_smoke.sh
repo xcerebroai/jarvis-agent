@@ -315,6 +315,25 @@ chk "detached (installer-pinned) checkout is advanced" "echo \"\$SU_DET\" | grep
 chk "detached checkout re-execs into the new version"  "echo \"\$SU_DET\" | grep -q 'SELFUPDATE-DETACHED-RAN'"
 chk "detached checkout lands on main"                  "[ \"\$(git -C \"$SU/detached\" symbolic-ref --short -q HEAD)\" = main ]"
 
+# The main branch the detached path creates has NO upstream tracking, where
+# `git pull --ff-only` dies with "no tracking information" — before the
+# tracking-independent fix, that stranded every machine one update after its
+# first successful one (found live). Simulate: main with tracking stripped,
+# origin moves ahead — the script must still advance.
+( cd "$SU"
+  git clone -q -b main origin.git untracked 2>/dev/null
+  git -C untracked config --unset branch.main.remote
+  git -C untracked config --unset branch.main.merge
+  cd seed
+  awk 'NR==2{print "echo \"SELFUPDATE-UNTRACKED-RAN\""}1' update-jarvis.sh > u.tmp && mv u.tmp update-jarvis.sh
+  git add -A
+  git -c user.email=t@t -c user.name=t commit -qm untracked-bump
+  git push -q origin HEAD:main
+) >/dev/null 2>&1
+SU_UNT="$(HERMES_SRC=/nonexistent-tree bash "$SU/untracked/update-jarvis.sh" 2>&1 || true)"
+chk "untracked main is advanced (no tracking info)"    "echo \"\$SU_UNT\" | grep -q 'overlay updated'"
+chk "untracked main re-execs into the new version"     "echo \"\$SU_UNT\" | grep -q 'SELFUPDATE-UNTRACKED-RAN'"
+
 # Guard: with JARVIS_SELF_UPDATED set it must not fetch, pull or re-exec — this
 # is what stops a bad commit putting a machine in a fetch/exec loop.
 SU_GUARD="$(JARVIS_SELF_UPDATED=1 HERMES_SRC=/nonexistent-tree bash "$SU/checkout/update-jarvis.sh" 2>&1 || true)"

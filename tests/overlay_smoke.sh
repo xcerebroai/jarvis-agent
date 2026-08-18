@@ -424,6 +424,56 @@ else
 fi
 
 echo
+echo "== 16. 'jarvis update' targets the ACTIVE install, not a stale sibling =="
+# The shims used to hardcode HERMES_SRC to the overlay checkout's SIBLING.
+# On a customer install that is correct — the overlay sits at
+# %LOCALAPPDATA%\hermes\jarvis-agent and its sibling IS the active tree.
+# On a dev layout (overlay checked out elsewhere, beside an old scratch clone)
+# the sibling is NOT the tree `hermes update` updates, so every update ran
+# against a stale tree while the real install went untouched — which is how a
+# month-old checkout produced feature-patch drift banners for patches that
+# applied cleanly to current upstream.
+#
+# Contract: prefer $HERMES_HOME/hermes-agent; fall back to the sibling; never
+# override an explicit HERMES_SRC. The customer case must be a NO-OP.
+RES="$WORK/resolve"; rm -rf "$RES"; mkdir -p "$RES"
+_mkovl() { mkdir -p "$1"; printf '#!/usr/bin/env bash
+echo "SRC=${HERMES_SRC:-<unset>}"
+' > "$1/update-jarvis.sh"; }
+_resolve() {  # <HERMES_HOME> <overlay> [explicit HERMES_SRC]
+  # HOME/LOCALAPPDATA are redirected into the sandbox as well: if the stub
+  # overlay were ever missed, the shim's fallback candidates must NOT be able
+  # to resolve to a REAL overlay on the machine and run a real update.
+  HERMES_HOME="$1" JARVIS_OVERLAY_DIR="$2" HERMES_SRC="${3:-}"   HOME="$RES/nohome" LOCALAPPDATA="$RES/nolocal"     bash "$OVERLAY_DIR/bin/jarvis" update 2>/dev/null | sed -n 's/^SRC=//p'
+}
+
+# (a) customer layout: overlay sibling IS the active tree -> identical, no-op.
+mkdir -p "$RES/cust/hermes/hermes-agent"; _mkovl "$RES/cust/hermes/jarvis-agent"
+CUST="$(_resolve "$RES/cust/hermes" "$RES/cust/hermes/jarvis-agent")"
+chk "customer layout resolves to the active tree" "[ \"$CUST\" = \"$RES/cust/hermes/hermes-agent\" ]"
+chk "customer layout: sibling == active (no-op)"  "[ \"$CUST\" = \"$(dirname "$RES/cust/hermes/jarvis-agent")/hermes-agent\" ]"
+
+# (b) dev layout: sibling is a DIFFERENT (stale) tree -> must pick the active one.
+mkdir -p "$RES/dev/home/hermes/hermes-agent" "$RES/dev/jarvis/hermes-agent"
+_mkovl "$RES/dev/jarvis/jarvis-agent"
+DEV="$(_resolve "$RES/dev/home/hermes" "$RES/dev/jarvis/jarvis-agent")"
+chk "dev layout resolves to the ACTIVE install"   "[ \"$DEV\" = \"$RES/dev/home/hermes/hermes-agent\" ]"
+chk "dev layout does NOT pick the stale sibling"  "[ \"$DEV\" != \"$RES/dev/jarvis/hermes-agent\" ]"
+
+# (c) an explicit HERMES_SRC always wins.
+OVR="$(_resolve "$RES/dev/home/hermes" "$RES/dev/jarvis/jarvis-agent" "/explicit/override")"
+chk "explicit HERMES_SRC is never overridden"     "[ \"$OVR\" = \"/explicit/override\" ]"
+
+# (d) no active tree at all -> the historical sibling behaviour still applies.
+mkdir -p "$RES/fb/home/hermes" "$RES/fb/jarvis/hermes-agent"; _mkovl "$RES/fb/jarvis/jarvis-agent"
+FB="$(_resolve "$RES/fb/home/hermes" "$RES/fb/jarvis/jarvis-agent")"
+chk "sibling fallback preserved when no active"   "[ \"$FB\" = \"$RES/fb/jarvis/hermes-agent\" ]"
+
+# The .cmd shim must implement the same order (it is the Windows entry point).
+chk "jarvis.cmd prefers HERMES_HOME too"          "grep -q 'JHOME' '$OVERLAY_DIR/bin/jarvis.cmd'"
+chk "jarvis.cmd keeps the sibling fallback"       "grep -q 'hermes-agent' '$OVERLAY_DIR/bin/jarvis.cmd'"
+
+echo
 echo "──────────────────────────────────────────────"
 echo "  RESULT: $PASS passed, $FAIL failed"
 echo "──────────────────────────────────────────────"

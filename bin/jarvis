@@ -32,9 +32,36 @@ if [ "${1:-}" = "update" ] && [ -z "${JARVIS_NO_UPDATE_WRAP:-}" ]; then
              "$HOME/.hermes/jarvis-agent" \
              "$HOME/jarvis/jarvis-agent"; do
     [ -n "$_ov" ] && [ -f "$_ov/update-jarvis.sh" ] || continue
-    # Both install layouts keep hermes-agent next to jarvis-agent.
-    _src="$(dirname "$_ov")/hermes-agent"
-    [ -d "$_src" ] && export HERMES_SRC="${HERMES_SRC:-$_src}"
+    # Which Hermes tree does the update act on?
+    #
+    # The ACTIVE install ($HERMES_HOME/hermes-agent) is the tree `hermes update`
+    # itself updates and the desktop app rebuilds from — so it is the only tree
+    # an update is meaningful against. It is preferred here.
+    #
+    # The overlay's SIBLING is the historical answer and stays as the fallback:
+    # on a customer install the overlay lives at %LOCALAPPDATA%\hermes\jarvis-agent
+    # (or ~/.hermes/jarvis-agent), whose sibling IS the active tree — the two
+    # resolve to the same path and this is a no-op.
+    #
+    # They diverge only on a DEV layout, where the overlay is checked out
+    # somewhere else (e.g. ~/jarvis/jarvis-agent) beside an old scratch clone.
+    # There the sibling wins used to send every `jarvis update` at a stale tree
+    # while the real install went untouched — which is how a month-old checkout
+    # produced feature-patch drift banners for a patch that applied fine to
+    # current upstream.
+    _hh="${HERMES_HOME:-}"
+    if [ -z "$_hh" ]; then
+      case "${OS:-}${OSTYPE:-}$(uname -s 2>/dev/null)" in
+        *Windows_NT*|*msys*|*cygwin*|*MINGW*|*MSYS*)
+          _hh="${LOCALAPPDATA:-$HOME/AppData/Local}/hermes" ;;
+        *) _hh="$HOME/.hermes" ;;
+      esac
+    fi
+    _src=""
+    for _cand in "${_hh}/hermes-agent" "$(dirname "$_ov")/hermes-agent"; do
+      if [ -d "$_cand" ]; then _src="$_cand"; break; fi
+    done
+    [ -n "$_src" ] && export HERMES_SRC="${HERMES_SRC:-$_src}"
     shift
     exec bash "$_ov/update-jarvis.sh" "" "$@"
   done

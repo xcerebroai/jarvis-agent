@@ -49,12 +49,22 @@ if not defined JBASH if exist "%LOCALAPPDATA%\Programs\Git\bin\bash.exe" set "JB
 if not defined JBASH for /f "delims=" %%B in ('where bash 2^>nul') do if not defined JBASH set "JBASH=%%B"
 if not defined JBASH goto :passthrough
 
-REM Both install layouts keep hermes-agent next to jarvis-agent. Only set
-REM HERMES_SRC when the caller has not already chosen one (matches bin/jarvis).
+REM Which Hermes tree does the update act on? Prefer the ACTIVE install
+REM (%HERMES_HOME%\hermes-agent, default %LOCALAPPDATA%\hermes\hermes-agent):
+REM that is the tree `hermes update` updates and the desktop rebuilds from.
+REM Fall back to the overlay SIBLING, which is the same path on a customer
+REM install (overlay at %LOCALAPPDATA%\hermes\jarvis-agent) so this is a
+REM no-op there. They diverge only on a dev layout, where the sibling can be
+REM a stale scratch clone and every update would miss the real install.
+REM Only set HERMES_SRC when the caller has not already chosen one.
 REM Forward slashes: bash treats a backslash as an escape, so a Windows-style
 REM path breaks update-jarvis.sh's `cd "$SRC"`.
-for %%I in ("%JOVL%") do set "JSRC=%%~dpIhermes-agent"
-if not defined HERMES_SRC if exist "%JSRC%\" set "HERMES_SRC=%JSRC:\=/%"
+set "JHOME=%HERMES_HOME%"
+if not defined JHOME set "JHOME=%LOCALAPPDATA%\hermes"
+set "JSRC="
+if exist "%JHOME%\hermes-agent\" set "JSRC=%JHOME%\hermes-agent"
+if not defined JSRC for %%I in ("%JOVL%") do if exist "%%~dpIhermes-agent\" set "JSRC=%%~dpIhermes-agent"
+if not defined HERMES_SRC if defined JSRC set "HERMES_SRC=%JSRC:\=/%"
 
 REM Drop the `update` verb and forward the remaining args. update-jarvis.sh
 REM takes the source tree as $1 (empty here — HERMES_SRC above wins) and passes

@@ -159,6 +159,12 @@ chk "jarvis <verb> present"           "grep -qE 'jarvis (update|status|gateway|p
 
 echo
 echo "== 8. revert yields a clean tree (zero-conflict guarantee) =="
+# apply.sh (section 2) also layered on the realtime-voice feature — which drops
+# in overlay-owned UNTRACKED files a bare `git checkout -- .` cannot remove.
+# Revert the feature first (scoped: only its own declared paths), then the
+# branding, so the zero-conflict clean-tree guarantee still holds end to end.
+FEATURE_APPLY="$OVERLAY_DIR/features/realtime-voice/apply-feature.sh"
+[ -f "$FEATURE_APPLY" ] && bash "$FEATURE_APPLY" revert "$SRC" >/dev/null 2>&1 || true
 git -C "$SRC" checkout -- .
 DIRTY=$(git -C "$SRC" status --porcelain | wc -l | tr -d ' ')
 chk "clean tree after revert ($DIRTY dirty)" "[ \"$DIRTY\" -eq 0 ]"

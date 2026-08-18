@@ -1,0 +1,3 @@
+# Never commit caches/bytecode into the feature payload.
+__pycache__/
+*.pyc

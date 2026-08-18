@@ -75,6 +75,8 @@ jarvis-agent/
   install-jarvis.sh   # branded installer wrapping setup-hermes.sh
   update-jarvis.sh    # revert → hermes update → apply.sh
   tests/overlay_smoke.sh      # end-to-end validation harness (16 assertions)
+  tests/feature_realtime_voice.sh  # Realtime voice feature: apply/revert/drift/secret-scan
+  features/realtime-voice/    # update-safe voice FEATURE layer (new files + tracked patch)
   .github/workflows/          # CI (lint + smoke) + scheduled upstream-drift watch
 ```
 
@@ -149,6 +151,51 @@ Then run `jarvis` to start. Update later with `./update-jarvis.sh`.
 `hermes_cli`; pass `HERMES_SRC=/path/to/hermes-agent` to be explicit. Requires
 `bash`, `perl` (ships with git), and a Python with `pyyaml` (Hermes provides
 one) for the config edit.
+
+## Voice (OpenAI Realtime)
+
+The desktop app includes a hands-free **speech-to-speech voice assistant** built
+on **OpenAI's Realtime API** (WebRTC, `gpt-realtime-2.1`): semantic
+turn-detection, natural barge-in (talk over it and it stops), and a live mic that
+stays open for the whole conversation. It is layered on as an update-safe
+[feature overlay](./features/realtime-voice/) — the underlying Hermes tree stays
+pristine.
+
+- **You need an OpenAI API key.** Set `OPENAI_API_KEY` (or
+  `VOICE_TOOLS_OPENAI_KEY`) in your environment / Keys page. The key **never
+  leaves your machine's backend** — the browser authenticates each session with a
+  short-lived *ephemeral* secret minted locally; the standing key is never sent to
+  the browser or logged. **Realtime audio is billed by OpenAI per minute** (input
+  and output), so an active voice session costs money for as long as it runs. With
+  no key configured, voice falls back to the existing chained speech path.
+- **Always-live mic + one-tap end.** While voice is on, the mic indicator shows it
+  is live and listening; end the session explicitly from the composer's voice
+  control (or the Ctrl+B toggle). It does **not** stop on a tab switch, route
+  change, or minimized window — only on an explicit end or app exit — and it never
+  replays the greeting on an automatic reconnect.
+- **Configurable identity.** Assistant name, your name (used only in the opening
+  greeting), wake phrase, Realtime voice, accent/delivery, auto-start, and custom
+  greetings are all set in `~/.hermes/config.yaml` under `voice.realtime.*` (seeded
+  with documented defaults on install — see
+  [`features/realtime-voice/config/voice.realtime.defaults.yaml`](./features/realtime-voice/config/voice.realtime.defaults.yaml)).
+  Public defaults: **JARVIS**, no personal name, wake phrase "hey jarvis", voice
+  `marin`, a concise neutral delivery. Auto-start is **off** by default, preserving
+  upstream launch behavior; turn it on to have voice greet you and start listening
+  at launch.
+- **Wake phrase.** Uses the existing wake-word providers; the default is unchanged
+  upstream behavior. An *arbitrary* custom phrase may need the optional
+  Sherpa/pypinyin wake-word dependency — install it only if you pick a phrase the
+  default provider can't match.
+- **Background behavior.** While voice is active, chat windows are kept unthrottled
+  so audio/timers/WebRTC keep full cadence even minimized or backgrounded; normal
+  Chromium throttling returns shortly after the session ends.
+- **Tool delegation.** For anything needing real capability — tools, memory,
+  files, terminal, current facts, calculation, or actions — voice bridges to the
+  full JARVIS agent via `use_jarvis` and speaks the result back in its own voice;
+  ordinary conversation is answered natively for low latency. An optional, opt-in
+  fast project review (`review_projects`) reads a local JSON index you point it at
+  (`voice.realtime.review_projects.index_path`); it is omitted entirely when
+  unconfigured.
 
 ## Testing & CI
 

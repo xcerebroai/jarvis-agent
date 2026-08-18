@@ -1,0 +1,53 @@
+# Realtime voice — documented config defaults (seeded into ~/.hermes/config.yaml
+# by the overlay, NON-DESTRUCTIVELY: an existing `voice.realtime` block is never
+# overwritten). Everything here is optional; delete a key to fall back to the
+# public product default shown in the comment.
+#
+# This block controls the desktop app's OpenAI Realtime speech-to-speech voice.
+# It needs a standard OpenAI API key (OPENAI_API_KEY or VOICE_TOOLS_OPENAI_KEY);
+# the standing key never leaves the backend — the browser authenticates with a
+# short-lived ephemeral secret minted per session. Realtime usage is billed by
+# OpenAI per audio minute.
+voice:
+  realtime:
+    # Master switch. false → the desktop uses the existing chained STT/TTS voice
+    # path instead of the Realtime transport. Default: true.
+    enabled: true
+
+    # The assistant's spoken identity. Default: JARVIS.
+    assistant_name: JARVIS
+
+    # The operator's name. Used ONLY in the opening greeting, never in normal
+    # replies. Default: "" (no personal name anywhere).
+    user_name: ""
+
+    # The wake phrase the model is told never to echo back. This does NOT change
+    # wake-word detection (that is tools/wake_word.py / the existing wake config);
+    # it only informs the voice persona. Default: "hey jarvis".
+    wake_phrase: "hey jarvis"
+
+    # Auto-start the persistent session once per app launch (speaks a rotating
+    # greeting on first connect). Default: false — voice starts on the existing
+    # Ctrl+B toggle / wake trigger, preserving upstream launch behavior.
+    auto_start: false
+
+    # Realtime model + output voice. Defaults: gpt-realtime-2.1 / marin.
+    model: gpt-realtime-2.1
+    voice: marin
+
+    # Accent/delivery instructions handed to the model. Default: a concise,
+    # neutral delivery. Set your own to steer accent/tone (e.g. "Speak with a
+    # warm British accent."). Keep it a delivery instruction, not a character.
+    delivery: ""
+
+    # Optional operator-authored rotating greetings. When empty, greetings are
+    # generated from assistant_name/user_name. Default: [].
+    greetings: []
+
+    # Optional fast project-review tool. Point index_path at a local JSON file
+    # (absolute, or relative to ~/.hermes) shaped as {"projects": [ {name,
+    # status, priority, note, next_action, tasks:[{done}]}, ... ]} (a bare list
+    # is also accepted). When unset or the file is absent, the review_projects
+    # tool is omitted entirely and voice uses the full agent for project work.
+    review_projects:
+      index_path: ""

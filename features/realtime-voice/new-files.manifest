@@ -1,0 +1,13 @@
+apps/desktop/src/app/chat/composer/hooks/use-composer-voice-launch.test.tsx
+apps/desktop/src/app/chat/composer/hooks/use-voice-session.test.tsx
+apps/desktop/src/app/chat/composer/hooks/use-voice-session.ts
+apps/desktop/src/lib/voice/agent-delegate.test.ts
+apps/desktop/src/lib/voice/agent-delegate.ts
+apps/desktop/src/lib/voice/realtime-config.test.ts
+apps/desktop/src/lib/voice/realtime-config.ts
+apps/desktop/src/lib/voice/realtime-session.test.ts
+apps/desktop/src/lib/voice/realtime-session.ts
+apps/desktop/src/lib/voice/voice-supervisor.test.ts
+apps/desktop/src/lib/voice/voice-supervisor.ts
+hermes_cli/realtime_voice.py
+tests/hermes_cli/test_web_server_realtime_token.py

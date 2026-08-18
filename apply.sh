@@ -1240,6 +1240,14 @@ if [ -f "$FEATURE_APPLY" ]; then
   fi
 fi
 
+# --- 4d. JARVIS desktop appearance default ---------------------------------
+APPEARANCE_APPLY="$OVERLAY_DIR/features/jarvis-appearance/apply-feature.sh"
+if [ -f "$APPEARANCE_APPLY" ]; then
+  echo
+  HERMES_SRC="$SRC" HERMES_HOME="$HERMES_HOME" bash "$APPEARANCE_APPLY" apply "$SRC" \
+    || echo "  ⚠ JARVIS appearance default did not apply; existing theme behavior remains intact." >&2
+fi
+
 # --- 5. Cascade onto the desktop app's ACTIVE source tree -------------------
 # See the ACTIVE_ROOT note near the top: the Electron app's in-app updater
 # rebuilds from $HERMES_HOME/hermes-agent and dittos the result over the

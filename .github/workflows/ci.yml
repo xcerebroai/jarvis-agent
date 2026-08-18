@@ -23,7 +23,8 @@ jobs:
           shellcheck --severity=error apply.sh install-jarvis.sh update-jarvis.sh bin/jarvis tests/overlay_smoke.sh \
             installer/brand-installer.sh installer/inject-overlay-stage.sh installer/gen-icons.sh \
             installer/overlay-stage/jarvis-overlay.sh \
-            features/realtime-voice/apply-feature.sh tests/feature_realtime_voice.sh
+            features/realtime-voice/apply-feature.sh tests/feature_realtime_voice.sh \
+            features/jarvis-appearance/apply-feature.sh tests/feature_jarvis_appearance.sh
 
       - name: Validate skin YAML + branding.map + banner (no third-party deps)
         run: |
@@ -110,6 +111,9 @@ jobs:
 
       - name: Realtime voice feature layer (apply/idempotency/revert/drift/secrets)
         run: bash tests/feature_realtime_voice.sh
+
+      - name: JARVIS appearance default (apply/idempotency/revert/drift)
+        run: bash tests/feature_jarvis_appearance.sh
 
       - name: apply.sh survives a curated file the tree does not have
         run: |
@@ -260,6 +264,8 @@ jobs:
           HERMES_SRC=/tmp/hsrc HERMES_HOME=/tmp/hhome \
             bash features/realtime-voice/apply-feature.sh apply /tmp/hsrc
           bash features/realtime-voice/apply-feature.sh verify /tmp/hsrc
+          HERMES_SRC=/tmp/hsrc bash features/jarvis-appearance/apply-feature.sh apply /tmp/hsrc
+          HERMES_SRC=/tmp/hsrc bash features/jarvis-appearance/apply-feature.sh verify /tmp/hsrc
 
       - uses: actions/setup-node@v4
         with:
@@ -276,7 +282,9 @@ jobs:
         run: |
           npx vitest run --project ui src/lib/voice \
             src/app/chat/composer/hooks/use-voice-session.test.tsx \
-            src/app/chat/composer/hooks/use-composer-voice-launch.test.tsx
+            src/app/chat/composer/hooks/use-composer-voice-launch.test.tsx \
+            src/themes/presets.test.ts src/themes/profile-theme.test.ts \
+            src/themes/context.test.tsx src/themes/user-themes.test.ts
           npx vitest run --project electron electron/stream-throttle.test.ts
 
       - name: Typecheck (renderer + electron)

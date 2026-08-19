@@ -1,3 +1,4 @@
+apps/desktop/src/api/realtime-voice.ts
 apps/desktop/src/app/chat/composer/hooks/use-composer-voice-launch.test.tsx
 apps/desktop/src/app/chat/composer/hooks/use-voice-session.test.tsx
 apps/desktop/src/app/chat/composer/hooks/use-voice-session.ts

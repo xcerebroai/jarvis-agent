@@ -102,7 +102,8 @@ feature_present() {
   local src="$1"
   grep -q "hermes:voice-active" "$src/apps/desktop/electron/main.ts" 2>/dev/null &&
   grep -q "setVoiceActive" "$src/apps/desktop/electron/stream-throttle.ts" 2>/dev/null &&
-  grep -q "mintRealtimeToken" "$src/apps/desktop/src/hermes.ts" 2>/dev/null &&
+  grep -q "mintRealtimeToken" "$src/apps/desktop/src/api/realtime-voice.ts" 2>/dev/null &&
+  grep -q "api/realtime-voice" "$src/apps/desktop/src/hermes.ts" 2>/dev/null &&
   grep -q "/api/audio/realtime/token" "$src/hermes_cli/web_server.py" 2>/dev/null &&
   [ -f "$src/apps/desktop/src/lib/voice/voice-supervisor.ts" ] &&
   [ -f "$src/hermes_cli/realtime_voice.py" ]

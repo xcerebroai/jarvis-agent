@@ -1,8 +1,8 @@
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 632e5db..255d076 100644
+index 09170cc6..93d54789 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
-@@ -13902,6 +13902,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
+@@ -13800,6 +13800,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
    updateStreamThrottleFromActiveWork()
  })
  
@@ -19,10 +19,10 @@ index 632e5db..255d076 100644
    if (!payload || !isHexColor(payload.background) || !isHexColor(payload.foreground)) {
      return
 diff --git a/apps/desktop/electron/preload.ts b/apps/desktop/electron/preload.ts
-index 7065843..f28be95 100644
+index 2d1ba597..26256ebb 100644
 --- a/apps/desktop/electron/preload.ts
 +++ b/apps/desktop/electron/preload.ts
-@@ -199,6 +199,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
+@@ -222,6 +222,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
    watchDirectory: dir => ipcRenderer.invoke('hermes:watchDirectory', dir),
    stopPreviewFileWatch: id => ipcRenderer.invoke('hermes:stopPreviewFileWatch', id),
    setActiveWork: payload => ipcRenderer.send('hermes:active-work', payload),
@@ -31,7 +31,7 @@ index 7065843..f28be95 100644
    setNativeTheme: mode => ipcRenderer.send('hermes:native-theme', mode),
    setTranslucency: payload => ipcRenderer.send('hermes:translucency', payload),
 diff --git a/apps/desktop/electron/stream-throttle.test.ts b/apps/desktop/electron/stream-throttle.test.ts
-index fc41bcf..57979c6 100644
+index fc41bcf1..57979c6a 100644
 --- a/apps/desktop/electron/stream-throttle.test.ts
 +++ b/apps/desktop/electron/stream-throttle.test.ts
 @@ -132,6 +132,45 @@ test('repeated busy reports do not re-apply or stack timers', () => {
@@ -81,7 +81,7 @@ index fc41bcf..57979c6 100644
    const timers = makeTimers()
    const throttle = createStreamThrottle(timers)
 diff --git a/apps/desktop/electron/stream-throttle.ts b/apps/desktop/electron/stream-throttle.ts
-index 912b40b..9342e30 100644
+index 912b40b9..9342e302 100644
 --- a/apps/desktop/electron/stream-throttle.ts
 +++ b/apps/desktop/electron/stream-throttle.ts
 @@ -44,6 +44,11 @@ export interface StreamThrottle {
@@ -184,10 +184,10 @@ index 912b40b..9342e30 100644
    }
  }
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
-index 449471d..6a32b02 100644
+index ffe6c470..3b9130fb 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
-@@ -1,9 +1,10 @@
+@@ -1,10 +1,11 @@
  import { useStore } from '@nanostores/react'
 -import { useCallback, useEffect, useRef, useState } from 'react'
 +import { useCallback, useEffect, useRef } from 'react'
@@ -195,11 +195,12 @@ index 449471d..6a32b02 100644
  import { useI18n } from '@/i18n'
  import { chatMessageText, collectUnspokenTurnSpeech } from '@/lib/chat-messages'
  import { triggerHaptic } from '@/lib/haptics'
+ import { markAssistantIdSpoken, resolveSpokenReply } from '@/lib/spoken-reply'
 +import { voiceSupervisor } from '@/lib/voice/voice-supervisor'
  import { clearWakeIndicator, syncWakeIndicatorWithVoice } from '@/lib/wake-indicator'
  import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/store/composer'
  import { resetBrowseState } from '@/store/composer-input-history'
-@@ -18,6 +19,7 @@ import { useComposerScope } from '../scope'
+@@ -19,6 +20,7 @@ import { useComposerScope } from '../scope'
  import type { ChatBarProps } from '../types'
  
  import { useAutoSpeakReplies } from './use-auto-speak-replies'
@@ -207,7 +208,7 @@ index 449471d..6a32b02 100644
  import { useVoiceConversation } from './use-voice-conversation'
  import { useVoiceRecorder } from './use-voice-recorder'
  
-@@ -39,11 +41,34 @@ interface UseComposerVoiceArgs {
+@@ -40,11 +42,34 @@ interface UseComposerVoiceArgs {
    target: ComposerTarget
  }
  
@@ -245,15 +246,15 @@ index 449471d..6a32b02 100644
   */
  export function useComposerVoice({
    busy,
-@@ -61,7 +86,6 @@ export function useComposerVoice({
+@@ -62,7 +87,6 @@ export function useComposerVoice({
    const { t } = useI18n()
    // A tile's composer speaks ITS transcript, not the primary chat's.
    const { $messages } = useComposerScope()
 -  const [voiceConversationActive, setVoiceConversationActive] = useState(false)
-   const lastSpokenIdRef = useRef<string | null>(null)
    const ownsWakeIndicatorRef = useRef(false)
    const voiceStartRequest = useStore($voiceConversationStartRequest)
-@@ -122,28 +146,38 @@ export function useComposerVoice({
+ 
+@@ -127,28 +151,38 @@ export function useComposerVoice({
      await onSubmit(text)
    }
  
@@ -304,7 +305,7 @@ index 449471d..6a32b02 100644
      onSubmit: submitVoiceTurn,
      onTranscribeAudio,
      pendingResponse: pendingTurnResponse,
-@@ -152,6 +186,24 @@ export function useComposerVoice({
+@@ -157,6 +191,24 @@ export function useComposerVoice({
      beforeMicOpen: () => wakePauseBarrierRef.current ?? undefined
    })
  
@@ -329,7 +330,7 @@ index 449471d..6a32b02 100644
    // eslint-disable-next-line no-restricted-syntax -- ownership token used only by unmount cleanup
    useEffect(() => {
      if (target !== 'main') {
-@@ -172,33 +224,52 @@ export function useComposerVoice({
+@@ -177,33 +229,52 @@ export function useComposerVoice({
      []
    )
  
@@ -390,7 +391,7 @@ index 449471d..6a32b02 100644
    const resumeWakeIfPaused = useCallback(() => {
      if (!wakePausedRef.current) {
        return
-@@ -207,7 +278,7 @@ export function useComposerVoice({
+@@ -212,7 +283,7 @@ export function useComposerVoice({
      wakePausedRef.current = false
      wakePauseBarrierRef.current = null
      // Reconcile, don't just resume: the wake word is a persistent setting, so
@@ -399,7 +400,7 @@ index 449471d..6a32b02 100644
      // enabled — including when the raw resume loses the mic-release race.
      void resumeWakeAfterVoice()
    }, [])
-@@ -230,19 +301,22 @@ export function useComposerVoice({
+@@ -235,19 +306,22 @@ export function useComposerVoice({
      return barrier
    }, [])
  
@@ -428,7 +429,7 @@ index 449471d..6a32b02 100644
        return
      }
  
-@@ -256,18 +330,14 @@ export function useComposerVoice({
+@@ -261,18 +335,14 @@ export function useComposerVoice({
          message: t.notifications.voice.sayStopToEnd(phrase)
        })
      }
@@ -452,10 +453,10 @@ index 449471d..6a32b02 100644
    const handleToggleAutoSpeak = useCallback(() => {
      void setAutoSpeakReplies(!$autoSpeakReplies.get()).catch(error =>
 diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
-index 58d65d8..79afaa8 100644
+index 1bd046c8..dc9173a5 100644
 --- a/apps/desktop/src/global.d.ts
 +++ b/apps/desktop/src/global.d.ts
-@@ -225,6 +225,10 @@ declare global {
+@@ -245,6 +245,10 @@ declare global {
        watchDirectory?: (dir: string) => Promise<HermesPreviewWatch>
        stopPreviewFileWatch: (id: string) => Promise<boolean>
        setActiveWork?: (payload: HermesActiveWork) => void
@@ -465,95 +466,21 @@ index 58d65d8..79afaa8 100644
 +      setVoiceActive?: (active: boolean) => void
        setTitleBarTheme?: (payload: HermesTitleBarTheme) => void
        setNativeTheme?: (mode: 'dark' | 'light' | 'system') => void
-       setTranslucency?: (payload: TranslucencyState) => void
+       /** Main-process fact: this OS can back glass with a native material. */
 diff --git a/apps/desktop/src/hermes.ts b/apps/desktop/src/hermes.ts
-index 2defd9e..94696e5 100644
+index 6242ef59..901d24e5 100644
 --- a/apps/desktop/src/hermes.ts
 +++ b/apps/desktop/src/hermes.ts
-@@ -53,6 +53,9 @@ import type {
-   ProfileSetupCommand,
-   ProfileSoul,
-   ProfilesResponse,
-+  RealtimeProjectReviewResponse,
-+  RealtimeTokenResponse,
-+  RealtimeVoiceConfigResponse,
-   SessionInfo,
-   SessionMessage,
-   SessionMessagesResponse,
-@@ -201,6 +204,9 @@ export type {
-   ProfileSoul,
-   ProfilesResponse,
-   ProjectFolder,
-+  RealtimeProjectReviewResponse,
-+  RealtimeTokenResponse,
-+  RealtimeVoiceConfigResponse,
-   ProjectInfo,
-   ProjectsPayload,
-   RpcEvent,
-@@ -1953,6 +1959,61 @@ export function speakText(text: string): Promise<AudioSpeakResponse> {
-   })
- }
- 
-+/**
-+ * Mint a short-lived OpenAI Realtime ephemeral client secret for the desktop's
-+ * production speech-to-speech transport. The standing key stays server-side;
-+ * this returns only the ephemeral token + non-secret session metadata the
-+ * WebRTC layer needs. Profile-scoped like the other audio endpoints.
-+ */
-+export function mintRealtimeToken(overrides?: {
-+  model?: string
-+  voice?: string
-+}): Promise<RealtimeTokenResponse> {
-+  return window.hermesDesktop.api<RealtimeTokenResponse>({
-+    ...profileScoped(),
-+    path: '/api/audio/realtime/token',
-+    method: 'POST',
-+    body: { model: overrides?.model, voice: overrides?.voice },
-+    // The mint blocks on an outbound OpenAI round-trip (server bounds it at
-+    // 15s); allow headroom over the default 15s Electron backend timeout.
-+    timeoutMs: 20_000
-+  })
-+}
-+
-+/**
-+ * Resolve the configurable voice identity from config.yaml (`voice.realtime.*`).
-+ * No secrets — assistant name, user name, wake phrase, voice, delivery,
-+ * greetings, auto-start, and whether the optional review tool is configured.
-+ */
-+export function getRealtimeVoiceConfig(): Promise<RealtimeVoiceConfigResponse> {
-+  return window.hermesDesktop.api<RealtimeVoiceConfigResponse>({
-+    ...profileScoped(),
-+    path: '/api/audio/realtime/config',
-+    method: 'POST',
-+    body: {},
-+    timeoutMs: 5_000
-+  })
-+}
-+
-+/**
-+ * Compact fast-path review of the operator's configured local project index
-+ * (`voice.realtime.review_projects.index_path`). Returns 404 when no index is
-+ * configured, in which case the renderer omits the `review_projects` tool.
-+ */
-+export function getRealtimeProjectReview(options: {
-+  query?: string
-+  status?: string
-+  limit?: number
-+} = {}): Promise<RealtimeProjectReviewResponse> {
-+  return window.hermesDesktop.api<RealtimeProjectReviewResponse>({
-+    ...profileScoped(),
-+    path: '/api/audio/realtime/project-review',
-+    method: 'POST',
-+    body: options,
-+    timeoutMs: 5_000
-+  })
-+}
-+
- export function getElevenLabsVoices(profile?: null | string): Promise<ElevenLabsVoicesResponse> {
-   return window.hermesDesktop.api<ElevenLabsVoicesResponse>({
-     path: '/api/audio/elevenlabs/voices',
+@@ -23,6 +23,7 @@ export * from './api/messaging'
+ export * from './api/models'
+ export * from './api/plugins'
+ export * from './api/profiles'
++export * from './api/realtime-voice'
+ export * from './api/sessions'
+ export * from './api/skills'
+ export * from './api/system'
 diff --git a/apps/desktop/src/types/hermes.ts b/apps/desktop/src/types/hermes.ts
-index ce407dd..548dd3f 100644
+index dc5e3d24..9e5e287a 100644
 --- a/apps/desktop/src/types/hermes.ts
 +++ b/apps/desktop/src/types/hermes.ts
 @@ -29,6 +29,58 @@ export interface AudioSpeakResponse {
@@ -616,7 +543,7 @@ index ce407dd..548dd3f 100644
    label: string
    name: string
 diff --git a/hermes_cli/web_models.py b/hermes_cli/web_models.py
-index 2a44cfe..8833f53 100644
+index 2a44cfef..8833f531 100644
 --- a/hermes_cli/web_models.py
 +++ b/hermes_cli/web_models.py
 @@ -306,6 +306,26 @@ class TTSSpeakRequest(BaseModel):
@@ -647,10 +574,10 @@ index 2a44cfe..8833f53 100644
  
  class OAuthSubmitBody(BaseModel):
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index edc62c8..fbc1d06 100644
+index 35f8f422..76da0c43 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
-@@ -1528,6 +1528,8 @@ from hermes_cli.web_models import (  # noqa: F401
+@@ -1529,6 +1529,8 @@ from hermes_cli.web_models import (  # noqa: F401
      LearningNodeEdit,
      DebugShareRequest,
      TTSSpeakRequest,
@@ -659,7 +586,7 @@ index edc62c8..fbc1d06 100644
      OAuthSubmitBody,
      BulkDeleteSessions,
      SessionImport,
-@@ -5255,6 +5257,220 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+@@ -5256,6 +5258,220 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
      }
  
  

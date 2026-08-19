@@ -114,6 +114,36 @@ echo "== 5. config defaults seeded + non-destructive =="
 if [ -n "$PY" ]; then
   grep -q 'realtime:' "$HOME_DIR/config.yaml" 2>/dev/null && ok "voice.realtime seeded into config.yaml" || bad "config not seeded"
   echo "$APPLY2" | grep -q 'already set by operator' && ok "second seed is non-destructive" || bad "second seed not guarded"
+
+  # The summon phrase: wake_word seeds PER-KEY. A fresh home gets the full
+  # JARVIS block; an operator's explicit choices are never overwritten while
+  # still-absent keys are filled in.
+  if "$PY" - "$HOME_DIR/config.yaml" <<'WPY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+w = d.get("wake_word") or {}
+assert w.get("enabled") is True, w
+assert w.get("phrase") == "hey jarvis", w
+assert (w.get("openwakeword") or {}).get("model") == "hey_jarvis", w
+WPY
+  then ok "wake_word seeded: enabled + hey jarvis phrase + hey_jarvis model"
+  else bad "wake_word not seeded correctly"
+  fi
+
+  WAKE_HOME="$WORK/wake-home"; mkdir -p "$WAKE_HOME"
+  printf 'wake_word:\n  enabled: false\n  openwakeword:\n    model: my_custom.onnx\n' > "$WAKE_HOME/config.yaml"
+  HERMES_HOME="$WAKE_HOME" bash "$APPLY" apply "$SRC" >/dev/null 2>&1
+  if "$PY" - "$WAKE_HOME/config.yaml" <<'WPY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1])) or {}
+w = d.get("wake_word") or {}
+assert w.get("enabled") is False, w
+assert (w.get("openwakeword") or {}).get("model") == "my_custom.onnx", w
+assert w.get("phrase") == "hey jarvis", w
+WPY
+  then ok "operator wake choices preserved (enabled:false + custom model kept, absent phrase filled)"
+  else bad "operator wake choices were clobbered"
+  fi
 else
   ok "config seed skipped (no python+pyyaml) — not a failure"
 fi

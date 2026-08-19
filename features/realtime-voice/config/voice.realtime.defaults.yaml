@@ -51,3 +51,18 @@ voice:
     # tool is omitted entirely and voice uses the full agent for project work.
     review_projects:
       index_path: ""
+
+# The product summon phrase. Seeded PER-KEY (each key only when absent), so an
+# operator's explicit choice — a different model, a disabled listener — is
+# never overwritten. hey_jarvis is one of openWakeWord's built-in pretrained
+# models: selected by name, fetched automatically on first arm (the apply step
+# also pre-fetches it best-effort so the first "Jarvis" works offline).
+wake_word:
+  # Arm the listener when the gateway starts. The desktop auto-arms via
+  # wake.start whenever this is true.
+  enabled: true
+  # Cosmetic label for openWakeWord (detection is keyed by the model below);
+  # for the sherpa provider this IS the detected phrase.
+  phrase: "hey jarvis"
+  openwakeword:
+    model: hey_jarvis

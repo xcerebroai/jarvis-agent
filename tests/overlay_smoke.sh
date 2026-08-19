@@ -65,6 +65,9 @@ git -C "$SRC" checkout -- . 2>/dev/null || true
 
 export HERMES_SRC="$SRC" HERMES_HOME="$HOME_DIR" HERMES_PYTHON="$PY"
 export PYTHONUTF8=1 PYTHONIOENCODING=utf-8
+# Verify audits installed launch points (/Applications/JARVIS.app) by default;
+# the suite must judge only its own fixtures, never the host machine's app.
+export JARVIS_CHECK_LAUNCH_POINTS=0
 
 echo
 echo "== 1. skin loads through Hermes's own skin_engine =="
@@ -421,6 +424,28 @@ if [ -f "$PS1U" ]; then
   chk "anchor still present upstream"    "grep -qF '# -- 4. Truthful completion' '$PS1U'"
 else
   ok "windows.ps1 absent on this upstream (skipped)"
+fi
+
+echo
+echo "== 15b. macOS in-app updater (posix.sh) re-brands after updating =="
+# The SAME hole as section 15 on the other OS: posix.sh runs
+# "$INSTALL_ROOT/venv/bin/hermes" update directly. Observed live 2026-08-19:
+# a divergence reset (0.20.3 → 0.20.4) left the tree pristine, the renderer
+# was repacked from it, and /Applications got an unbranded bundle — HERMES
+# AGENT home view on glass while no verify ever audited the launch point.
+PSXU="$SRC/scripts/desktop-update/posix.sh"
+if [ -f "$PSXU" ]; then
+  chk "posix updater patched with re-brand"  "grep -q 'jarvis_rebrand' '$PSXU'"
+  chk "exactly one function definition"      "[ \"\$(grep -c '^jarvis_rebrand()' '$PSXU')\" -eq 1 ]"
+  chk "exactly one call site"                "[ \"\$(grep -c '^jarvis_rebrand || true' '$PSXU')\" -eq 1 ]"
+  chk "re-brand failure cannot fail update"  "grep -q 'update itself is unaffected' '$PSXU'"
+  chk "rebuilds bundle from branded source"  "grep -q 'desktop --force-build --build-only' '$PSXU'"
+  chk "patched posix.sh still parses"        "bash -n '$PSXU'"
+  bash "$OVERLAY_DIR/apply.sh" >/dev/null 2>&1 || true
+  chk "posix injection is idempotent"        "[ \"\$(grep -c '^jarvis_rebrand()' '$PSXU')\" -eq 1 ]"
+  chk "posix anchor still present upstream"  "grep -qF '# Truthful completion:' '$PSXU'"
+else
+  ok "posix.sh absent on this upstream (skipped)"
 fi
 
 echo

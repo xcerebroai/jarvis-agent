@@ -326,7 +326,13 @@ verify_desktop_build() {
     [ -d "$b" ] || continue
     verify_shipped_bundle "$b" || rc=1
   done
-  if [ "${JARVIS_CHECK_LAUNCH_POINTS:-}" = "1" ]; then
+  # Launch points are audited whenever they EXIST — not only when
+  # update-jarvis.sh opts in. The artifact the customer actually runs is
+  # /Applications/JARVIS.app, and the 2026-08-19 regression proved a verify
+  # that skips it can report green while the screen says HERMES AGENT: the
+  # in-app updater swapped a pristine bundle into /Applications and no code
+  # path ever audited it. JARVIS_CHECK_LAUNCH_POINTS=0 opts out (fixtures).
+  if [ "${JARVIS_CHECK_LAUNCH_POINTS:-1}" != "0" ]; then
     for b in "/Applications/JARVIS.app" "$HOME/Applications/JARVIS.app"; do
       [ -d "$b" ] || continue
       verify_shipped_bundle "$b" || rc=1
@@ -693,8 +699,78 @@ PSX
     INAPP_PATCH_FAILED=1
   fi
 }
+# --- 2c. The SAME hole on macOS/Linux: scripts/desktop-update/posix.sh ------
+# patch_inapp_updater above only covers windows.ps1. The macOS handoff runs
+# "$INSTALL_ROOT/venv/bin/hermes" update directly (posix.sh — the shim is
+# never consulted), so a divergence-reset update leaves the tree pristine,
+# repacks the renderer from it, and swaps an unbranded bundle into
+# /Applications. Observed live 2026-08-19 (0.20.3 → 0.20.4, 261 commits,
+# "Fast-forward not possible… resetting to match remote"): stash-restore
+# conflicted, tree reset pristine, HERMES AGENT home view shipped on glass.
+# Same remedy as Windows, injected before the truthful-completion block so
+# the bundle the handoff swaps is rebuilt from BRANDED source. Fully guarded:
+# a failed re-brand never fails the user's update.
+patch_inapp_updater_posix() {
+  local psx="$SRC/scripts/desktop-update/posix.sh"
+  [ -f "$psx" ] || return 0
+  if grep -q 'jarvis_rebrand' "$psx"; then
+    echo "  ✓ posix in-app updater already re-brands after update (idempotent)"
+    return 0
+  fi
+  local anchor='# Truthful completion:'
+  if ! grep -qF "$anchor" "$psx"; then
+    echo "  ⚠ posix in-app updater: anchor '# Truthful completion:' not found —"
+    echo "    upstream reshaped posix.sh; the macOS in-app update path is NOT wrapped."
+    INAPP_PATCH_FAILED=1
+    return 0
+  fi
+  perl -i -pe '
+    if (/^# Truthful completion:/ && !$done) {
+      $done = 1;
+      print <<"SH";
+# --- JARVIS: re-apply branding after the unwrapped upstream update ----------
+# Injected by the JARVIS overlay (apply.sh). The update above runs upstream\x27s
+# updater directly; a divergence reset leaves the tree pristine and the
+# renderer repack ships it. Re-brand, then rebuild so the bundle the swap
+# ships is branded. Guarded: any failure leaves the update itself untouched.
+jarvis_rebrand() {
+  _ov=""
+  for _c in "\$HOME/.hermes/jarvis-agent" "\$HOME/jarvis/jarvis-agent"; do
+    [ -f "\$_c/apply.sh" ] && { _ov="\$_c"; break; }
+  done
+  if [ -z "\$_ov" ]; then log "jarvis: no overlay checkout found; skipping re-brand"; return 0; fi
+  log "jarvis: re-applying branding via \$_ov/apply.sh"
+  if ( HERMES_SRC="\$INSTALL_ROOT" bash "\$_ov/apply.sh" ) >> "\$LOG" 2>&1; then
+    log "jarvis: re-brand OK"
+  else
+    log "jarvis: re-brand exit \$? — update itself is unaffected"
+    return 0
+  fi
+  if [ -d "\$INSTALL_ROOT/apps/desktop/release" ]; then
+    if "\$HERMES_BIN" desktop --force-build --build-only >> "\$LOG" 2>&1; then
+      log "jarvis: desktop rebuilt from branded source"
+    else
+      log "jarvis: desktop rebuild failed — bundle may show upstream branding until the next update"
+    fi
+  fi
+  return 0
+}
+jarvis_rebrand || true
+
+SH
+    }
+  ' "$psx"
+  if grep -q 'jarvis_rebrand' "$psx"; then
+    echo "  ✓ posix in-app updater patched to re-brand after updating"
+  else
+    echo "  ⚠ posix in-app updater patch did not apply — the macOS in-app path stays unwrapped"
+    INAPP_PATCH_FAILED=1
+  fi
+}
+
 INAPP_PATCH_FAILED=0
 patch_inapp_updater
+patch_inapp_updater_posix
 
 # --- 3. Rewrite customer-visible strings ----------------------------------
 # One proven-safe profile applies every rule class from branding.map.

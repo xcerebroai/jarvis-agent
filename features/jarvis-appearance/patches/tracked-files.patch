@@ -1,16 +1,16 @@
 diff --git a/apps/desktop/src/app/settings/index.tsx b/apps/desktop/src/app/settings/index.tsx
-index dddfe74..91a5ec5 100644
+index 82cc8a0..0812052 100644
 --- a/apps/desktop/src/app/settings/index.tsx
 +++ b/apps/desktop/src/app/settings/index.tsx
-@@ -31,6 +31,7 @@ import { cn } from '@/lib/utils'
- import { $commandPaletteOpen, openCommandPalettePage } from '@/store/command-palette'
+@@ -32,6 +32,7 @@ import { $commandPaletteOpen, openCommandPalettePage } from '@/store/command-pal
+ import { confirm } from '@/store/confirm'
  import { bindingsFor } from '@/store/keybinds'
  import { notifyError } from '@/store/notifications'
 +import { resetSkinPreferences } from '@/themes/context'
  
  import { useRouteEnumParam } from '../hooks/use-route-enum-param'
  import { OverlayIconButton } from '../overlays/overlay-chrome'
-@@ -153,6 +154,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
+@@ -160,6 +161,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
  
      try {
        await saveHermesConfig(await getHermesConfigDefaults())
@@ -19,10 +19,10 @@ index dddfe74..91a5ec5 100644
        onConfigSaved?.()
      } catch (err) {
 diff --git a/apps/desktop/src/themes/context.tsx b/apps/desktop/src/themes/context.tsx
-index 2091593..71f6a20 100644
+index 6409315..822e2f5 100644
 --- a/apps/desktop/src/themes/context.tsx
 +++ b/apps/desktop/src/themes/context.tsx
-@@ -69,6 +69,14 @@ const profilePref = <T extends string>(record: string, legacy: string, normalize
+@@ -82,6 +82,14 @@ const profilePref = <T extends string>(record: string, legacy: string, normalize
  export const skinPref = profilePref(PROFILE_SKINS_KEY, SKIN_KEY, normalizeSkin)
  export const modePref = profilePref(PROFILE_MODES_KEY, MODE_KEY, normalizeMode)
  
@@ -68,12 +68,12 @@ index 9cb1b86..82d2c55 100644
 +  })
 +})
 diff --git a/apps/desktop/src/themes/presets.ts b/apps/desktop/src/themes/presets.ts
-index 4643818..c22da37 100644
+index ab25ab2..41d5082 100644
 --- a/apps/desktop/src/themes/presets.ts
 +++ b/apps/desktop/src/themes/presets.ts
-@@ -23,6 +23,40 @@ const NOUS_BLUE = '#0053FD'
- const PSYCHE_BLUE = '#1540B1'
- const PSYCHE_WARM = '#FFE6CB'
+@@ -157,6 +157,42 @@ export const githubTheme: DesktopTheme = {
+   }
+ }
  
 +/** JARVIS — product default for the white-label JARVIS distribution. */
 +export const jarvisTheme: DesktopTheme = {
@@ -109,25 +109,27 @@ index 4643818..c22da37 100644
 +  }
 +}
 +
- const nousTint = (pct: number) => `color-mix(in srgb, ${NOUS_BLUE} ${pct}%, #FFFFFF)`
- const nousTintTransparent = (pct: number) => `color-mix(in srgb, ${NOUS_BLUE} ${pct}%, transparent)`
++const nousTint = (pct: number) => `color-mix(in srgb, ${NOUS_BLUE} ${pct}%, #FFFFFF)`
++const nousTintTransparent = (pct: number) => `color-mix(in srgb, ${NOUS_BLUE} ${pct}%, transparent)`
+ /** Catppuccin — Latte in light, Mocha in dark (Catppuccin.catppuccin-vsc). */
  
-@@ -277,6 +311,7 @@ export const slateTheme: DesktopTheme = {
+ /**
+@@ -770,6 +806,7 @@ export const slateTheme: DesktopTheme = {
  }
  
  export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
 +  jarvis: jarvisTheme,
    nous: nousTheme,
-   midnight: midnightTheme,
-   ember: emberTheme,
-@@ -288,4 +323,4 @@ export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
+   github: githubTheme,
+   catppuccin: catppuccinTheme,
+@@ -785,4 +822,4 @@ export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
  export const BUILTIN_THEME_LIST = Object.values(BUILTIN_THEMES)
  
  /** Skin used when nothing is persisted or the persisted name is retired. */
 -export const DEFAULT_SKIN_NAME = 'nous'
 +export const DEFAULT_SKIN_NAME = 'jarvis'
 diff --git a/apps/desktop/src/themes/profile-theme.test.ts b/apps/desktop/src/themes/profile-theme.test.ts
-index ce4a46d..8e25367 100644
+index 3567a8a..d9cfd9c 100644
 --- a/apps/desktop/src/themes/profile-theme.test.ts
 +++ b/apps/desktop/src/themes/profile-theme.test.ts
 @@ -1,6 +1,6 @@
@@ -138,8 +140,8 @@ index ce4a46d..8e25367 100644
  import { DEFAULT_SKIN_NAME } from './presets'
  
  // Skin and mode share one per-profile contract, so assert it once over both.
-@@ -46,3 +46,29 @@ describe.each(cases)('per-profile $name', ({ pref, fallback, a, b, junk }) => {
-     expect(pref.resolve('work')).toBe(fallback)
+@@ -64,3 +64,29 @@ describe('a profile that has never chosen a mode', () => {
+     expect(modePref.resolve('default')).toBe('light')
    })
  })
 +

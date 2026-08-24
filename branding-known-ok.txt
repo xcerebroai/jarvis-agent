@@ -143,3 +143,12 @@ hermes_cli/cli_billing_mixin.py	Nous Portal
 # seeded in ≤ v1.1.7 installs, as the fixture proving apply.sh replaces a
 # pristine default (pinned-hash path). Test-only; never a customer surface.
 tests/overlay_smoke.sh	Hermes Agent
+
+# REMOTE-IDENTITY: attribution headers (X-Title / HTTP-Referer / User-Agent)
+# identifying the requesting app to third-party keyless/free model providers
+# (opencode free tier and the shared header helper in models.py). The values
+# are upstream's app registration with those services — rebranding would
+# claim quota/telemetry under a name the provider does not recognize, and
+# the free tier rejects unrecognized callers.
+hermes_cli/models.py	Hermes Agent
+plugins/model-providers/opencode-free/__init__.py	Hermes Agent

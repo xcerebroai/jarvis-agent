@@ -32,9 +32,10 @@ import { $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
 import { $sidebarOpen, setSidebarOpen } from '@/store/layout'
 import { isVoiceStopCommand } from '@/lib/voice-stop-word'
+import { $activeSessionId, $selectedStoredSessionId } from '@/store/session'
 import { armWakeWord, resumeWakeAfterVoice } from '@/store/wake-word'
 
-import type { AgentDelegate, AgentTurn } from './agent-delegate'
+import { type AgentDelegate, type AgentTurn, createForegroundDelegate } from './agent-delegate'
 import {
   CANCEL_TASK_TOOL_NAME,
   CLEAR_DISPLAY_TOOL_NAME,
@@ -387,10 +388,10 @@ function runUseJarvis(session: RealtimeVoiceSession, callId: string, request: st
       return
     }
 
-    // Capture the delegate that owns the CURRENT foreground session. It pins the
-    // turn to that session, so a later tab switch cannot re-home the result.
-    const delegate = activeDelegate
-    const turn = delegate?.runTurn(trimmed)
+    // Capture the delegate that owns the CURRENT foreground session (pins the
+    // turn to that session). With no composer mounted (command mode is home),
+    // fall back to driving the selected session over the gateway.
+    const turn = await acquireDelegateTurn(trimmed)
 
     if (!turn) {
       session.sendToolOutput(callId, NO_ROUTABLE_SESSION_OUTPUT)
@@ -465,6 +466,70 @@ function narrateTaskOutcome(text: string): void {
   activeSession?.speakSystemUpdate(text)
 }
 
+/** How long the gateway ack of a fallback `prompt.submit` may take. */
+const GATEWAY_SUBMIT_TIMEOUT_MS = 30_000
+
+/**
+ * Get a delegated turn from wherever one is possible.
+ *
+ * The composer's registered delegate is preferred (it pins the visible
+ * foreground session). But command mode is HOME: on /hud no composer is
+ * mounted and `activeDelegate` is null — so fall back to driving the session
+ * over the gateway directly (`session.resume` the persisted selection if the
+ * runtime id is gone, then `prompt.submit`), reusing the delegate's
+ * observation machinery for the result.
+ */
+async function acquireDelegateTurn(prompt: string, timeoutMs?: number): Promise<AgentTurn | null> {
+  const direct = timeoutMs ? activeDelegate?.runTurn(prompt, { timeoutMs }) : activeDelegate?.runTurn(prompt)
+
+  if (direct) {
+    return direct
+  }
+
+  const gateway = $gateway.get() as null | {
+    request?: (method: string, params?: Record<string, unknown>, timeoutMs?: number) => Promise<unknown>
+  }
+  const request = gateway?.request?.bind(gateway)
+
+  if (!request) {
+    return null
+  }
+
+  let liveId = $activeSessionId.get()
+
+  if (!liveId) {
+    const storedId = $selectedStoredSessionId.get()
+
+    if (!storedId) {
+      return null
+    }
+
+    try {
+      const resumed = (await request('session.resume', {
+        omit_messages: true,
+        session_id: storedId,
+        source: 'desktop'
+      })) as null | { session_id?: string }
+
+      liveId = resumed?.session_id ?? null
+    } catch {
+      return null
+    }
+  }
+
+  if (!liveId) {
+    return null
+  }
+
+  const target = liveId
+  const delegate = createForegroundDelegate(
+    text => request('prompt.submit', { session_id: target, text }, GATEWAY_SUBMIT_TIMEOUT_MS),
+    { getActiveSessionId: () => target, getSelectedStoredSessionId: () => null }
+  )
+
+  return timeoutMs ? delegate.runTurn(prompt, { timeoutMs }) : delegate.runTurn(prompt)
+}
+
 function normalizeUrl(raw: string): null | string {
   const trimmed = raw.trim()
 
@@ -480,7 +545,7 @@ function normalizeUrl(raw: string): null | string {
   return /^[\w-]+(\.[\w-]+)+([/?#]\S*)?$/.test(trimmed) ? `https://${trimmed}` : null
 }
 
-function startDelegatedTask(session: RealtimeVoiceSession, callId: string, goal: string, kind: 'research' | 'task'): void {
+async function startDelegatedTask(session: RealtimeVoiceSession, callId: string, goal: string, kind: 'research' | 'task'): Promise<void> {
   if (activeTask) {
     session.sendToolOutput(
       callId,
@@ -490,11 +555,19 @@ function startDelegatedTask(session: RealtimeVoiceSession, callId: string, goal:
     return
   }
 
-  const delegate = activeDelegate
-  const turn = delegate?.runTurn(buildTaskPrompt(goal, kind), { timeoutMs: DELEGATED_TASK_TIMEOUT_MS })
+  const turn = await acquireDelegateTurn(buildTaskPrompt(goal, kind), DELEGATED_TASK_TIMEOUT_MS)
 
   if (!turn) {
     session.sendToolOutput(callId, NO_ROUTABLE_SESSION_OUTPUT)
+
+    return
+  }
+
+  if (activeTask) {
+    // A concurrent call won the resume race while we awaited — keep the single-
+    // task invariant and settle this turn quietly.
+    turn.cancel()
+    session.sendToolOutput(callId, `A task is already running: "${(activeTask as { goal: string }).goal}". Only one runs at a time.`)
 
     return
   }
@@ -622,7 +695,7 @@ function runActionTool(session: RealtimeVoiceSession, name: string, callId: stri
       return
     }
 
-    startDelegatedTask(session, callId, goal, args.kind === 'research' ? 'research' : 'task')
+    void startDelegatedTask(session, callId, goal, args.kind === 'research' ? 'research' : 'task')
 
     return
   }

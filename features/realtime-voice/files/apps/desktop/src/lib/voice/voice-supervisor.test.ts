@@ -112,6 +112,20 @@ vi.mock('@/store/wake-word', () => ({ resumeWakeAfterVoice: () => resumeWakeAfte
 // $gateway.get() returns null → wake.pause is a no-op await in tests.
 vi.mock('@/store/gateway', () => ({ $gateway: { get: () => null } }))
 
+// The gateway-fallback delegate path pulls the full session-store graph in;
+// keep this suite hermetic — its tests drive REGISTERED delegates directly.
+vi.mock('@/store/session', () => ({
+  $activeSessionId: { get: () => null },
+  $selectedStoredSessionId: { get: () => null }
+}))
+vi.mock('./agent-delegate', () => ({
+  createForegroundDelegate: () => ({
+    getContext: () => '',
+    runTurn: () => null,
+    subscribeContext: () => () => undefined
+  })
+}))
+
 import { $voiceState, voiceSupervisor } from './voice-supervisor'
 
 const tick = async (n = 4) => {

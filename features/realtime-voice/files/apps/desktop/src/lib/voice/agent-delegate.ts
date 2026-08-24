@@ -15,8 +15,18 @@
 // text in `payload.text`/`payload.rendered`.
 
 import { onGatewayEvent } from '@/contrib/events'
-import type { GatewayEventPayload } from '@/lib/chat-messages'
-import { $activeSessionId, $selectedStoredSessionId } from '@/store/session'
+import { type ChatMessage, chatMessageText, type GatewayEventPayload } from '@/lib/chat-messages'
+import { sessionTitle } from '@/lib/chat-runtime'
+import { sessionProjectLabel } from '@/lib/session-project-label'
+import { $activeProjectId, $projects } from '@/store/projects'
+import {
+  $activeSessionId,
+  $currentCwd,
+  $messages,
+  $selectedStoredSessionId,
+  $sessions,
+  sessionMatchesStoredId
+} from '@/store/session'
 import type { RpcEvent } from '@/types/hermes'
 
 /** How long a bridged turn may run before the model is handed a graceful
@@ -34,6 +44,10 @@ export interface AgentDelegate {
   /** Route `request` into the foreground session and observe its result. Returns
    *  null when there is no session to route to (handled as "open a session"). */
   runTurn(request: string): AgentTurn | null
+  /** Bounded, non-transcript foreground metadata for the live Realtime model. */
+  getContext(): string
+  /** Notify when the foreground session/project/workspace identity changes. */
+  subscribeContext(listener: () => void): () => void
 }
 
 /** The composer submit seam. Accepts an explicit target so the turn pins to the
@@ -49,6 +63,96 @@ interface DelegateDeps {
   setTimer: (fn: () => void, ms: number) => number
   clearTimer: (handle: number) => void
   timeoutMs: number
+  getContext: () => string
+  subscribeContext: (listener: () => void) => () => void
+}
+
+const CONTEXT_MESSAGE_LIMIT = 6
+const CONTEXT_MESSAGE_CHARS = 500
+const FOREGROUND_CONTEXT_CHARS = 4000
+
+interface ForegroundContextInput {
+  messages: ChatMessage[]
+  project: null | string
+  sessionTitle: string
+  workspace: string
+}
+
+export function buildForegroundContext({
+  messages,
+  project,
+  sessionTitle: title,
+  workspace
+}: ForegroundContextInput): string {
+  const recent = messages
+    .filter(message => !message.hidden && (message.role === 'user' || message.role === 'assistant'))
+    .map(message => ({
+      role: message.role,
+      text: chatMessageText(message).replace(/\s+/g, ' ').trim()
+    }))
+    .filter(message => message.text)
+    .slice(-CONTEXT_MESSAGE_LIMIT)
+
+  const lines = [
+    `Active desktop session: ${title}`,
+    `Active project: ${project || 'None'}`,
+    `Workspace: ${workspace || 'None'}`
+  ]
+
+  if (recent.length) {
+    lines.push(
+      'Recent visible conversation:',
+      ...recent.map(message => `${message.role === 'user' ? 'User' : 'JARVIS'}: ${message.text.slice(0, CONTEXT_MESSAGE_CHARS)}`)
+    )
+  }
+
+  return lines.join('\n').slice(0, FOREGROUND_CONTEXT_CHARS)
+}
+
+function foregroundContext(): string {
+  const sessions = $sessions.get()
+  const projects = $projects.get()
+  const storedSessionId = $selectedStoredSessionId.get()
+  const session = storedSessionId ? sessions.find(row => sessionMatchesStoredId(row, storedSessionId)) : undefined
+  const activeProject = projects.find(project => project.id === $activeProjectId.get())
+  const project = session ? sessionProjectLabel(session, projects) : activeProject?.name.trim() || null
+  const workspace = $currentCwd.get().trim() || session?.cwd?.trim() || ''
+
+  return buildForegroundContext({
+    messages: $messages.get(),
+    project,
+    sessionTitle: session ? sessionTitle(session) : 'New session',
+    workspace
+  })
+}
+
+function subscribeForegroundContext(listener: () => void): () => void {
+  let timer: number | null = null
+  const notify = () => {
+    if (timer !== null) {
+      return
+    }
+
+    timer = window.setTimeout(() => {
+      timer = null
+      listener()
+    }, 250)
+  }
+  const unsubs = [
+    $selectedStoredSessionId.listen(notify),
+    $activeProjectId.listen(notify),
+    $currentCwd.listen(notify),
+    $sessions.listen(notify),
+    $projects.listen(notify),
+    $messages.listen(notify)
+  ]
+
+  return () => {
+    if (timer !== null) {
+      window.clearTimeout(timer)
+    }
+    unsubs.forEach(unsubscribe => unsubscribe())
+  }
 }
 
 const DEFAULT_DEPS: DelegateDeps = {
@@ -57,7 +161,9 @@ const DEFAULT_DEPS: DelegateDeps = {
   getSelectedStoredSessionId: () => $selectedStoredSessionId.get(),
   setTimer: (fn, ms) => window.setTimeout(fn, ms),
   clearTimer: handle => window.clearTimeout(handle),
-  timeoutMs: TURN_TIMEOUT_MS
+  timeoutMs: TURN_TIMEOUT_MS,
+  getContext: foregroundContext,
+  subscribeContext: subscribeForegroundContext
 }
 
 function finalTextFrom(event: RpcEvent): string {
@@ -81,6 +187,8 @@ export function createForegroundDelegate(submit: AgentSubmit, overrides: Partial
   const deps = { ...DEFAULT_DEPS, ...overrides }
 
   return {
+    getContext: deps.getContext,
+    subscribeContext: deps.subscribeContext,
     runTurn(request: string): AgentTurn | null {
       // Pin the target at the instant the turn starts — the foreground may change
       // while it runs, but this turn belongs to the session it started in.

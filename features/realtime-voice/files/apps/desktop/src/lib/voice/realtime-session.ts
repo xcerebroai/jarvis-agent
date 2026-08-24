@@ -106,7 +106,7 @@ function parseToolArguments(raw: unknown): Record<string, unknown> {
 
 export class RealtimeVoiceSession {
   private readonly deps: RealtimeSessionDeps
-  private readonly config: RealtimeSessionConfigOptions
+  private config: RealtimeSessionConfigOptions
 
   private pc: RTCPeerConnection | null = null
   private dc: RTCDataChannel | null = null
@@ -119,6 +119,8 @@ export class RealtimeVoiceSession {
   private muted = false
   private closed = false
   private started = false
+  private greetingPending = false
+  private greetingSent = false
   /** call_ids already dispatched to the bridge — enforces exactly-once. */
   private readonly handledToolCalls = new Set<string>()
 
@@ -321,15 +323,11 @@ export class RealtimeVoiceSession {
       return
     }
 
-    // Push the behavioral config, then (on a fresh launch only) trigger the
-    // native greeting. The mic is already live, so the assistant is listening
-    // the instant the greeting finishes. A transport renewal passes
-    // suppressGreeting so a reconnect never replays the once-per-launch greeting.
+    // Push the behavioral config first. The greeting waits for the server's
+    // session.updated acknowledgement so response.create cannot race the
+    // instructions/voice update and get rejected or run with stale defaults.
     this.send(buildSessionUpdateEvent(this.config))
-
-    if (!this.deps.suppressGreeting) {
-      this.send(buildGreetingResponseEvent(nextRealtimeGreeting(this.config)))
-    }
+    this.greetingPending = !this.deps.suppressGreeting
 
     this.setStatus('listening')
   }
@@ -350,6 +348,15 @@ export class RealtimeVoiceSession {
     const type = typeof event.type === 'string' ? event.type : ''
 
     switch (type) {
+      case 'session.updated':
+        if (this.greetingPending && !this.greetingSent) {
+          this.greetingPending = false
+          this.greetingSent = true
+          this.send(buildGreetingResponseEvent(nextRealtimeGreeting(this.config)))
+        }
+
+        break
+
       case 'input_audio_buffer.speech_started':
         // Native barge-in: the model auto-truncates its unplayed output. Reflect
         // the switch back to listening for the UI.
@@ -431,6 +438,18 @@ export class RealtimeVoiceSession {
         arguments: parseToolArguments(record.arguments)
       })
     }
+  }
+
+  /** Refresh bounded foreground metadata without reconnecting or ending voice. */
+  updateForegroundContext(context: string): void {
+    const foregroundContext = context.trim()
+
+    if ((this.config.foregroundContext ?? '').trim() === foregroundContext) {
+      return
+    }
+
+    this.config = { ...this.config, foregroundContext }
+    this.send(buildSessionUpdateEvent(this.config))
   }
 
   /**

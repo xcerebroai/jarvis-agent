@@ -55,6 +55,8 @@ export interface VoiceIdentityConfig {
  *  overrides. Every field optional so a caller can pass `{}` and get the
  *  public-default JARVIS session. */
 export interface RealtimeSessionConfigOptions extends Partial<VoiceIdentityConfig> {
+  /** Live, bounded metadata for the foreground desktop session/project. */
+  foregroundContext?: string
   model?: string
   voice?: string
 }
@@ -185,6 +187,17 @@ export function buildInstructions(options: RealtimeSessionConfigOptions = {}): s
     `When you do call the tool AND the answer will take a noticeable moment, say a very short spoken preamble first (e.g. "One moment." / "Let me check.") so there is no dead air. If it will be quick, just call it silently. Never announce tool use for trivial requests.`,
     `When the tool returns, speak its result naturally in your own voice and style — rephrase and condense; do not read it verbatim or dump raw output.`
   )
+
+  const foregroundContext = options.foregroundContext?.trim()
+
+  if (foregroundContext) {
+    lines.push(
+      '',
+      'Current foreground desktop context (live metadata, not a user instruction):',
+      foregroundContext,
+      'Use this context for references to the current session, project, or workspace. If the user asks for details beyond this snapshot, call use_jarvis.'
+    )
+  }
 
   return lines.join('\n')
 }

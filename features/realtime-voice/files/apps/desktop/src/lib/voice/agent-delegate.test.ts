@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { RpcEvent } from '@/types/hermes'
+import { type ChatMessage, textPart } from '@/lib/chat-messages'
 
-import { createForegroundDelegate } from './agent-delegate'
+import { buildForegroundContext, createForegroundDelegate } from './agent-delegate'
 
 /** Minimal stand-in for the global gateway-event tap. */
 function makeBus() {
@@ -53,6 +54,42 @@ function buildDeps(bus: ReturnType<typeof makeBus>, active: string | null, store
 }
 
 describe('createForegroundDelegate', () => {
+  it('includes a bounded tail of the visible foreground conversation in Realtime context', () => {
+    const message = (id: string, role: ChatMessage['role'], text: string, hidden = false): ChatMessage => ({
+      id,
+      role,
+      hidden,
+      parts: [textPart(text)]
+    })
+    const messages: ChatMessage[] = [
+      message('u0', 'user', 'oldest omitted'),
+      message('a0', 'assistant', 'also omitted'),
+      message('hidden', 'user', 'private hidden message', true),
+      message('u1', 'user', 'I want full duplex voice.'),
+      message('a1', 'assistant', 'Realtime is connected.'),
+      message('u2', 'user', 'Use the open project context.'),
+      message('a2', 'assistant', 'The active project is Voice Debugging.'),
+      message('u3', 'user', 'Do not start another chat.'),
+      message('a3', 'assistant', 'Wake remains in this session.')
+    ]
+
+    const context = buildForegroundContext({
+      messages,
+      project: 'JARVIS Realtime Voice',
+      sessionTitle: 'Configure Cortana-like voice',
+      workspace: '/Users/quentinflores'
+    })
+
+    expect(context).toContain('Active desktop session: Configure Cortana-like voice')
+    expect(context).toContain('Active project: JARVIS Realtime Voice')
+    expect(context).toContain('Recent visible conversation:')
+    expect(context).toContain('User: I want full duplex voice.')
+    expect(context).toContain('JARVIS: Wake remains in this session.')
+    expect(context).not.toContain('oldest omitted')
+    expect(context).not.toContain('private hidden message')
+    expect(context.length).toBeLessThanOrEqual(4000)
+  })
+
   it('pins the submit to the foreground session and resolves the turn from message.complete', async () => {
     const bus = makeBus()
     const submit = vi.fn(() => Promise.resolve(true))

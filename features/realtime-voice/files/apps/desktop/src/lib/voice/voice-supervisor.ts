@@ -21,6 +21,9 @@
 // from config.yaml (`voice.realtime.*`) and fetched once per session start; the
 // public defaults are JARVIS / no user name / "hey jarvis" / Marin / concise.
 
+import { emitAmplitude } from '@/lib/voice/amplitude-events'
+import { onGatewayEvent } from '@/contrib/events'
+import { resumeWakeAfterVoice } from '@/store/wake-word'
 import { atom } from 'nanostores'
 
 import { getRealtimeProjectReview, getRealtimeVoiceConfig, mintRealtimeToken } from '@/hermes'
@@ -31,7 +34,6 @@ import { resumeWakeAfterVoice } from '@/store/wake-word'
 
 import type { AgentDelegate } from './agent-delegate'
 import { type RealtimeSessionConfigOptions, REVIEW_PROJECTS_TOOL_NAME } from './realtime-config'
-import { emitAmplitude } from '@/lib/voice/amplitude-events'
 import { RealtimeSessionError, type RealtimeStatus, RealtimeVoiceSession } from './realtime-session'
 
 /** The on-screen conversation status the composer controls render. The Realtime
@@ -90,18 +92,13 @@ let renewalTimer: number | null = null
 let lifecycleInstalled = false
 let autoStartAttempted = false
 
-// The launch greeting is spoken exactly once per renderer launch — on the very
-// first connect. Every later connect (a 50-minute renewal, a far-side-drop
-// recovery, or a manual restart in the same launch) suppresses it, so a tab
-// switch or reconnect never replays it.
-let greetedThisLaunch = false
-
 // Wake word: paused ONCE when the live mic opens, resumed ONCE when the session
 // explicitly ends or fails. Session switches / reconnects never touch it — the
 // guard makes pause idempotent, so a renewal keeps the ear paused throughout.
 let wakePaused = false
 
 let activeDelegate: AgentDelegate | null = null
+let contextUnsubscribe: (() => void) | null = null
 
 // Serialize tool bridges: the agent is one session, so overlapping requests must
 // not interleave. Each waits for the previous to finish.
@@ -262,6 +259,7 @@ async function connect(renewal: boolean): Promise<void> {
   // composer-bound chained fallback.
   if (!renewal) {
     await loadSessionConfig()
+    config = { ...config, foregroundContext: activeDelegate?.getContext?.() ?? '' }
 
     if (!intentActive) {
       return
@@ -282,9 +280,10 @@ async function connect(renewal: boolean): Promise<void> {
     return
   }
 
-  // The launch greeting plays on the first connect of the renderer launch only.
-  const suppressGreeting = greetedThisLaunch || renewal
-  greetedThisLaunch = true
+  // Every explicit voice start (including a wake) gets one greeting. Only an
+  // in-place transport renewal suppresses it, because the user never started a
+  // new conversation in that path.
+  const suppressGreeting = renewal
 
   const session = new RealtimeVoiceSession({
     mintToken: overrides => mintRealtimeToken(overrides),
@@ -461,14 +460,55 @@ function toggleMute(): void {
  *  disposer; unregistering only clears the registry if this delegate is still
  *  the active one (a later foreground never clobbers an earlier unmount). */
 function registerDelegate(delegate: AgentDelegate): () => void {
+  contextUnsubscribe?.()
   activeDelegate = delegate
+
+  const publishContext = () => {
+    if (activeDelegate !== delegate) {
+      return
+    }
+
+    const foregroundContext = delegate.getContext?.() ?? ''
+    config = { ...config, foregroundContext }
+    activeSession?.updateForegroundContext?.(foregroundContext)
+  }
+
+  contextUnsubscribe = delegate.subscribeContext?.(publishContext) ?? null
+  publishContext()
 
   return () => {
     if (activeDelegate === delegate) {
+      contextUnsubscribe?.()
+      contextUnsubscribe = null
       activeDelegate = null
     }
   }
 }
+
+// --- Wake re-arm watchdog ---------------------------------------------------
+// The gateway's wake detector is one-shot: on detection it closes the mic and
+// owes its re-arm to the voice flow calling wake.resume when the conversation
+// ends. Observed live 2026-08-24 13:46: the post-detection flow died between
+// detection and voice start, no resume ever came, and the machine stayed deaf
+// until a restart. This watchdog makes deafness self-healing: 10s after any
+// wake.detected, if no voice conversation is active (any transport), resume
+// the detector. Best-effort; never throws into the event path.
+const WAKE_REARM_MS = 10_000
+let wakeWatchdog: null | ReturnType<typeof setTimeout> = null
+
+onGatewayEvent('wake.detected', () => {
+  if (wakeWatchdog) {
+    clearTimeout(wakeWatchdog)
+  }
+
+  wakeWatchdog = setTimeout(() => {
+    wakeWatchdog = null
+
+    if (!$voiceState.get().active) {
+      void resumeWakeAfterVoice().catch(() => undefined)
+    }
+  }, WAKE_REARM_MS)
+})
 
 export const voiceSupervisor = {
   start,
@@ -485,10 +525,12 @@ export const voiceSupervisor = {
     activeSession?.close()
     activeSession = null
     intentActive = false
-    greetedThisLaunch = false
+
     wakePaused = false
     autoStartAttempted = false
     realtimeEnabled = true
+    contextUnsubscribe?.()
+    contextUnsubscribe = null
     activeDelegate = null
     bridgeChain = Promise.resolve()
     config = {}

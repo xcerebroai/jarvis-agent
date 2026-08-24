@@ -183,12 +183,12 @@ describe('RealtimeVoiceSession', () => {
     expect(h.pc.remoteDescription).toEqual({ type: 'answer', sdp: 'ANSWER_SDP' })
   })
 
-  it('pushes session config then the native greeting exactly once on data-channel open', async () => {
+  it('waits for session.updated before sending the native greeting exactly once', async () => {
     const h = makeHarness()
     await h.session.connect()
     h.pc.dc!.open()
 
-    const sent = h.pc.dc!.parsedSent()
+    let sent = h.pc.dc!.parsedSent()
     expect(sent[0].type).toBe('session.update')
     expect(sent[0].session.model).toBe('gpt-realtime-2.1')
     expect(sent[0].session.audio.output.voice).toBe('marin')
@@ -197,9 +197,16 @@ describe('RealtimeVoiceSession', () => {
     expect(sent[0].session.tools[0].name).toBe('review_projects')
     expect(sent[0].session.tools[1].name).toBe('use_jarvis')
 
+    expect(sent).toHaveLength(1)
+
+    h.pc.dc!.emit({ type: 'session.updated' })
+    sent = h.pc.dc!.parsedSent()
     expect(sent[1].type).toBe('response.create')
     expect(sent[1].response.instructions).toContain('Ada')
     expect(sent[1].response.instructions.toLowerCase()).not.toContain('hey jarvis')
+
+    // A duplicate acknowledgement must not replay the greeting.
+    h.pc.dc!.emit({ type: 'session.updated' })
 
     // Exactly one greeting response.create.
     const greetings = sent.filter(
@@ -281,6 +288,22 @@ describe('RealtimeVoiceSession', () => {
       item: { type: 'function_call_output', call_id: 'call_1', output: 'The answer is 4.' }
     })
     expect(sent[1]).toEqual({ type: 'response.create' })
+  })
+
+  it('pushes changed foreground session and project context into the live session', async () => {
+    const h = makeHarness()
+    await h.session.connect()
+    h.pc.dc!.open()
+    h.pc.dc!.sent = []
+
+    h.session.updateForegroundContext(
+      'Active desktop session: Release verification\nActive project: JARVIS Realtime Voice'
+    )
+
+    const [update] = h.pc.dc!.parsedSent()
+    expect(update.type).toBe('session.update')
+    expect(update.session.instructions).toContain('Active desktop session: Release verification')
+    expect(update.session.instructions).toContain('Active project: JARVIS Realtime Voice')
   })
 
   it('reflects native barge-in: user speech flips status back to listening', async () => {

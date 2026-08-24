@@ -11,6 +11,7 @@ interface Callbacks {
 
 interface Deps {
   callbacks: Callbacks
+  config?: { foregroundContext?: string }
   suppressGreeting?: boolean
 }
 
@@ -23,6 +24,7 @@ const realtime = vi.hoisted(() => {
     deps: Deps
     connectImpl: () => Promise<void>
     sendToolOutput = vi.fn()
+    updateForegroundContext = vi.fn()
     setMuted = vi.fn()
     cancelResponse = vi.fn()
     close = vi.fn()
@@ -118,7 +120,7 @@ function makeDelegate(result: Promise<string>): AgentDelegate & { cancel: () => 
   const cancel = vi.fn()
   const runTurn = vi.fn(() => ({ result, cancel }))
 
-  return { cancel, runTurn }
+  return { cancel, getContext: () => '', runTurn, subscribeContext: () => () => undefined }
 }
 
 /** Start the voice session and return the connected fake session. */
@@ -199,6 +201,17 @@ describe('voiceSupervisor', () => {
     expect(resumeWakeAfterVoice).not.toHaveBeenCalled()
   })
 
+  it('greets again after an explicit end followed by a new voice start', async () => {
+    const first = await startAndConnect()
+    expect(first.deps.suppressGreeting).toBe(false)
+
+    voiceSupervisor.end()
+    await tick()
+    const second = await startAndConnect()
+
+    expect(second.deps.suppressGreeting).toBe(false)
+  })
+
   it('answers project reviews through the compact project-index endpoint with no delegate registered', async () => {
     const session = await startAndConnect()
 
@@ -207,6 +220,40 @@ describe('voiceSupervisor', () => {
 
     expect(getRealtimeProjectReview).toHaveBeenCalledWith({ query: undefined, status: 'Blocked', limit: 3 })
     expect(session.sendToolOutput).toHaveBeenCalledWith('r1', expect.stringContaining('"source":"project index"'))
+  })
+
+  it('injects the foreground session and project context before Realtime connects', async () => {
+    const delegate = {
+      getContext: () => 'Active desktop session: Voice debugging\nActive project: JARVIS Realtime Voice',
+      runTurn: vi.fn(() => null),
+      subscribeContext: vi.fn(() => () => undefined)
+    } as AgentDelegate & { getContext: () => string; subscribeContext: (listener: () => void) => () => void }
+
+    voiceSupervisor.registerDelegate(delegate)
+    const session = await startAndConnect()
+
+    expect(session.deps.config?.foregroundContext).toContain('Active project: JARVIS Realtime Voice')
+  })
+
+  it('updates the live Realtime context when the foreground session or project changes', async () => {
+    let context = 'Active desktop session: Voice debugging'
+    let contextListener: () => void = () => undefined
+    const delegate = {
+      getContext: () => context,
+      runTurn: vi.fn(() => null),
+      subscribeContext: vi.fn((listener: () => void) => {
+        contextListener = listener
+
+        return () => undefined
+      })
+    } as AgentDelegate
+
+    voiceSupervisor.registerDelegate(delegate)
+    const session = await startAndConnect()
+    context = 'Active desktop session: Release verification\nActive project: JARVIS Realtime Voice'
+    contextListener()
+
+    expect(session.updateForegroundContext).toHaveBeenCalledWith(context)
   })
 
   it('with no routable session, use_jarvis asks the user to open one and does NOT end the voice session', async () => {

@@ -160,6 +160,19 @@ grep -q "EMIT_INTERVAL_MS" "$SRC/apps/desktop/src/lib/voice/amplitude-events.ts"
 grep -q "emitAmplitude('out'" "$SRC/apps/desktop/src/lib/voice/voice-supervisor.ts" && ok "realtime level forwarded" || bad "supervisor level not forwarded"
 
 echo
+echo "== 5c. operator voice behaviors are the shipped payload =="
+# 2026-08-24: the operator's agent extended these files in-tree; the payload
+# captured them so updates preserve the behavior. Pin the load-bearing
+# symbols: wake-greeting policy, live foreground context, session update,
+# instruction framing, and the wake re-arm watchdog.
+V="$SRC/apps/desktop/src/lib/voice"
+grep -q 'const suppressGreeting = renewal' "$V/voice-supervisor.ts" && ok "greet-on-every-start policy" || bad "greeting policy lost"
+grep -q 'buildForegroundContext' "$V/agent-delegate.ts" && ok "foreground context builder" || bad "context builder lost"
+grep -q 'updateForegroundContext' "$V/realtime-session.ts" && ok "live session context update" || bad "session context update lost"
+grep -q 'foregroundContext' "$V/realtime-config.ts" && ok "context instruction framing" || bad "instruction framing lost"
+grep -q 'WAKE_REARM_MS' "$V/voice-supervisor.ts" && ok "wake re-arm watchdog present" || bad "wake watchdog missing"
+
+echo
 echo "== 6. revert restores an EXACT clean upstream =="
 bash "$APPLY" revert "$SRC" >/dev/null 2>&1
 AFTER="$(git -C "$SRCG" status --porcelain | sort)"

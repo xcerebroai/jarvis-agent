@@ -23,7 +23,6 @@
 
 import { emitAmplitude } from '@/lib/voice/amplitude-events'
 import { onGatewayEvent } from '@/contrib/events'
-import { resumeWakeAfterVoice } from '@/store/wake-word'
 import { atom } from 'nanostores'
 
 import { getRealtimeProjectReview, getRealtimeVoiceConfig, mintRealtimeToken } from '@/hermes'

@@ -20,7 +20,7 @@
  *     appear the source switches without a seam.
  */
 import { host, PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, useValue } from '@hermes/plugin-sdk'
-import { useEffect, useRef, useState } from 'react'
+import { Component, useEffect, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 // --- Cockpit type system: system instrument faces (webfonts are outside the
@@ -975,6 +975,20 @@ function HudPage() {
   const sourceRef = useRef(null)
   const busy = useValue(host.state.busy)
   const [display, setDisplay] = useState({ detail: null, dissolving: false, focus: null, rows: [], shown: false })
+  const tracker = useRef({
+    amp: null,
+    gesture: null,
+    lastDeltaAt: 0,
+    listenUntil: 0,
+    mode: () => 'idle',
+    thinkUntil: 0,
+    realFeed: false,
+    reportReal: () => undefined,
+    speakUntil: 0
+  }).current
+
+  tracker.busy = busy
+
   const [booted, setBooted] = useState(false)
   const [clock, setClock] = useState('')
 
@@ -995,19 +1009,6 @@ function HudPage() {
       window.clearInterval(tick)
     }
   }, [tracker])
-  const tracker = useRef({
-    amp: null,
-    gesture: null,
-    lastDeltaAt: 0,
-    listenUntil: 0,
-    mode: () => 'idle',
-    thinkUntil: 0,
-    realFeed: false,
-    reportReal: () => undefined,
-    speakUntil: 0
-  }).current
-
-  tracker.busy = busy
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -1328,6 +1329,42 @@ function HudPage() {
   })
 }
 
+// The route must never sit on the host's crash card: any render throw lands
+// on a minimal recovering plate with a remount control, and the voice stack
+// (feature-side) keeps running underneath untouched.
+class HudBoundary extends Component {
+  constructor(props) {
+    super(props)
+    this.state = { error: null }
+  }
+
+  static getDerivedStateFromError(error) {
+    return { error }
+  }
+
+  render() {
+    if (!this.state.error) {
+      return this.props.children
+    }
+
+    return jsxs('div', {
+      style: {
+        alignItems: 'center', background: '#02040A', color: '#D9E6F2', display: 'flex',
+        flexDirection: 'column', gap: '12px', height: '100%', inset: 0, justifyContent: 'center', position: 'absolute'
+      },
+      children: [
+        jsx('div', { style: { color: 'rgba(96,165,250,0.9)', fontFamily: T.label, fontSize: '12px', letterSpacing: '0.4em', textTransform: 'uppercase' }, children: 'HUD RECOVERING' }),
+        jsx('div', { style: { color: 'rgba(122,150,183,0.8)', fontFamily: T.data, fontSize: '10px', maxWidth: '420px', textAlign: 'center' }, children: String(this.state.error?.message ?? this.state.error).slice(0, 160) }),
+        jsx('button', {
+          onClick: () => this.setState({ error: null }),
+          style: { background: 'transparent', border: '1px solid rgba(96,165,250,0.5)', color: '#93C5FD', cursor: 'pointer', fontFamily: T.label, fontSize: '10px', letterSpacing: '0.3em', padding: '6px 18px', textTransform: 'uppercase' },
+          children: 'REMOUNT'
+        })
+      ]
+    })
+  }
+}
+
 export default {
   id: 'jarvis-hud',
   name: 'JARVIS HUD',
@@ -1338,7 +1375,7 @@ export default {
         id: 'page',
         area: ROUTES_AREA,
         data: { path: '/hud' },
-        render: () => jsx(HudPage, {})
+        render: () => jsx(HudBoundary, { children: jsx(HudPage, {}) })
       },
       {
         id: 'nav',

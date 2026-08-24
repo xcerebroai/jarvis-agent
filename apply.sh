@@ -438,6 +438,12 @@ if [ -f "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" ]; then
   mkdir -p "$HERMES_HOME/desktop-plugins/jarvis-hud"
   if cmp -s "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" "$HERMES_HOME/desktop-plugins/jarvis-hud/plugin.js" 2>/dev/null; then
     echo "  · plugin  -> desktop-plugins/jarvis-hud already current"
+  elif command -v node >/dev/null 2>&1 \
+    && ! node --input-type=module --check < "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" >/dev/null 2>&1; then
+    # Last-good protection: never swap a plugin that cannot even parse over a
+    # working install. (Render-time failures are caught by the plugin's own
+    # error boundary — the route shows a recovering plate, not a crash card.)
+    echo "  ✗ plugin  -> jarvis-hud FAILED the parse gate; keeping the installed version"
   else
     cp -f "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" "$HERMES_HOME/desktop-plugins/jarvis-hud/plugin.js"
     echo "  ✓ plugin  -> $HERMES_HOME/desktop-plugins/jarvis-hud/plugin.js"

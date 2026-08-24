@@ -30,7 +30,7 @@ import { getRealtimeProjectReview, getRealtimeVoiceConfig, mintRealtimeToken } f
 import { translateNow } from '@/i18n'
 import { $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
-import { resumeWakeAfterVoice } from '@/store/wake-word'
+import { armWakeWord, resumeWakeAfterVoice } from '@/store/wake-word'
 
 import type { AgentDelegate } from './agent-delegate'
 import { type RealtimeSessionConfigOptions, REVIEW_PROJECTS_TOOL_NAME } from './realtime-config'
@@ -484,6 +484,22 @@ function registerDelegate(delegate: AgentDelegate): () => void {
     }
   }
 }
+
+// --- Wake keeper heartbeat --------------------------------------------------
+// Wake ownership is bound to the websocket that armed it: when that socket
+// dies (renderer reconnects, transient connections — observed live
+// 2026-08-24 14:40: resume issued by a dying peer, listener released 176ms
+// later), the gateway releases the listener and nothing re-arms until app
+// restart. armWakeWord() is idempotent (wake.status first, wake.start only
+// when needed), so a slow heartbeat while no voice conversation is active
+// closes every silent-death variant at once.
+const WAKE_KEEPER_INTERVAL_MS = 60_000
+
+setInterval(() => {
+  if (!$voiceState.get().active) {
+    void armWakeWord().catch(() => undefined)
+  }
+}, WAKE_KEEPER_INTERVAL_MS)
 
 // --- Route-independent voice-start fallback ---------------------------------
 // takeVoiceConversationStart has exactly ONE consumer in the app: the chat

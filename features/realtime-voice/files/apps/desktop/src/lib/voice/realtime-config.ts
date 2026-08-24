@@ -297,7 +297,7 @@ export const DISPLAY_TOOLS = [
     type: 'function',
     name: CREATE_PROJECT_TOOL_NAME,
     description:
-      'Create a new project after a short spoken intake. FIRST ask the user for the name, the goal, and any first tasks; confirm what you heard aloud; only THEN call this once. The new project persists and its panel materializes on the board.',
+      'Create a new project after a short spoken intake. The name is MANDATORY: if you do not have an explicit confirmed name, ask for it — never call this tool with an empty or guessed name. Gather the goal and any first tasks, confirm aloud, then call once. The new project persists and its panel materializes on the board.',
     parameters: {
       type: 'object',
       properties: {

@@ -238,6 +238,14 @@ function runDisplayTool(session: RealtimeVoiceSession, name: string, callId: str
     const goal = typeof args.goal === 'string' ? args.goal : ''
     const tasks = Array.isArray(args.tasks) ? args.tasks.map(String) : []
 
+    if (!projectName) {
+      // Conversational self-correction, not an error toast: the model asked
+      // to create without a confirmed name — send it back to the intake.
+      session.sendToolOutput(callId, 'No project was created: the name is missing. Ask the user for the project name, confirm it aloud, then call create_project again.')
+
+      return
+    }
+
     emitGatewayEvent({ payload: { focus: false }, type: 'display.retrieving' })
     void createRealtimeProject({ goal, name: projectName, tasks })
       .then(created =>

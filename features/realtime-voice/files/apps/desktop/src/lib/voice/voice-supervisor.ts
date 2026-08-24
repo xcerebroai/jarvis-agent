@@ -225,8 +225,46 @@ function resumeWakeForVoiceSession(): void {
 /** P4 display verbs: fetch the same compact index reads, emit display.*
  *  events for the HUD panels + orb action grammar, confirm compactly so the
  *  voice narrates what it is showing. */
+// Conversational display context: what is on the stage right now. Natural
+// speech references ("it", "that one", a bare "expand") resolve against this
+// before anything is asked aloud — an error toast is never the answer.
+const displayContext: { focused: null | string; lastRows: Array<{ name: string; status: string }> } = {
+  focused: null,
+  lastRows: []
+}
+
+function resolveProjectReference(raw: string | undefined): { ask?: string; name?: string } {
+  const explicit = (raw ?? '').trim()
+  const pronoun = /^(it|that|that one|this|this one|the project)$/i.test(explicit)
+
+  if (explicit && !pronoun) {
+    return { name: explicit }
+  }
+
+  if (displayContext.focused) {
+    return { name: displayContext.focused }
+  }
+
+  const blocked = displayContext.lastRows.filter(row => row.status.toLowerCase() === 'blocked')
+
+  if (blocked.length === 1) {
+    return { name: blocked[0].name }
+  }
+
+  if (displayContext.lastRows.length === 1) {
+    return { name: displayContext.lastRows[0].name }
+  }
+
+  return {
+    ask: displayContext.lastRows.length
+      ? 'Ambiguous reference: ask the user aloud which project they mean, then call the tool again with that name.'
+      : 'Nothing is on the stage: ask the user aloud which project they mean, then call the tool again with that name.'
+  }
+}
+
 function runDisplayTool(session: RealtimeVoiceSession, name: string, callId: string, args: Record<string, unknown>): void {
   if (name === CLEAR_DISPLAY_TOOL_NAME) {
+    displayContext.focused = null
     emitGatewayEvent({ payload: {}, type: 'display.clear' })
     session.sendToolOutput(callId, 'Display cleared.')
 
@@ -262,14 +300,37 @@ function runDisplayTool(session: RealtimeVoiceSession, name: string, callId: str
     return
   }
 
-  const query = typeof args.query === 'string' ? args.query.trim() : typeof args.name === 'string' ? args.name.trim() : undefined
+  const rawRef = typeof args.query === 'string' ? args.query.trim() : typeof args.name === 'string' ? args.name.trim() : undefined
   const statusFilter = typeof args.status === 'string' ? args.status.trim() : undefined
   const detail = name === SHOW_DETAIL_TOOL_NAME
   const focus = name === SHOW_PROJECT_TOOL_NAME || detail
 
+  let query = rawRef
+
+  if (focus) {
+    const resolved = resolveProjectReference(rawRef)
+
+    if (resolved.ask) {
+      session.sendToolOutput(callId, resolved.ask)
+
+      return
+    }
+
+    query = resolved.name
+  }
+
   emitGatewayEvent({ payload: { focus }, type: 'display.retrieving' })
   void getRealtimeProjectReview({ detail, limit: focus ? 1 : 8, query, status: statusFilter })
     .then(result => {
+      const rows = Array.isArray(result.projects) ? result.projects : []
+
+      if (focus && rows[0]?.name) {
+        displayContext.focused = String(rows[0].name)
+      } else if (!focus) {
+        displayContext.focused = null
+        displayContext.lastRows = rows.map(row => ({ name: String(row.name ?? ''), status: String(row.status ?? '') }))
+      }
+
       emitGatewayEvent({
         payload: { focus, query: query ?? null, result, status: statusFilter ?? null },
         type: detail ? 'display.detail' : focus ? 'display.focus' : 'display.projects'

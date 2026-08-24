@@ -975,6 +975,7 @@ function HudPage() {
   const sourceRef = useRef(null)
   const busy = useValue(host.state.busy)
   const [display, setDisplay] = useState({ detail: null, dissolving: false, focus: null, rows: [], shown: false })
+  const boardArmedRef = useRef(false)
   const tracker = useRef({
     amp: null,
     gesture: null,
@@ -1041,13 +1042,20 @@ function HudPage() {
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: true } }))
-    window.dispatchEvent(new CustomEvent('jarvis:display-request'))
-    const denseRetry = window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent('jarvis:display-request'))
-    }, 2500)
+
+    // The gateway takes seconds to boot on a cold launch: keep asking for the
+    // board with backoff until rows arrive. Dense by default, patiently.
+    const delays = [800, 2500, 6000, 12_000, 22_000, 40_000]
+    const timers = delays.map(ms =>
+      window.setTimeout(() => {
+        if (!boardArmedRef.current) {
+          window.dispatchEvent(new CustomEvent('jarvis:display-request'))
+        }
+      }, ms)
+    )
 
     return () => {
-      window.clearTimeout(denseRetry)
+      timers.forEach(t => window.clearTimeout(t))
       window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: false } }))
     }
   }, [])
@@ -1162,8 +1170,13 @@ function HudPage() {
       host.onEvent('display.projects', event => {
         const rows = event.payload?.result?.projects ?? []
 
+        boardArmedRef.current = rows.length > 0
         tracker.gesture = { at: performance.now(), kind: 'project' }
-        uiSound('materialize')
+
+        if (!event.payload?.silent) {
+          uiSound('materialize')
+        }
+
         setDisplay(prev => ({ ...prev, detail: null, dissolving: false, focus: null, rows: rows.slice(0, 8), shown: false }))
         window.setTimeout(() => setDisplay(prev => ({ ...prev, shown: true })), 80)
       }),
@@ -1320,6 +1333,32 @@ function HudPage() {
                   })
                 : null
             ]
+          })
+        : null,
+      // metric tiles: real aggregates from the live board
+      display.rows.length
+        ? jsx('div', {
+            style: { display: 'flex', gap: '10px', justifyContent: 'center', left: '50%', pointerEvents: 'none', position: 'absolute', top: '44px', transform: 'translateX(-50%)', zIndex: 5 },
+            children: (() => {
+              const counts = {}
+
+              display.rows.forEach(row => { counts[row.status] = (counts[row.status] || 0) + 1 })
+              const done = display.rows.reduce((total, row) => total + (row.tasks_done || 0), 0)
+              const total = display.rows.reduce((sum, row) => sum + (row.tasks_total || 0), 0)
+              const tiles = [
+                ...Object.entries(counts).map(([status, count]) => ({ color: STATUS_COLOR[status] || '#60A5FA', label: status, value: count })),
+                { color: '#93C5FD', label: 'TASKS', value: done + '/' + total }
+              ]
+
+              return tiles.map(tile =>
+                jsxs('div', {
+                  style: { alignItems: 'center', animation: 'jvFadeUp 400ms both', background: 'rgba(4,9,17,0.65)', border: '1px solid rgba(59,130,246,0.24)', display: 'flex', gap: '7px', padding: '3px 10px' },
+                  children: [
+                    jsx('span', { style: { color: tile.color, fontFamily: T.data, fontSize: '12px', fontVariantNumeric: 'tabular-nums', fontWeight: 600 }, children: String(tile.value) }),
+                    jsx('span', { style: { ...LABEL, fontSize: '7.5px', letterSpacing: '0.22em' }, children: tile.label })
+                  ]
+                }, tile.label))
+            })()
           })
         : null,
       // instrument zones: dense by default — jobs, activity, metrics

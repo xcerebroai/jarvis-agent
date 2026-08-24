@@ -77,7 +77,7 @@ describe('createForegroundDelegate', () => {
       messages,
       project: 'JARVIS Realtime Voice',
       sessionTitle: 'Plan the quarterly review',
-      workspace: '/Users/operator'
+      workspace: '/workspace/demo'
     })
 
     expect(context).toContain('Active desktop session: Plan the quarterly review')

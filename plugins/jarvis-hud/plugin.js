@@ -74,19 +74,26 @@ function createAmplitudeSource() {
 // idle | listening | thinking | speaking. Visual params live in PRESETS;
 // the render loop lerps a live params object toward the active preset.
 const PRESETS = {
-  idle: { band: 0, breathAmp: 0.032, breathHz: 0.24, glow: 0.42, hueShift: 0, jitter: 0.014, radius: 1, spin: 0.1 },
-  listening: {
-    band: 0,
-    breathAmp: 0.014,
-    breathHz: 0.55,
-    glow: 0.58,
-    hueShift: 14,
-    jitter: 0.02,
-    radius: 0.87,
-    spin: 0.16
+  idle: {
+    baseGlow: 0.55, breathAmp: 0.022, breathHz: 0.22, coreIntensity: 0.9, dim: 1,
+    energyGain: 1.6, glow: 1, pulseFloor: 0, pulseRate: 0.05, radius: 1,
+    shellSpeed: 1, shimmer: 0.9, spin: 0.1
   },
-  speaking: { band: 1, breathAmp: 0.02, breathHz: 0.4, glow: 0.85, hueShift: -4, jitter: 0.02, radius: 1.06, spin: 0.22 },
-  thinking: { band: 3, breathAmp: 0.02, breathHz: 0.9, glow: 0.66, hueShift: 6, jitter: 0.03, radius: 0.96, spin: 0.85 }
+  listening: {
+    baseGlow: 0.42, breathAmp: 0.01, breathHz: 0.5, coreIntensity: 1.15, dim: 0.82,
+    energyGain: 0.9, glow: 0.8, pulseFloor: 0, pulseRate: 0.04, radius: 0.88,
+    shellSpeed: 0.7, shimmer: 0.25, spin: 0.13
+  },
+  speaking: {
+    baseGlow: 0.7, breathAmp: 0.015, breathHz: 0.35, coreIntensity: 1.5, dim: 1,
+    energyGain: 2.2, glow: 1.25, pulseFloor: 0.12, pulseRate: 0.3, radius: 1.03,
+    shellSpeed: 1.3, shimmer: 0.3, spin: 0.16
+  },
+  thinking: {
+    baseGlow: 0.6, breathAmp: 0.015, breathHz: 0.8, coreIntensity: 1.25, dim: 1,
+    energyGain: 1.2, glow: 1.1, pulseFloor: 0.5, pulseRate: 0.5, radius: 0.96,
+    shellSpeed: 2.6, shimmer: 0.35, spin: 0.5
+  }
 }
 
 const STATE_LABEL = { idle: 'standing by', listening: 'listening', speaking: 'speaking', thinking: 'thinking' }
@@ -94,232 +101,614 @@ const LISTEN_HOLD_MS = 12_000
 const SPEAK_HOLD_MS = 1400
 const THINK_HOLD_MS = 30_000
 
-// Fibonacci-sphere particle field — even coverage, no pole clustering.
-function buildParticles(count) {
-  const pts = []
-  const golden = Math.PI * (3 - Math.sqrt(5))
+// --- The engine: a holographic construction sphere, hand-rolled WebGL2 ------
+// Reference DNA (owner's film stills, rendered in the JARVIS blues):
+//   filaments over dots · fragmented counter-rotating shells · a small intense
+//   blue-white core vortex · depth + bloom · voice as energy coursing through
+//   the lattice (enveloped — swells, never jitter).
+// No three.js: the runtime plugin import allowlist is SDK + react, so the
+// renderer below is raw WebGL2. Canvas 2D could not hold layered depth,
+// per-filament pulses and bloom at 60fps; GL does it without breaking a sweat.
 
-  for (let i = 0; i < count; i++) {
-    const y = 1 - (i / (count - 1)) * 2
-    const r = Math.sqrt(1 - y * y)
-    const theta = golden * i
-
-    pts.push({
-      phase: Math.random() * Math.PI * 2,
-      wobble: 0.55 + Math.random() * 0.45,
-      x: Math.cos(theta) * r,
-      y,
-      z: Math.sin(theta) * r
-    })
-  }
-
-  return pts
+const COLORS = {
+  core: [147 / 255, 197 / 255, 253 / 255], // #93C5FD hot blue-white
+  mid: [96 / 255, 165 / 255, 250 / 255], // #60A5FA
+  primary: [59 / 255, 130 / 255, 246 / 255], // #3B82F6
+  rim: [30 / 255, 78 / 255, 134 / 255] // #1E4E86 deep rim
 }
 
-function startOrb(canvas, tracker) {
-  const ctx = canvas.getContext('2d')
+// Voice envelope: fast attack (~100ms), slow decay (~400ms) — speech reads as
+// swells and blooms of light, never positional shiver.
+function createEnvelope() {
+  let value = 0
 
-  if (!ctx) {
-    return () => undefined
+  return {
+    get: () => value,
+    step(target, dtMs) {
+      const tau = target > value ? 100 : 400
+      value += (target - value) * (1 - Math.exp(-dtMs / tau))
+
+      return value
+    }
+  }
+}
+
+const LINE_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec3 aPos;
+layout(location=1) in float aArcT;
+layout(location=2) in float aSeed;
+layout(location=3) in float aKind; // 0 filament, 1 particle
+uniform mat3 uRot;
+uniform float uAspect, uScale, uRadius, uTime, uEnergy, uPulseRate, uShimmer, uBaseGlow;
+out float vBright;
+out float vDepth;
+out float vKind;
+
+void main() {
+  vec3 p = uRot * (aPos * uRadius);
+  float persp = 1.0 / (1.85 - p.z * 0.55);
+  vec2 xy = p.xy * persp * uScale;
+  gl_Position = vec4(xy.x / uAspect, xy.y, 0.0, 1.0);
+  vDepth = (p.z + 1.0) * 0.5;
+  vKind = aKind;
+
+  // Idle shimmer: slow per-arc waves so a few filaments breathe at a time.
+  float shimmer = pow(0.5 + 0.5 * sin(uTime * 0.45 + aSeed * 37.0), 6.0) * uShimmer;
+
+  // Voice energy: a bright head travels along each arc; amplitude gates it.
+  float head = fract(uTime * uPulseRate * (0.35 + fract(aSeed * 7.31) * 0.85) + aSeed);
+  float d = abs(aArcT - head);
+  d = min(d, 1.0 - d);
+  float pulse = exp(-d * d * 140.0) * uEnergy;
+
+  vBright = uBaseGlow + shimmer + pulse * 1.6;
+  gl_PointSize = (1.5 + vDepth * 2.5 + pulse * 3.0) * persp;
+}`
+
+const LINE_FS = `#version 300 es
+precision highp float;
+in float vBright;
+in float vDepth;
+in float vKind;
+uniform vec3 uRim, uPrimary, uMid, uCore;
+uniform float uDim;
+out vec4 frag;
+
+void main() {
+  if (vKind > 0.5) {
+    vec2 c = gl_PointCoord - 0.5;
+    if (dot(c, c) > 0.25) discard;
   }
 
-  const particles = buildParticles(880)
-  const live = { ...PRESETS.idle }
-  let rotY = 0
-  let rotX = 0.35
-  let reticle = 0
-  let orbit = 0
-  let bandStrength = 0
-  let breathT = 0
-  let last = performance.now()
-  let raf = 0
-  let disposed = false
+  // Depth-graded blue: deep rim far, hot blue-white near/bright.
+  vec3 col = mix(uRim, uPrimary, smoothstep(0.0, 0.6, vDepth));
+  col = mix(col, uMid, smoothstep(0.45, 0.9, vDepth));
+  col = mix(col, uCore, clamp(vBright - 0.9, 0.0, 1.0) * 0.6);
+  float a = (0.10 + vDepth * vDepth * 0.55) * vBright * uDim;
+  frag = vec4(col * a, a);
+}`
 
-  const lerp = (a, b, k) => a + (b - a) * k
+const GLOW_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aPos;
+uniform float uAspect, uSize;
+out vec2 vUv;
 
-  const frame = now => {
-    if (disposed) {
-      return
+void main() {
+  vUv = aPos;
+  gl_Position = vec4(aPos.x * uSize / uAspect, aPos.y * uSize, 0.0, 1.0);
+}`
+
+// The core vortex: radial falloff × a slow two-octave swirl. Brightest thing
+// on screen; voice flares it.
+const GLOW_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform float uTime, uIntensity, uSwirl;
+uniform vec3 uCore, uMid;
+out vec4 frag;
+
+float noise(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float fbm(vec2 p) {
+  float a = noise(floor(p)) * 0.6 + noise(floor(p * 2.3 + 7.7)) * 0.4;
+  return a;
+}
+
+void main() {
+  float r = length(vUv);
+  float ang = atan(vUv.y, vUv.x);
+  float swirl = fbm(vec2(ang * 2.2 + uTime * 0.25 + r * 3.0 * uSwirl, r * 5.0 - uTime * 0.35));
+  float body = exp(-r * r * 7.0) * (0.75 + swirl * 0.5);
+  float hot = exp(-r * r * 40.0) * 1.4;
+  vec3 col = uMid * body + uCore * (body * 0.6 + hot);
+  float a = clamp((body + hot) * uIntensity, 0.0, 1.6);
+  frag = vec4(col * a, a * 0.8);
+}`
+
+const BLUR_VS = `#version 300 es
+precision highp float;
+layout(location=0) in vec2 aPos;
+out vec2 vUv;
+void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0.0, 1.0); }`
+
+const BLUR_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform vec2 uDir;
+out vec4 frag;
+
+void main() {
+  vec4 sum = texture(uTex, vUv) * 0.227;
+  sum += texture(uTex, vUv + uDir * 1.384) * 0.316;
+  sum += texture(uTex, vUv - uDir * 1.384) * 0.316;
+  sum += texture(uTex, vUv + uDir * 3.230) * 0.070;
+  sum += texture(uTex, vUv - uDir * 3.230) * 0.070;
+  frag = sum;
+}`
+
+const COMPOSITE_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+uniform sampler2D uTex;
+uniform float uAmount;
+out vec4 frag;
+void main() { frag = texture(uTex, vUv) * uAmount; }`
+
+function compile(gl, type, src) {
+  const sh = gl.createShader(type)
+
+  gl.shaderSource(sh, src)
+  gl.compileShader(sh)
+
+  if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
+    throw new Error(gl.getShaderInfoLog(sh) || 'shader compile failed')
+  }
+
+  return sh
+}
+
+function program(gl, vs, fs) {
+  const prog = gl.createProgram()
+
+  gl.attachShader(prog, compile(gl, gl.VERTEX_SHADER, vs))
+  gl.attachShader(prog, compile(gl, gl.FRAGMENT_SHADER, fs))
+  gl.linkProgram(prog)
+
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(prog) || 'link failed')
+  }
+
+  return prog
+}
+
+// Filament lattice: great-circle and latitude arcs with circuit-like gaps.
+function buildFilaments() {
+  const verts = []
+  const rand = (() => {
+    let s = 1234567
+
+    return () => {
+      s = (s * 1103515245 + 12345) & 0x7fffffff
+
+      return s / 0x7fffffff
     }
+  })()
 
-    const dt = Math.min(64, now - last)
-    last = now
+  const arcCount = 150
 
-    // Track CSS size × DPR every frame (cheap; handles pane resizes).
-    const dpr = window.devicePixelRatio || 1
-    const w = canvas.clientWidth
-    const h = canvas.clientHeight
+  for (let i = 0; i < arcCount; i++) {
+    // Random circle: axis n, plane basis (u, v); small circles hug latitude.
+    const az = rand() * Math.PI * 2
+    const el = Math.acos(2 * rand() - 1)
+    const n = [Math.sin(el) * Math.cos(az), Math.cos(el), Math.sin(el) * Math.sin(az)]
+    let u = [-n[1], n[0], 0]
+    const ul = Math.hypot(u[0], u[1], u[2]) || 1
 
-    if (w < 40 || h < 40) {
-      raf = window.requestAnimationFrame(frame)
+    u = u.map(x => x / ul)
+    const v = [
+      n[1] * u[2] - n[2] * u[1],
+      n[2] * u[0] - n[0] * u[2],
+      n[0] * u[1] - n[1] * u[0]
+    ]
+    const lat = rand() < 0.4 ? (rand() - 0.5) * 0.9 : 0
+    const rr = Math.sqrt(1 - lat * lat)
+    const start = rand() * Math.PI * 2
+    const span = (0.25 + rand() * 1.1) * (rand() < 0.15 ? 2.2 : 1)
+    const steps = Math.max(6, Math.floor(span * 22))
+    const seed = rand()
+    const radius = 0.82 + rand() * 0.2
 
-      return
+    for (let sIdx = 0; sIdx < steps; sIdx++) {
+      for (const off of [0, 1]) {
+        const t = (sIdx + off) / steps
+        const th = start + t * span
+        const c = Math.cos(th) * rr
+        const s2 = Math.sin(th) * rr
+        const p = [
+          (c * u[0] + s2 * v[0] + lat * n[0]) * radius,
+          (c * u[1] + s2 * v[1] + lat * n[1]) * radius,
+          (c * u[2] + s2 * v[2] + lat * n[2]) * radius
+        ]
+
+        verts.push(p[0], p[1], p[2], t, seed, 0)
+      }
     }
+  }
 
-    if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-      canvas.width = Math.round(w * dpr)
-      canvas.height = Math.round(h * dpr)
-    }
+  // Sparse structural particles at lattice depth.
+  for (let i = 0; i < 260; i++) {
+    const az = rand() * Math.PI * 2
+    const el = Math.acos(2 * rand() - 1)
+    const r = 0.7 + rand() * 0.3
 
-    const mode = tracker.mode()
-    const target = PRESETS[mode]
-    // ~380ms time constant: every param glides, nothing snaps.
-    const k = 1 - Math.exp(-dt / 380)
+    verts.push(
+      r * Math.sin(el) * Math.cos(az),
+      r * Math.cos(el),
+      r * Math.sin(el) * Math.sin(az),
+      rand(),
+      rand(),
+      1
+    )
+  }
 
-    for (const key of Object.keys(target)) {
-      live[key] = lerp(live[key], target[key], k)
-    }
+  return new Float32Array(verts)
+}
 
-    const out = tracker.amp.level('out', dt)
-    const mic = tracker.amp.level('mic', dt)
-    const voice = mode === 'speaking' ? out.level : mode === 'listening' ? mic.level : 0
-    tracker.reportReal(mode === 'speaking' ? out.real : mode === 'listening' ? mic.real : false)
+// Fragmented shells: partial ring plates on tilted axes — a machine of light
+// mid-assembly. Each shell rotates independently (counter-rotation CPU-side).
+function buildShellSegments() {
+  const verts = []
+  const ranges = []
+  let seed = 424242
+  const rand = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff
 
-    breathT += (dt / 1000) * live.breathHz * Math.PI * 2
-    rotY += (dt / 1000) * live.spin
-    rotX = 0.35 + Math.sin(now / 9000) * 0.08
-    reticle += dt / 14_000
-    orbit -= dt / 23_000
-    bandStrength = lerp(bandStrength, live.band > 0.5 ? 1 : 0, k)
+    return seed / 0x7fffffff
+  }
 
-    const cx = (w * dpr) / 2
-    const cy = (h * dpr) / 2
-    const base = (Math.min(w, h) / 2) * 0.52 * dpr
-    const breath = 1 + Math.sin(breathT) * live.breathAmp
-    const bloom = 1 + voice * 0.16
-    const R = base * live.radius * breath * bloom
+  const radii = [1.12, 1.26, 1.42]
 
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.clearRect(0, 0, canvas.width, canvas.height)
+  radii.forEach((radius, shell) => {
+    const startVert = verts.length / 6
+    const plates = 7 + shell * 2
 
-    // Deep-space backdrop glow.
-    const glowR = R * (2.3 + voice * 0.5)
-    const glow = ctx.createRadialGradient(cx, cy, R * 0.2, cx, cy, glowR)
-    const glowA = live.glow * (0.5 + voice * 0.5)
+    for (let plateIdx = 0; plateIdx < plates; plateIdx++) {
+      const start = rand() * Math.PI * 2
+      const span = 0.18 + rand() * 0.55
+      const width = 0.014 + rand() * 0.03
+      const steps = Math.max(4, Math.floor(span * 16))
+      const pseed = rand()
+      const inner = radius - width
+      const outer = radius + width
+      const at = (th, r) => [Math.cos(th) * r, Math.sin(th) * r, 0]
 
-    glow.addColorStop(0, `rgba(59, 130, 246, ${0.34 * glowA})`)
-    glow.addColorStop(0.55, `rgba(37, 99, 235, ${0.1 * glowA})`)
-    glow.addColorStop(1, 'rgba(2, 6, 16, 0)')
-    ctx.fillStyle = glow
-    ctx.fillRect(0, 0, canvas.width, canvas.height)
+      for (let sIdx = 0; sIdx < steps; sIdx++) {
+        const t0 = start + (sIdx / steps) * span
+        const t1 = start + ((sIdx + 1) / steps) * span
+        const tt = sIdx / steps
 
-    ctx.globalCompositeOperation = 'lighter'
+        // plate edges: two concentric arc strokes
+        verts.push(...at(t0, inner), tt, pseed, 0, ...at(t1, inner), tt, pseed, 0)
+        verts.push(...at(t0, outer), tt, pseed, 0, ...at(t1, outer), tt, pseed, 0)
 
-    // Luminous core — the light source the shell orbits.
-    const core = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * 0.72)
-
-    core.addColorStop(0, `rgba(96, 165, 250, ${0.16 + live.glow * 0.14 + voice * 0.2})`)
-    core.addColorStop(0.55, `rgba(59, 130, 246, ${0.07 + voice * 0.08})`)
-    core.addColorStop(1, 'rgba(59, 130, 246, 0)')
-    ctx.fillStyle = core
-    ctx.beginPath()
-    ctx.arc(cx, cy, R * 0.72, 0, Math.PI * 2)
-    ctx.fill()
-
-    // The sphere.
-    const sinY = Math.sin(rotY)
-    const cosY = Math.cos(rotY)
-    const sinX = Math.sin(rotX)
-    const cosX = Math.cos(rotX)
-    const hue = 213 + live.hueShift
-
-    for (const p of particles) {
-      // Surface ripple: per-particle wobble scaled by jitter + voice.
-      const ripple = 1 + Math.sin(breathT * 2 + p.phase) * (live.jitter + voice * 0.05) * p.wobble
-      const x1 = p.x * cosY - p.z * sinY
-      const z1 = p.x * sinY + p.z * cosY
-      const y2 = p.y * cosX - z1 * sinX
-      const z2 = p.y * sinX + z1 * cosX
-      const persp = 1 / (1.65 - z2 * 0.62)
-      const px = cx + x1 * R * ripple * persp
-      const py = cy + y2 * R * ripple * persp
-      const depth = (z2 + 1) / 2
-      const alpha = 0.09 + depth * depth * (0.62 + voice * 0.35)
-      const size = (0.7 + depth * 1.6) * dpr * (1 + voice * 0.25)
-
-      ctx.fillStyle = `hsla(${hue}, 94%, ${60 + depth * 18 + p.wobble * 8}%, ${alpha})`
-      ctx.beginPath()
-      ctx.arc(px, py, size, 0, Math.PI * 2)
-      ctx.fill()
-    }
-
-    // Thinking bands: tilted particle rings orbiting fast; fade via bandStrength.
-    if (bandStrength > 0.02) {
-      for (let b = 0; b < 3; b++) {
-        const tilt = 0.5 + b * 0.62
-        const speed = now / (700 - b * 140)
-        const ringR = R * (1.04 + b * 0.09)
-        const n = 42
-
-        for (let i = 0; i < n; i++) {
-          const a = (i / n) * Math.PI * 2 + speed
-          const x = Math.cos(a) * ringR
-          const z = Math.sin(a) * ringR * Math.cos(tilt)
-          const y = Math.sin(a) * ringR * Math.sin(tilt) * 0.4
-          const persp = 1 / (1.65 - (z / R) * 0.35)
-          const depth = (z / ringR + 1) / 2
-          const tail = i / n
-
-          ctx.fillStyle = `hsla(${hue + 8}, 95%, 66%, ${bandStrength * tail * (0.12 + depth * 0.3)})`
-          ctx.beginPath()
-          ctx.arc(cx + x * persp, cy + y * persp, (0.6 + depth * 1.1) * dpr, 0, Math.PI * 2)
-          ctx.fill()
+        // sparse rungs give the plates their machined look
+        if (sIdx % 3 === 0) {
+          verts.push(...at(t0, inner), tt, pseed, 0, ...at(t0, outer), tt, pseed, 0)
         }
       }
     }
 
-    ctx.globalCompositeOperation = 'source-over'
+    ranges.push({ count: verts.length / 6 - startVert, start: startVert })
+  })
 
-    // Reticle ring 1: thin rotating tick ring.
-    const r1 = R * 1.32
-    ctx.save()
-    ctx.translate(cx, cy)
-    ctx.rotate(reticle * Math.PI * 2)
-    ctx.strokeStyle = `rgba(125, 180, 252, ${0.52 + voice * 0.25})`
-    ctx.lineWidth = 1.1 * dpr
+  return { data: new Float32Array(verts), ranges }
+}
 
-    for (let i = 0; i < 72; i++) {
-      const a = (i / 72) * Math.PI * 2
-      const long = i % 6 === 0
-      const inner = r1 - (long ? 7 : 3) * dpr
+function startOrb(canvas, tracker) {
+  const gl = canvas.getContext('webgl2', { alpha: true, antialias: true, premultipliedAlpha: true })
 
-      ctx.globalAlpha = long ? 0.8 : 0.4
-      ctx.beginPath()
-      ctx.moveTo(Math.cos(a) * inner, Math.sin(a) * inner)
-      ctx.lineTo(Math.cos(a) * r1, Math.sin(a) * r1)
-      ctx.stroke()
-    }
-
-    ctx.restore()
-
-    // Reticle ring 2: counter-rotating orbit line with an arc gap.
-    ctx.save()
-    ctx.translate(cx, cy)
-    ctx.rotate(orbit * Math.PI * 2)
-    ctx.strokeStyle = `rgba(59, 130, 246, ${0.28 + voice * 0.15})`
-    ctx.lineWidth = 1.2 * dpr
-    ctx.beginPath()
-    ctx.arc(0, 0, R * 1.46, 0.35, Math.PI * 1.72)
-    ctx.stroke()
-    // Satellite dot riding the orbit line.
-    ctx.fillStyle = 'rgba(147, 197, 253, 0.9)'
-    ctx.beginPath()
-    ctx.arc(Math.cos(0.35) * R * 1.46, Math.sin(0.35) * R * 1.46, 2.2 * dpr, 0, Math.PI * 2)
-    ctx.fill()
-    ctx.restore()
-
-    raf = window.requestAnimationFrame(frame)
+  if (!gl) {
+    return () => undefined
   }
 
-  raf = window.requestAnimationFrame(frame)
+  let disposed = false
+  let raf = 0
+
+  try {
+    const lineProg = program(gl, LINE_VS, LINE_FS)
+    const glowProg = program(gl, GLOW_VS, GLOW_FS)
+    const blurProg = program(gl, BLUR_VS, BLUR_FS)
+    const compProg = program(gl, BLUR_VS, COMPOSITE_FS)
+
+    const filaments = buildFilaments()
+    const filamentCount = filaments.length / 6
+    const shellMesh = buildShellSegments()
+
+    const makeVao = data => {
+      const vao = gl.createVertexArray()
+      const vbo = gl.createBuffer()
+
+      gl.bindVertexArray(vao)
+      gl.bindBuffer(gl.ARRAY_BUFFER, vbo)
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW)
+      gl.enableVertexAttribArray(0)
+      gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0)
+      gl.enableVertexAttribArray(1)
+      gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 24, 12)
+      gl.enableVertexAttribArray(2)
+      gl.vertexAttribPointer(2, 1, gl.FLOAT, false, 24, 16)
+      gl.enableVertexAttribArray(3)
+      gl.vertexAttribPointer(3, 1, gl.FLOAT, false, 24, 20)
+
+      return vao
+    }
+
+    const filamentVao = makeVao(filaments)
+    const shellVao = makeVao(shellMesh.data)
+
+    const quad = new Float32Array([-1, -1, 1, -1, -1, 1, 1, -1, 1, 1, -1, 1])
+    const quadVao = gl.createVertexArray()
+    const quadVbo = gl.createBuffer()
+
+    gl.bindVertexArray(quadVao)
+    gl.bindBuffer(gl.ARRAY_BUFFER, quadVbo)
+    gl.bufferData(gl.ARRAY_BUFFER, quad, gl.STATIC_DRAW)
+    gl.enableVertexAttribArray(0)
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0)
+
+    // Bloom chain: scene → half-res A → blur H → B → blur V → A → composite.
+    const fbo = { a: null, b: null, ta: null, tb: null, w: 0, h: 0 }
+
+    const makeTarget = (w, h) => {
+      const tex = gl.createTexture()
+
+      gl.bindTexture(gl.TEXTURE_2D, tex)
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
+      const fb = gl.createFramebuffer()
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb)
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0)
+
+      return { fb, tex }
+    }
+
+    const env = createEnvelope()
+    const live = { ...PRESETS.idle }
+    let rotY = 0
+    let last = performance.now()
+    const lerp = (a, b, k) => a + (b - a) * k
+
+    const frame = now => {
+      if (disposed) {
+        return
+      }
+
+      const dt = Math.min(64, now - last)
+
+      last = now
+      const dpr = window.devicePixelRatio || 1
+      const w = canvas.clientWidth
+      const h = canvas.clientHeight
+
+      if (w < 40 || h < 40) {
+        raf = window.requestAnimationFrame(frame)
+
+        return
+      }
+
+      const W = Math.round(w * dpr)
+      const H = Math.round(h * dpr)
+
+      if (canvas.width !== W || canvas.height !== H) {
+        canvas.width = W
+        canvas.height = H
+      }
+
+      if (fbo.w !== W || fbo.h !== H) {
+        fbo.w = W
+        fbo.h = H
+        const bw = Math.max(2, W >> 2)
+        const bh = Math.max(2, H >> 2)
+
+        Object.assign(fbo, { a: makeTarget(bw, bh), b: makeTarget(bw, bh), bh, bw, scene: makeTarget(W, H) })
+      }
+
+      const mode = tracker.mode()
+      const target = PRESETS[mode]
+      const k = 1 - Math.exp(-dt / 380)
+
+      for (const key of Object.keys(target)) {
+        live[key] = lerp(live[key], target[key], k)
+      }
+
+      const out = tracker.amp.level('out', dt)
+      const mic = tracker.amp.level('mic', dt)
+      const rawVoice = mode === 'speaking' ? out.level : mode === 'listening' ? mic.level * 0.5 : 0
+
+      tracker.reportReal(mode === 'speaking' ? out.real : mode === 'listening' ? mic.real : false)
+      const energy = env.step(rawVoice, dt)
+
+      rotY += (dt / 1000) * live.spin * (1 + energy * 0.5)
+      const rotX = 0.42 + Math.sin(now / 11_000) * 0.07
+
+      const cy = Math.cos(rotY)
+      const sy = Math.sin(rotY)
+      const cx = Math.cos(rotX)
+      const sx = Math.sin(rotX)
+      // column-major mat3: rotY then rotX
+      const rot = new Float32Array([
+        cy, sx * sy, -cx * sy,
+        0, cx, sx,
+        sy, -sx * cy, cx * cy
+      ])
+
+      const aspect = W / H
+      const scale = 0.62 * live.radius
+      const breath = 1 + Math.sin((now / 1000) * live.breathHz * Math.PI * 2) * live.breathAmp
+      const radius = breath * (1 + energy * 0.05)
+
+      // ---- scene pass (into the scene FBO; bloom + composite follow) ----
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.scene.fb)
+      gl.viewport(0, 0, W, H)
+      gl.clearColor(0, 0, 0, 0)
+      gl.clear(gl.COLOR_BUFFER_BIT)
+      gl.enable(gl.BLEND)
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+
+      // halo
+      gl.useProgram(glowProg)
+      gl.bindVertexArray(quadVao)
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uAspect'), aspect)
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uSize'), 1.55 * live.radius)
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uTime'), now / 1000)
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uIntensity'), 0.10 * live.glow)
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uSwirl'), 0.4)
+      gl.uniform3fv(gl.getUniformLocation(glowProg, 'uCore'), COLORS.primary)
+      gl.uniform3fv(gl.getUniformLocation(glowProg, 'uMid'), COLORS.rim)
+      gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+      gl.blendFunc(gl.ONE, gl.ONE)
+
+      // filament lattice + particles
+      gl.useProgram(lineProg)
+      gl.bindVertexArray(filamentVao)
+      const uni = name => gl.getUniformLocation(lineProg, name)
+
+      gl.uniformMatrix3fv(uni('uRot'), false, rot)
+      gl.uniform1f(uni('uAspect'), aspect)
+      gl.uniform1f(uni('uScale'), scale)
+      gl.uniform1f(uni('uRadius'), radius)
+      gl.uniform1f(uni('uTime'), now / 1000)
+      gl.uniform1f(uni('uEnergy'), energy * live.energyGain + live.pulseFloor)
+      gl.uniform1f(uni('uPulseRate'), live.pulseRate)
+      gl.uniform1f(uni('uShimmer'), live.shimmer)
+      gl.uniform1f(uni('uBaseGlow'), live.baseGlow)
+      gl.uniform1f(uni('uDim'), live.dim)
+      gl.uniform3fv(uni('uRim'), COLORS.rim)
+      gl.uniform3fv(uni('uPrimary'), COLORS.primary)
+      gl.uniform3fv(uni('uMid'), COLORS.mid)
+      gl.uniform3fv(uni('uCore'), COLORS.core)
+      gl.drawArrays(gl.LINES, 0, filamentCount - 260)
+      gl.drawArrays(gl.POINTS, filamentCount - 260, 260)
+
+      // fragmented shells: three tilted counter-rotating rings
+      gl.bindVertexArray(shellVao)
+      const shellStates = [
+        { dir: 1, speed: 0.16, tiltX: 1.15, tiltZ: 0.2 },
+        { dir: -1, speed: 0.11, tiltX: 0.4, tiltZ: -0.5 },
+        { dir: 1, speed: 0.07, tiltX: 1.9, tiltZ: 0.9 }
+      ]
+
+      shellStates.forEach((st, i) => {
+        const a = now / 1000 * st.speed * st.dir * live.shellSpeed * (1 + energy * 0.8)
+        const ca = Math.cos(a)
+        const sa = Math.sin(a)
+        const ctx2 = Math.cos(st.tiltX)
+        const stx = Math.sin(st.tiltX)
+        const cz = Math.cos(st.tiltZ)
+        const sz = Math.sin(st.tiltZ)
+        // spin(Z-local) then tiltX then tiltZ, composed with global rot
+        const m = [
+          ca, sa, 0,
+          -sa, ca, 0,
+          0, 0, 1
+        ]
+        const tx = [
+          1, 0, 0,
+          0, ctx2, stx,
+          0, -stx, ctx2
+        ]
+        const tz = [
+          cz, sz, 0,
+          -sz, cz, 0,
+          0, 0, 1
+        ]
+        const mul = (A, B) => {
+          const o = new Array(9)
+
+          for (let r = 0; r < 3; r++) {
+            for (let c = 0; c < 3; c++) {
+              o[c * 3 + r] = A[0 * 3 + r] * B[c * 3 + 0] + A[1 * 3 + r] * B[c * 3 + 1] + A[2 * 3 + r] * B[c * 3 + 2]
+            }
+          }
+
+          return o
+        }
+        const g = [rot[0], rot[1], rot[2], rot[3], rot[4], rot[5], rot[6], rot[7], rot[8]]
+        const model = mul(g, mul(tz, mul(tx, m)))
+
+        gl.uniformMatrix3fv(uni('uRot'), false, new Float32Array(model))
+        gl.uniform1f(uni('uBaseGlow'), live.baseGlow * (0.75 - i * 0.14))
+        gl.drawArrays(gl.LINES, shellMesh.ranges[i].start, shellMesh.ranges[i].count)
+      })
+
+      // core vortex — brightest element on screen
+      gl.useProgram(glowProg)
+      gl.bindVertexArray(quadVao)
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uSize'), 0.34 * live.radius * (1 + energy * 0.18))
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uIntensity'), live.coreIntensity * (1 + energy * 1.1))
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uSwirl'), 1.0)
+      gl.uniform3fv(gl.getUniformLocation(glowProg, 'uCore'), COLORS.core)
+      gl.uniform3fv(gl.getUniformLocation(glowProg, 'uMid'), COLORS.mid)
+      gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+      // ---- bloom: quarter-res blur of the scene, then composite ----
+      gl.useProgram(blurProg)
+      gl.bindVertexArray(quadVao)
+      gl.activeTexture(gl.TEXTURE0)
+      gl.disable(gl.BLEND)
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.a.fb)
+      gl.viewport(0, 0, fbo.bw, fbo.bh)
+      gl.bindTexture(gl.TEXTURE_2D, fbo.scene.tex)
+      gl.uniform1i(gl.getUniformLocation(blurProg, 'uTex'), 0)
+      gl.uniform2f(gl.getUniformLocation(blurProg, 'uDir'), 1 / fbo.bw, 0)
+      gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.b.fb)
+      gl.bindTexture(gl.TEXTURE_2D, fbo.a.tex)
+      gl.uniform2f(gl.getUniformLocation(blurProg, 'uDir'), 0, 1 / fbo.bh)
+      gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+      // composite: crisp scene + soft bloom, straight onto the canvas
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+      gl.viewport(0, 0, W, H)
+      gl.clearColor(0, 0, 0, 0)
+      gl.clear(gl.COLOR_BUFFER_BIT)
+      gl.useProgram(compProg)
+      gl.enable(gl.BLEND)
+      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA)
+      gl.bindTexture(gl.TEXTURE_2D, fbo.scene.tex)
+      gl.uniform1i(gl.getUniformLocation(compProg, 'uTex'), 0)
+      gl.uniform1f(gl.getUniformLocation(compProg, 'uAmount'), 1)
+      gl.drawArrays(gl.TRIANGLES, 0, 6)
+      gl.blendFunc(gl.ONE, gl.ONE)
+      gl.bindTexture(gl.TEXTURE_2D, fbo.b.tex)
+      gl.uniform1f(gl.getUniformLocation(compProg, 'uAmount'), 0.9 + energy * 0.7)
+      gl.drawArrays(gl.TRIANGLES, 0, 6)
+
+      raf = window.requestAnimationFrame(frame)
+    }
+
+    raf = window.requestAnimationFrame(frame)
+  } catch {
+    return () => undefined
+  }
 
   return () => {
     disposed = true
     window.cancelAnimationFrame(raf)
   }
 }
-
-// --- React shell ------------------------------------------------------------
 function HudPage() {
   const canvasRef = useRef(null)
   const labelRef = useRef(null)

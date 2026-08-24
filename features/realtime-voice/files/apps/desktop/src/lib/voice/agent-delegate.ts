@@ -38,12 +38,19 @@ export interface AgentTurn {
   result: Promise<string>
   /** Settle the turn early with '' (teardown / voice session end). */
   cancel: () => void
+  /** The runtime session id this turn is pinned to — known upfront for an
+   *  existing session, adopted from the first `message.start` for a fresh
+   *  draft, null until then. Lets observers (the HUD task panel) stream the
+   *  right session's events. */
+  sessionId: () => string | null
 }
 
 export interface AgentDelegate {
   /** Route `request` into the foreground session and observe its result. Returns
-   *  null when there is no session to route to (handled as "open a session"). */
-  runTurn(request: string): AgentTurn | null
+   *  null when there is no session to route to (handled as "open a session").
+   *  `options.timeoutMs` overrides the default turn timeout — delegated jobs
+   *  (research, multi-step work) legitimately outlive a bridged Q&A turn. */
+  runTurn(request: string, options?: { timeoutMs?: number }): AgentTurn | null
   /** Bounded, non-transcript foreground metadata for the live Realtime model. */
   getContext(): string
   /** Notify when the foreground session/project/workspace identity changes. */
@@ -189,7 +196,7 @@ export function createForegroundDelegate(submit: AgentSubmit, overrides: Partial
   return {
     getContext: deps.getContext,
     subscribeContext: deps.subscribeContext,
-    runTurn(request: string): AgentTurn | null {
+    runTurn(request: string, options?: { timeoutMs?: number }): AgentTurn | null {
       // Pin the target at the instant the turn starts — the foreground may change
       // while it runs, but this turn belongs to the session it started in.
       const pinnedRuntimeId = deps.getActiveSessionId()
@@ -251,7 +258,7 @@ export function createForegroundDelegate(submit: AgentSubmit, overrides: Partial
 
       const result = new Promise<string>(resolve => {
         resolveResult = resolve
-        timer = deps.setTimer(() => finish(''), deps.timeoutMs)
+        timer = deps.setTimer(() => finish(''), options?.timeoutMs ?? deps.timeoutMs)
       })
 
       // Route the request, pinned to the captured session. A submit rejection
@@ -263,7 +270,7 @@ export function createForegroundDelegate(submit: AgentSubmit, overrides: Partial
         })
       ).catch(() => finish(''))
 
-      return { result, cancel: () => finish('') }
+      return { result, cancel: () => finish(''), sessionId: () => targetRuntimeId }
     }
   }
 }

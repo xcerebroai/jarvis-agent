@@ -18,8 +18,12 @@ import {
   nextRealtimeGreeting,
   REALTIME_MODEL,
   type RealtimeSessionConfigOptions,
+  CANCEL_TASK_TOOL_NAME,
   CLEAR_DISPLAY_TOOL_NAME,
   CREATE_PROJECT_TOOL_NAME,
+  DELEGATE_TASK_TOOL_NAME,
+  OPEN_APP_TOOL_NAME,
+  OPEN_URL_TOOL_NAME,
   SHOW_DETAIL_TOOL_NAME,
   REVIEW_PROJECTS_TOOL_NAME,
   SHOW_PROJECT_TOOL_NAME,
@@ -114,6 +118,8 @@ function parseToolArguments(raw: unknown): Record<string, unknown> {
 }
 
 const DISPLAY_TOOL_NAMES = new Set<string>([SHOW_PROJECTS_TOOL_NAME, SHOW_PROJECT_TOOL_NAME, SHOW_DETAIL_TOOL_NAME, CREATE_PROJECT_TOOL_NAME, CLEAR_DISPLAY_TOOL_NAME])
+
+const ACTION_TOOL_NAMES = new Set<string>([OPEN_APP_TOOL_NAME, OPEN_URL_TOOL_NAME, DELEGATE_TASK_TOOL_NAME, CANCEL_TASK_TOOL_NAME])
 
 export class RealtimeVoiceSession {
   private readonly deps: RealtimeSessionDeps
@@ -441,7 +447,8 @@ export class RealtimeVoiceSession {
         record.type !== 'function_call' ||
         (record.name !== USE_JARVIS_TOOL_NAME &&
           record.name !== REVIEW_PROJECTS_TOOL_NAME &&
-          !DISPLAY_TOOL_NAMES.has(record.name))
+          !DISPLAY_TOOL_NAMES.has(String(record.name)) &&
+          !ACTION_TOOL_NAMES.has(String(record.name)))
       ) {
         continue
       }
@@ -488,6 +495,29 @@ export class RealtimeVoiceSession {
         type: 'function_call_output',
         call_id: callId,
         output
+      }
+    })
+    this.send({ type: 'response.create' })
+  }
+
+  /**
+   * Inject an out-of-band system update (e.g. a delegated task finishing) into
+   * the live conversation and ask the model to relay it aloud. No call_id —
+   * this is not a tool response; it arrives on its own, mid-conversation.
+   */
+  speakSystemUpdate(text: string): void {
+    const update = text.trim()
+
+    if (this.closed || !update) {
+      return
+    }
+
+    this.send({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text: update }]
       }
     })
     this.send({ type: 'response.create' })

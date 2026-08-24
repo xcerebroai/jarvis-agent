@@ -208,6 +208,23 @@ grep -q "detail: bool = False" "$SRC/hermes_cli/realtime_voice.py" && ok "detail
 grep -q "display.detail" "$V/voice-supervisor.ts" && ok "detail stage event emitted" || bad "detail event missing"
 
 echo
+echo "== 5g. P5 full reach: instant actions + delegated work =="
+grep -q "OPEN_APP_TOOL_NAME = 'open_app'" "$V/realtime-config.ts" && ok "open_app declared" || bad "open_app missing"
+grep -q "OPEN_URL_TOOL_NAME = 'open_url'" "$V/realtime-config.ts" && ok "open_url declared" || bad "open_url missing"
+grep -q "DELEGATE_TASK_TOOL_NAME = 'delegate_task'" "$V/realtime-config.ts" && ok "delegate_task declared" || bad "delegate_task missing"
+grep -q "CANCEL_TASK_TOOL_NAME = 'cancel_task'" "$V/realtime-config.ts" && ok "cancel_task declared" || bad "cancel_task missing"
+grep -q "SAFETY: before delegating anything destructive" "$V/realtime-config.ts" && ok "spoken safety confirm in instructions" || bad "safety instruction missing"
+grep -q "speakSystemUpdate" "$V/realtime-session.ts" && ok "out-of-band completion narration seam" || bad "speakSystemUpdate missing"
+grep -q "sessionId: () => targetRuntimeId" "$V/agent-delegate.ts" && ok "delegate exposes pinned session id" || bad "sessionId probe missing"
+grep -q "timeoutMs: DELEGATED_TASK_TIMEOUT_MS" "$V/voice-supervisor.ts" && ok "delegated jobs get the long timeout" || bad "long timeout missing"
+grep -q "voice.task.started" "$V/voice-supervisor.ts" && ok "task lifecycle events emitted" || bad "task events missing"
+grep -q "session.interrupt" "$V/voice-supervisor.ts" && ok "cancel interrupts the agent for real" || bad "real interrupt missing"
+grep -q "openRealtimeSystemApp" "$SRC/apps/desktop/src/api/realtime-voice.ts" && ok "system-open API client present" || bad "system-open client missing"
+grep -q "def open_system_app" "$SRC/hermes_cli/realtime_voice.py" && ok "argv-only app launcher in backend" || bad "open_system_app missing"
+grep -q "system-open" "$SRC/hermes_cli/web_server.py" && ok "system-open endpoint in tracked patch" || bad "system-open endpoint missing"
+grep -qv "shell=True" "$SRC/hermes_cli/realtime_voice.py" && ok "no shell=True in launcher" || bad "shell launch detected"
+
+echo
 echo "== 6. revert restores an EXACT clean upstream =="
 bash "$APPLY" revert "$SRC" >/dev/null 2>&1
 AFTER="$(git -C "$SRCG" status --porcelain | sort)"

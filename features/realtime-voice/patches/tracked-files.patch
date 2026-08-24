@@ -577,10 +577,10 @@ index f00bdd0..bcda062 100644
    label: string
    name: string
 diff --git a/hermes_cli/web_models.py b/hermes_cli/web_models.py
-index 2a44cfe..c10cb7b 100644
+index 2a44cfe..2e66539 100644
 --- a/hermes_cli/web_models.py
 +++ b/hermes_cli/web_models.py
-@@ -306,6 +306,34 @@ class TTSSpeakRequest(BaseModel):
+@@ -306,6 +306,39 @@ class TTSSpeakRequest(BaseModel):
      text: str
  
  
@@ -611,25 +611,31 @@ index 2a44cfe..c10cb7b 100644
 +    goal: str = ""
 +    tasks: list[str] = []
 +
++class RealtimeSystemOpenRequest(BaseModel):
++    """Voice `open_app` instant action (launch a desktop application by name)."""
++
++    name: str
++
 +
  # --- from web_server.py (originally lines 11549-11551) ---
  
  class OAuthSubmitBody(BaseModel):
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 201d37f..22bc08f 100644
+index 201d37f..5040407 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
-@@ -1648,6 +1648,9 @@ from hermes_cli.web_models import (  # noqa: F401
+@@ -1648,6 +1648,10 @@ from hermes_cli.web_models import (  # noqa: F401
      LearningNodeEdit,
      DebugShareRequest,
      TTSSpeakRequest,
 +    RealtimeTokenRequest,
 +    RealtimeProjectCreateRequest,
 +    RealtimeProjectReviewRequest,
++    RealtimeSystemOpenRequest,
      OAuthSubmitBody,
      BulkDeleteSessions,
      SessionImport,
-@@ -5493,6 +5496,262 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+@@ -5493,6 +5497,277 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
      }
  
  
@@ -887,6 +893,21 @@ index 201d37f..22bc08f 100644
 +        raise HTTPException(status_code=502, detail="Could not write the local project overlay.")
 +
 +    return {"ok": True, "project": row}
++
++
++@app.post("/api/audio/realtime/system-open")
++async def realtime_system_open(payload: RealtimeSystemOpenRequest):
++    """Voice `open_app` instant action: launch a desktop application by name.
++    Argv-only (no shell); refused names are reported conversationally by the
++    voice layer, never as a toast."""
++    from hermes_cli import realtime_voice
++
++    result = realtime_voice.open_system_app(payload.name)
++
++    if not result.get("ok"):
++        return {"ok": False, "error": str(result.get("error") or "launch failed")}
++
++    return {"ok": True}
 +
 +
  def _split_text_for_speak_stream(text: str, cap: int) -> list:

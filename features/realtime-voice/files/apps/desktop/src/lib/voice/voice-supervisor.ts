@@ -26,7 +26,7 @@ import { emitGatewayEvent, onGatewayEvent } from '@/contrib/events'
 import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/store/composer'
 import { atom } from 'nanostores'
 
-import { createRealtimeProject, getRealtimeProjectReview, getRealtimeVoiceConfig, mintRealtimeToken } from '@/hermes'
+import { createRealtimeProject, getRealtimeProjectReview, getRealtimeVoiceConfig, mintRealtimeToken, openRealtimeSystemApp } from '@/hermes'
 import { translateNow } from '@/i18n'
 import { $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
@@ -34,10 +34,14 @@ import { $sidebarOpen, setSidebarOpen } from '@/store/layout'
 import { isVoiceStopCommand } from '@/lib/voice-stop-word'
 import { armWakeWord, resumeWakeAfterVoice } from '@/store/wake-word'
 
-import type { AgentDelegate } from './agent-delegate'
+import type { AgentDelegate, AgentTurn } from './agent-delegate'
 import {
+  CANCEL_TASK_TOOL_NAME,
   CLEAR_DISPLAY_TOOL_NAME,
   CREATE_PROJECT_TOOL_NAME,
+  DELEGATE_TASK_TOOL_NAME,
+  OPEN_APP_TOOL_NAME,
+  OPEN_URL_TOOL_NAME,
   SHOW_DETAIL_TOOL_NAME,
   type RealtimeSessionConfigOptions,
   REVIEW_PROJECTS_TOOL_NAME,
@@ -408,6 +412,224 @@ function runUseJarvis(session: RealtimeVoiceSession, callId: string, request: st
   })
 }
 
+// ── P5 reach: instant actions + the delegated-work bridge ────────────────────
+
+/** The one delegated task allowed at a time. Kept module-scope so it survives
+ *  voice session renewals and even a spoken "stop" (which only detaches the
+ *  narration — the work keeps running until it finishes or is cancelled). */
+let activeTask: {
+  id: number
+  goal: string
+  kind: 'research' | 'task'
+  turn: AgentTurn
+  sessionProbe: number | null
+} | null = null
+let taskCounter = 0
+
+function emitTaskEvent(type: string, payload: Record<string, unknown>): void {
+  emitGatewayEvent({ payload, type })
+}
+
+function clearTaskProbe(task: NonNullable<typeof activeTask>): void {
+  if (task.sessionProbe !== null) {
+    window.clearInterval(task.sessionProbe)
+    task.sessionProbe = null
+  }
+}
+
+/** How long a delegated job may run before it is handed back as timed out.
+ *  Deliberately far beyond the bridged-Q&A default: research and multi-step
+ *  work legitimately take minutes. */
+const DELEGATED_TASK_TIMEOUT_MS = 10 * 60 * 1000
+
+function buildTaskPrompt(goal: string, kind: 'research' | 'task'): string {
+  if (kind === 'research') {
+    return [
+      `Research task delegated from the voice assistant: ${goal}`,
+      '',
+      'Use your browser and web tools to actually investigate — prefer opening pages so the work is visible, not just recalling from memory. Work step by step.',
+      'End your reply with a compact plain-text briefing of what you found: the 3-5 most important points, spoken-summary style, no markdown headers or tables.'
+    ].join('\n')
+  }
+
+  return [
+    `Task delegated from the voice assistant: ${goal}`,
+    '',
+    'When finished, end your reply with a 1-3 sentence plain-text summary of the outcome — it will be read aloud.'
+  ].join('\n')
+}
+
+/** Speak a completed/cancelled task's outcome through whatever voice session is
+ *  live NOW — the one that started the task may have been renewed or ended. */
+function narrateTaskOutcome(text: string): void {
+  activeSession?.speakSystemUpdate(text)
+}
+
+function normalizeUrl(raw: string): null | string {
+  const trimmed = raw.trim()
+
+  if (!trimmed || /\s/.test(trimmed)) {
+    return null
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed
+  }
+
+  // Bare domain ("example.com", "example.com/path") — everything else refused.
+  return /^[\w-]+(\.[\w-]+)+([/?#]\S*)?$/.test(trimmed) ? `https://${trimmed}` : null
+}
+
+function startDelegatedTask(session: RealtimeVoiceSession, callId: string, goal: string, kind: 'research' | 'task'): void {
+  if (activeTask) {
+    session.sendToolOutput(
+      callId,
+      `A task is already running: "${activeTask.goal}". Only one runs at a time — ask the user whether to cancel it first (cancel_task) or wait.`
+    )
+
+    return
+  }
+
+  const delegate = activeDelegate
+  const turn = delegate?.runTurn(buildTaskPrompt(goal, kind), { timeoutMs: DELEGATED_TASK_TIMEOUT_MS })
+
+  if (!turn) {
+    session.sendToolOutput(callId, NO_ROUTABLE_SESSION_OUTPUT)
+
+    return
+  }
+
+  const id = ++taskCounter
+  const task = { goal, id, kind, sessionProbe: null as number | null, turn }
+  activeTask = task
+  emitTaskEvent('voice.task.started', { goal, id, kind, sessionId: turn.sessionId() })
+
+  // The pinned session id may only be known after the first message.start (a
+  // fresh new-chat draft mints it during submit) — probe briefly so the HUD
+  // panel can attach to the right event stream.
+  if (!turn.sessionId()) {
+    task.sessionProbe = window.setInterval(() => {
+      const sid = turn.sessionId()
+
+      if (sid) {
+        clearTaskProbe(task)
+        emitTaskEvent('voice.task.session', { id, sessionId: sid })
+      }
+    }, 300)
+    window.setTimeout(() => clearTaskProbe(task), 15_000)
+  }
+
+  void turn.result.then(text => {
+    clearTaskProbe(task)
+
+    if (activeTask?.id !== id) {
+      return // cancelled (or superseded) — its outcome was already narrated
+    }
+
+    activeTask = null
+    const summary = text.trim()
+    emitTaskEvent('voice.task.done', { goal, id, kind, summary })
+    narrateTaskOutcome(
+      summary
+        ? `[TASK COMPLETE] The delegated ${kind} finished. Relay the outcome to the user conversationally — lead with the key findings, a few sentences at most. Result:\n${summary}`
+        : `[TASK ENDED] The delegated ${kind} ("${goal}") ended without returning a result — it may have timed out or been interrupted on the desktop. Tell the user briefly and offer to retry.`
+    )
+  })
+
+  session.sendToolOutput(
+    callId,
+    `Task ${id} started (${kind}): ${goal}. It is running in the open desktop session — announce that in one short line and stay available. A completion update will arrive here when it finishes.`
+  )
+}
+
+function cancelDelegatedTask(session: RealtimeVoiceSession, callId: string): void {
+  const task = activeTask
+
+  if (!task) {
+    session.sendToolOutput(callId, 'No delegated task is running. Nothing to cancel.')
+
+    return
+  }
+
+  activeTask = null
+  clearTaskProbe(task)
+
+  // Interrupt the agent for real — the observation detach alone would leave it
+  // working. Best-effort: a gateway hiccup still detaches the voice side.
+  const sessionId = task.turn.sessionId()
+
+  if (sessionId) {
+    const gateway = $gateway.get() as null | { request?: (method: string, params?: Record<string, unknown>) => Promise<unknown> }
+    const interrupt = gateway?.request?.('session.interrupt', { session_id: sessionId })
+
+    if (interrupt) {
+      interrupt.then(undefined, () => undefined)
+    }
+  }
+
+  task.turn.cancel()
+  emitTaskEvent('voice.task.cancelled', { goal: task.goal, id: task.id, kind: task.kind })
+  session.sendToolOutput(callId, `Cancelled the ${task.kind}: "${task.goal}". Confirm to the user in a few words.`)
+}
+
+function runActionTool(session: RealtimeVoiceSession, name: string, callId: string, args: Record<string, unknown>): void {
+  if (name === OPEN_APP_TOOL_NAME) {
+    const app = typeof args.name === 'string' ? args.name.trim() : ''
+
+    if (!app) {
+      session.sendToolOutput(callId, 'No app name was given. Ask the user which application to open.')
+
+      return
+    }
+
+    void openRealtimeSystemApp(app)
+      .then(result => {
+        session.sendToolOutput(
+          callId,
+          result.ok
+            ? `Opened ${app}. Confirm in a couple of words.`
+            : `Could not open "${app}" (${result.error || 'not found'}). Tell the user conversationally and ask if they meant a different app.`
+        )
+      })
+      .catch(() => {
+        session.sendToolOutput(callId, `Could not reach the launcher for "${app}". Tell the user it failed and to try again.`)
+      })
+
+    return
+  }
+
+  if (name === OPEN_URL_TOOL_NAME) {
+    const url = normalizeUrl(typeof args.url === 'string' ? args.url : '')
+
+    if (!url) {
+      session.sendToolOutput(callId, 'That did not look like a web address. Ask the user to repeat the site.')
+
+      return
+    }
+
+    void window.hermesDesktop?.openExternal?.(url)
+    session.sendToolOutput(callId, `Opened ${url} in the browser. Confirm in a couple of words.`)
+
+    return
+  }
+
+  if (name === DELEGATE_TASK_TOOL_NAME) {
+    const goal = typeof args.goal === 'string' ? args.goal.trim() : ''
+
+    if (!goal) {
+      session.sendToolOutput(callId, 'No goal was given. Ask the user what exactly to do, then call delegate_task again with a complete goal.')
+
+      return
+    }
+
+    startDelegatedTask(session, callId, goal, args.kind === 'research' ? 'research' : 'task')
+
+    return
+  }
+
+  cancelDelegatedTask(session, callId)
+}
+
 // ── Connection lifecycle ─────────────────────────────────────────────────────
 
 async function connect(renewal: boolean): Promise<void> {
@@ -468,7 +690,13 @@ async function connect(renewal: boolean): Promise<void> {
       },
       onToolCall: call => {
         if (call.name === SHOW_PROJECTS_TOOL_NAME || call.name === SHOW_PROJECT_TOOL_NAME || call.name === SHOW_DETAIL_TOOL_NAME || call.name === CREATE_PROJECT_TOOL_NAME || call.name === CLEAR_DISPLAY_TOOL_NAME) {
-          runDisplayTool(session, call.name, call.callId, call.args ?? {})
+          runDisplayTool(session, call.name, call.callId, call.arguments)
+
+          return
+        }
+
+        if (call.name === OPEN_APP_TOOL_NAME || call.name === OPEN_URL_TOOL_NAME || call.name === DELEGATE_TASK_TOOL_NAME || call.name === CANCEL_TASK_TOOL_NAME) {
+          runActionTool(session, call.name, call.callId, call.arguments)
 
           return
         }
@@ -747,7 +975,7 @@ $voiceConversationStartRequest.subscribe(requestId => {
 
   setTimeout(() => {
     if (takeVoiceConversationStart(requestId)) {
-      void voiceSupervisor.start().catch(() => undefined)
+      voiceSupervisor.start()
     }
   }, FALLBACK_CLAIM_DELAY_MS)
 })

@@ -183,7 +183,11 @@ export function buildInstructions(options: RealtimeSessionConfigOptions = {}): s
   }
 
   lines.push(
-    `Call ${USE_JARVIS_TOOL_NAME} whenever answering well needs tools or actions, private memory, session history, current external facts, files, code, the computer, calculation, or state changes. It routes to the full agent.`,
+    `To OPEN things instantly: call ${OPEN_APP_TOOL_NAME} when asked to open, launch, or start an application ("open Notes", "launch Safari"). Call ${OPEN_URL_TOOL_NAME} for websites. Both are instant — confirm in a few words once the tool returns.`,
+    `To DO WORK: call ${DELEGATE_TASK_TOOL_NAME} when the request is a real job — multi-step work, changes to files or systems, or anything that takes more than a moment. For "research X", "look into X", "find out about X", call it with kind "research"; the agent investigates with its browser and tools while the findings stream on screen. Write the goal fully and self-contained. The tool returns at once: announce in one short line that the task is underway, then stay available — keep answering questions normally while it runs. When a completion update arrives, relay the outcome conversationally: lead with the key findings or the result, a few sentences at most.`,
+    `SAFETY: before delegating anything destructive, irreversible, or costly — deleting things, sending messages or money, bulk changes — first state plainly what is about to happen and get a clear spoken yes. No confirmation, no tool call.`,
+    `CANCELLING: "stop" only silences your voice; delegated work keeps running. When the user says "cancel that", "abort the task", or similar, call ${CANCEL_TASK_TOOL_NAME}, then confirm the cancellation in a few words.`,
+    `Call ${USE_JARVIS_TOOL_NAME} for quick questions that need the agent's private memory, session history, files, or current external facts — cases where the user is waiting on the answer and it should take seconds. For anything longer-running, prefer ${DELEGATE_TASK_TOOL_NAME}.`,
     `Do NOT call the tool for ordinary conversation — greetings, small talk, acknowledgements, clarifying questions, or things you plainly know. Answer those natively and immediately.`,
     `When you do call the tool AND the answer will take a noticeable moment, say a very short spoken preamble first (e.g. "One moment." / "Let me check.") so there is no dead air. If it will be quick, just call it silently. Never announce tool use for trivial requests.`,
     `When the tool returns, speak its result naturally in your own voice and style — rephrase and condense; do not read it verbatim or dump raw output.`
@@ -317,6 +321,72 @@ export const DISPLAY_TOOLS = [
   }
 ] as const
 
+/** Names of the P5 reach tools: two instant openers, the background work
+ *  bridge, and its cancel. Unlike `use_jarvis` (which blocks the reply until
+ *  the agent answers), `delegate_task` returns immediately and the work runs
+ *  visibly in the desktop session while the voice stays conversational. */
+export const OPEN_APP_TOOL_NAME = 'open_app'
+export const OPEN_URL_TOOL_NAME = 'open_url'
+export const DELEGATE_TASK_TOOL_NAME = 'delegate_task'
+export const CANCEL_TASK_TOOL_NAME = 'cancel_task'
+
+export const ACTION_TOOLS = [
+  {
+    type: 'function',
+    name: OPEN_APP_TOOL_NAME,
+    description:
+      'Instantly launch an application on this computer by name, e.g. "Notes", "Safari", "Music". Use for "open X", "launch X", "start X" when X is an app. Instant — no delegation needed.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'The application name exactly as the user said it, e.g. "Notes".' }
+      },
+      required: ['name'],
+      additionalProperties: false
+    }
+  },
+  {
+    type: 'function',
+    name: OPEN_URL_TOOL_NAME,
+    description:
+      'Instantly open a web address in the default browser. Use for "open example.com", "take me to <site>", "pull up <known site>".',
+    parameters: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: 'Full URL or bare domain, e.g. "https://example.com" or "example.com".' }
+      },
+      required: ['url'],
+      additionalProperties: false
+    }
+  },
+  {
+    type: 'function',
+    name: DELEGATE_TASK_TOOL_NAME,
+    description:
+      'Hand real work to the full JARVIS agent: multi-step jobs, research, file or code changes, anything that takes more than a moment. The work runs in the open desktop session while you keep talking. Returns immediately; a completion update arrives later. State the goal fully and self-contained — the agent has no memory of this voice conversation.',
+    parameters: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: 'Complete, self-contained statement of the job to do.' },
+        kind: {
+          type: 'string',
+          enum: ['task', 'research'],
+          description: 'Use "research" when the job is to investigate or look something up; otherwise "task".'
+        }
+      },
+      required: ['goal'],
+      additionalProperties: false
+    }
+  },
+  {
+    type: 'function',
+    name: CANCEL_TASK_TOOL_NAME,
+    description:
+      'Cancel the currently running delegated task. Use when the user says "cancel that", "abort it", "never mind the task". ("Stop" alone only silences your voice; it does not cancel work.)',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }
+  }
+] as const
+
 /**
  * Build the `session.update` payload the renderer sends over the data channel
  * once the connection opens: audio-only output, the configured voice,
@@ -328,8 +398,8 @@ export const DISPLAY_TOOLS = [
 export function buildRealtimeSessionConfig(options: RealtimeSessionConfigOptions = {}) {
   const cfg = resolveIdentity(options)
   const tools = cfg.reviewProjectsEnabled
-    ? [REVIEW_PROJECTS_TOOL, ...DISPLAY_TOOLS, USE_JARVIS_TOOL]
-    : [USE_JARVIS_TOOL]
+    ? [REVIEW_PROJECTS_TOOL, ...DISPLAY_TOOLS, ...ACTION_TOOLS, USE_JARVIS_TOOL]
+    : [...ACTION_TOOLS, USE_JARVIS_TOOL]
 
   return {
     type: 'realtime' as const,

@@ -254,3 +254,42 @@ def build_project_review(
         "projects": rows[:limit],
         "detail_retained": True,
     }
+
+
+def open_system_app(name: str) -> Dict[str, Any]:
+    """Launch a desktop application by name for the voice `open_app` tool.
+
+    No shell is involved — the name is passed as a single argv element to the
+    platform launcher (`open -a` on macOS, `start` semantics via os.startfile
+    on Windows), so it cannot be used for injection. A leading dash is refused
+    because `open` would read it as a flag.
+    """
+    import subprocess
+    import sys
+
+    app = (name or "").strip()
+    if not app or app.startswith("-") or "\x00" in app:
+        return {"ok": False, "error": "invalid app name"}
+
+    try:
+        if sys.platform == "darwin":
+            result = subprocess.run(
+                ["open", "-a", app], capture_output=True, text=True, timeout=15
+            )
+            if result.returncode != 0:
+                message = (result.stderr or "").strip() or "application not found"
+                return {"ok": False, "error": message}
+            return {"ok": True}
+        if sys.platform.startswith("win"):
+            import os as _os
+
+            _os.startfile(app)  # noqa: S606 - deliberate app launch  # type: ignore[attr-defined]
+            return {"ok": True}
+        result = subprocess.run(
+            ["xdg-open", app], capture_output=True, text=True, timeout=15
+        )
+        if result.returncode != 0:
+            return {"ok": False, "error": (result.stderr or "").strip() or "launch failed"}
+        return {"ok": True}
+    except Exception as exc:  # pragma: no cover - platform-dependent failures
+        return {"ok": False, "error": str(exc)}

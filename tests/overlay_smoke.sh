@@ -465,6 +465,8 @@ if [ -f "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" ]; then
   chk "orb click / Esc hard-kill wired"       "grep -q 'jarvis:voice-kill' '$HUD' && grep -q \"key === 'Escape'\" '$HUD'"
   chk "panels materialize on display events"  "grep -q \"onEvent('display.projects'\" '$HUD' && grep -q 'ProjectCard' '$HUD'"
   chk "orb action grammar present"            "grep -q \"kind: 'gather'\" '$HUD' && grep -q \"kind: 'sweep'\" '$HUD'"
+  chk "task plate streams delegated work"     "grep -q \"onEvent('voice.task.started'\" '$HUD' && grep -q 'RESEARCH OPERATION' '$HUD'"
+  chk "task plate settles on done/cancel"     "grep -q \"onEvent('voice.task.done'\" '$HUD' && grep -q \"onEvent('voice.task.cancelled'\" '$HUD'"
   if command -v node >/dev/null 2>&1; then
     chk "plugin.js parses as ESM"             "node --input-type=module --check < '$HUD'"
   fi

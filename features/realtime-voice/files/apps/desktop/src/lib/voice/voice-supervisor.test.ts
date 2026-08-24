@@ -90,7 +90,11 @@ const getRealtimeVoiceConfig = vi.fn(async () => ({
 vi.mock('@/hermes', () => ({
   mintRealtimeToken: (o: unknown) => mintRealtimeToken(o),
   getRealtimeProjectReview: (o: unknown) => getRealtimeProjectReview(o),
-  getRealtimeVoiceConfig: () => getRealtimeVoiceConfig()
+  getRealtimeVoiceConfig: () => getRealtimeVoiceConfig(),
+  createRealtimeProject: async () => ({ ok: true, project: {} }),
+  openRealtimeSystemApp: async () => ({ ok: true }),
+  // pulled in transitively via @/store/layout -> @/store/profile
+  setApiRequestProfile: () => undefined
 }))
 
 vi.mock('@/i18n', () => ({ translateNow: (key: string) => key }))
@@ -118,7 +122,7 @@ const tick = async (n = 4) => {
 
 function makeDelegate(result: Promise<string>): AgentDelegate & { cancel: () => void; runTurn: ReturnType<typeof vi.fn> } {
   const cancel = vi.fn()
-  const runTurn = vi.fn(() => ({ result, cancel }))
+  const runTurn = vi.fn(() => ({ cancel, result, sessionId: () => 'sess-live' }))
 
   return { cancel, getContext: () => '', runTurn, subscribeContext: () => () => undefined }
 }

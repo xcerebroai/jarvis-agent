@@ -34,6 +34,9 @@ vi.mock('@/lib/voice/realtime-session', () => ({
 }))
 
 vi.mock('@/hermes', () => ({
+  createRealtimeProject: async () => ({ ok: true, project: {} }),
+  openRealtimeSystemApp: async () => ({ ok: true }),
+  setApiRequestProfile: () => undefined,
   mintRealtimeToken: async () => ({ ok: true, value: 'ek' }),
   getRealtimeProjectReview: async () => ({ ok: true }),
   getRealtimeVoiceConfig: async () => ({

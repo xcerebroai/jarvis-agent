@@ -832,6 +832,7 @@ const COCKPIT_CSS = `
 .jv-scan { background: repeating-linear-gradient(0deg, rgba(147,197,253,0.028) 0 1px, transparent 1px 3px); }
 .jv-chip { animation: jvBreathe 2.4s ease-in-out infinite; }
 .jv-bar-charge { background-image: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%); background-size: 45% 100%; background-repeat: no-repeat; animation: jvSweep 1.1s ease-out 1; }
+.jv-task-sweep { background-image: linear-gradient(90deg, transparent 0%, rgba(147,197,253,0.5) 50%, transparent 100%); background-size: 38% 100%; background-repeat: no-repeat; animation: jvSweep 1.7s linear infinite; }
 `
 
 // Deciphering text: scrambles briefly, then settles — data assembling.
@@ -975,6 +976,11 @@ function HudPage() {
   const sourceRef = useRef(null)
   const busy = useValue(host.state.busy)
   const [display, setDisplay] = useState({ detail: null, dissolving: false, focus: null, rows: [], shown: false })
+  // Delegated work (P5): one live task at a time, streaming the REAL pinned
+  // session's deltas — the panel shows what the agent is actually writing.
+  const [task, setTask] = useState(null)
+  const taskRef = useRef(null)
+  const taskTimersRef = useRef([])
   const boardArmedRef = useRef(false)
   const tracker = useRef({
     amp: null,
@@ -1023,6 +1029,9 @@ function HudPage() {
       'display.projects': 'BOARD PROJECTED',
       'message.complete': 'REPLY DELIVERED',
       'message.start': 'AGENT ENGAGED',
+      'voice.task.cancelled': 'TASK CANCELLED',
+      'voice.task.done': 'TASK COMPLETE',
+      'voice.task.started': 'TASK DELEGATED',
       'wake.detected': 'WAKE DETECTED'
     }
 
@@ -1141,6 +1150,8 @@ function HudPage() {
       () => {
         window.removeEventListener('keydown', onKey)
         canvas.removeEventListener('click', killVoice)
+        taskTimersRef.current.forEach(t => window.clearTimeout(t))
+        taskTimersRef.current = []
       },
       startOrb(canvas, tracker),
       host.onEvent('wake.detected', () => {
@@ -1202,6 +1213,102 @@ function HudPage() {
         uiSound('dissolve')
         setDisplay(prev => ({ ...prev, dissolving: true }))
         window.setTimeout(() => setDisplay({ detail: null, dissolving: false, focus: null, rows: [], shown: false }), 620)
+      }),
+      host.onEvent('voice.task.started', event => {
+        const payload = event.payload ?? {}
+
+        taskTimersRef.current.forEach(t => window.clearTimeout(t))
+        taskTimersRef.current = []
+        tracker.gesture = { at: performance.now(), kind: 'gather' }
+        uiSound('materialize')
+        const next = {
+          goal: String(payload.goal || ''),
+          id: payload.id,
+          kind: payload.kind === 'research' ? 'research' : 'task',
+          sessionId: payload.sessionId || null,
+          startedAt: Date.now(),
+          status: 'running',
+          summary: '',
+          tail: ''
+        }
+
+        taskRef.current = next
+        setTask(next)
+      }),
+      host.onEvent('voice.task.session', event => {
+        const current = taskRef.current
+
+        if (current && event.payload?.id === current.id) {
+          const next = { ...current, sessionId: event.payload.sessionId || null }
+
+          taskRef.current = next
+          setTask(next)
+        }
+      }),
+      host.onEvent('message.delta', event => {
+        // Stream the delegated session's REAL output into the task plate.
+        const current = taskRef.current
+        const sid = event.session_id ?? event.sessionId
+
+        if (!current || current.status !== 'running' || !current.sessionId || sid !== current.sessionId) {
+          return
+        }
+
+        const payload = event.payload ?? {}
+        const chunk = typeof payload.text === 'string' ? payload.text : typeof payload.delta === 'string' ? payload.delta : ''
+
+        if (!chunk) {
+          return
+        }
+
+        const next = { ...current, tail: (current.tail + chunk).slice(-420) }
+
+        taskRef.current = next
+        setTask(next)
+      }),
+      host.onEvent('voice.task.done', event => {
+        const current = taskRef.current
+
+        if (!current || event.payload?.id !== current.id) {
+          return
+        }
+
+        tracker.gesture = { at: performance.now(), kind: 'project' }
+        uiSound('tick')
+        const next = { ...current, status: 'done', summary: String(event.payload?.summary || '') }
+
+        taskRef.current = next
+        setTask(next)
+        taskTimersRef.current.push(
+          window.setTimeout(() => {
+            if (taskRef.current?.id === current.id) {
+              taskRef.current = null
+              setTask(null)
+            }
+          }, 30_000)
+        )
+      }),
+      host.onEvent('voice.task.cancelled', event => {
+        const current = taskRef.current
+
+        if (!current || event.payload?.id !== current.id) {
+          return
+        }
+
+        tracker.gesture = { at: performance.now(), kind: 'sweep' }
+        uiSound('dissolve')
+        const next = { ...current, status: 'cancelled' }
+
+        taskRef.current = next
+        setTask(next)
+        taskTimersRef.current.push(
+          window.setTimeout(() => {
+            if (taskRef.current?.id === current.id) {
+              taskRef.current = null
+              setTask(null)
+            }
+          }, 5000)
+        )
       }),
       host.onEvent('voice.amplitude', event => {
         const { level = 0, source = 'out' } = event.payload ?? {}
@@ -1359,6 +1466,73 @@ function HudPage() {
                   ]
                 }, tile.label))
             })()
+          })
+        : null,
+      // delegated work: the task/research operation plate — real streamed output
+      task
+        ? jsxs('div', {
+            style: {
+              animation: 'jvFadeUp 400ms both',
+              background: 'rgba(4,9,17,0.72)',
+              border: '1px solid ' + (task.status === 'cancelled' ? 'rgba(248,113,113,0.4)' : task.status === 'done' ? 'rgba(52,211,153,0.4)' : 'rgba(59,130,246,0.34)'),
+              clipPath: 'polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px)',
+              left: '2.8%',
+              opacity: task.status === 'cancelled' ? 0.65 : 1,
+              padding: '10px 13px',
+              pointerEvents: 'none',
+              position: 'absolute',
+              top: '15%',
+              width: '292px',
+              zIndex: 3
+            },
+            children: [
+              jsx('div', { className: 'jv-scan', style: { inset: 0, pointerEvents: 'none', position: 'absolute' } }),
+              jsxs('div', {
+                style: { alignItems: 'baseline', display: 'flex', justifyContent: 'space-between', marginBottom: '6px' },
+                children: [
+                  jsx('div', { style: { ...LABEL, fontSize: '8.5px' }, children: task.kind === 'research' ? 'RESEARCH OPERATION' : 'TASK OPERATION' }),
+                  jsx('div', {
+                    style: {
+                      color: task.status === 'cancelled' ? '#F87171' : task.status === 'done' ? '#34D399' : '#93C5FD',
+                      fontFamily: T.label,
+                      fontSize: '8px',
+                      letterSpacing: '0.26em',
+                      textTransform: 'uppercase'
+                    },
+                    className: task.status === 'running' ? 'jv-chip' : '',
+                    children: task.status === 'running' ? 'RUNNING' : task.status === 'done' ? 'COMPLETE' : 'CANCELLED'
+                  })
+                ]
+              }),
+              jsx(Decipher, { delay: 60, style: { color: '#D9E6F2', fontFamily: T.label, fontSize: '11.5px', fontWeight: 600, letterSpacing: '0.08em', lineHeight: 1.35, textTransform: 'uppercase' }, text: task.goal.slice(0, 90) }),
+              jsxs('div', {
+                style: { color: 'rgba(96,165,250,0.85)', display: 'flex', fontFamily: T.data, fontSize: '8.5px', fontVariantNumeric: 'tabular-nums', gap: '12px', marginTop: '5px' },
+                children: [
+                  jsx('span', {
+                    children: (() => {
+                      const seconds = Math.max(0, Math.floor((Date.now() - task.startedAt) / 1000))
+
+                      return 'T+' + Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0')
+                    })()
+                  }, clock),
+                  task.sessionId ? jsx('span', { style: { opacity: 0.7 }, children: 'SESSION LINKED' }) : jsx('span', { style: { opacity: 0.45 }, children: 'LINKING…' })
+                ]
+              }),
+              task.status === 'running'
+                ? jsx('div', { className: 'jv-task-sweep', style: { background: 'rgba(59,130,246,0.16)', height: '2px', marginTop: '8px' } })
+                : null,
+              task.status === 'done' && task.summary
+                ? jsx('div', {
+                    style: { animation: 'jvFadeUp 400ms both', borderLeft: '2px solid rgba(52,211,153,0.6)', color: 'rgba(217,230,242,0.95)', fontSize: '10px', lineHeight: 1.5, marginTop: '9px', maxHeight: '150px', overflow: 'hidden', paddingLeft: '9px', whiteSpace: 'pre-wrap' },
+                    children: task.summary.slice(0, 520)
+                  })
+                : task.tail
+                  ? jsx('div', {
+                      style: { color: 'rgba(139,161,188,0.85)', fontFamily: T.data, fontSize: '8.5px', lineHeight: 1.5, marginTop: '9px', maxHeight: '110px', overflow: 'hidden', whiteSpace: 'pre-wrap' },
+                      children: task.tail
+                    })
+                  : null
+            ]
           })
         : null,
       // instrument zones: dense by default — jobs, activity, metrics

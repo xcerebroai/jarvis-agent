@@ -83,3 +83,16 @@ export function createRealtimeProject(options: {
     timeoutMs: 8_000
   })
 }
+
+/** Voice `open_app` instant action: launch a desktop application by name via
+ *  the backend's argv-only exec path (`open -a` on macOS). Failure comes back
+ *  as `{ok: false, error}` for the voice layer to relay conversationally. */
+export function openRealtimeSystemApp(name: string): Promise<{ ok: boolean; error?: string }> {
+  return hermesApi<{ ok: boolean; error?: string }>({
+    ...profileScoped(),
+    path: '/api/audio/realtime/system-open',
+    method: 'POST',
+    body: { name },
+    timeoutMs: 20_000
+  })
+}

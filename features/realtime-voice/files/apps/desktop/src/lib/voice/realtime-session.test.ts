@@ -194,8 +194,11 @@ describe('RealtimeVoiceSession', () => {
     expect(sent[0].session.audio.output.voice).toBe('marin')
     expect(sent[0].session.reasoning).toEqual({ effort: 'minimal' })
     expect(sent[0].session.audio.input.turn_detection.type).toBe('semantic_vad')
-    expect(sent[0].session.tools[0].name).toBe('review_projects')
-    expect(sent[0].session.tools[1].name).toBe('use_jarvis')
+    const toolNames = sent[0].session.tools.map((tool: { name: string }) => tool.name)
+    expect(toolNames[0]).toBe('review_projects')
+    expect(toolNames).toContain('show_projects')
+    expect(toolNames).toContain('delegate_task')
+    expect(toolNames[toolNames.length - 1]).toBe('use_jarvis')
 
     expect(sent).toHaveLength(1)
 

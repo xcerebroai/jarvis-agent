@@ -510,12 +510,26 @@ export default {
       }
     ])
 
-    // "Hey Jarvis" surfaces the orb listening: navigate on wake. The voice
-    // conversation itself is app-global state — it proceeds regardless of the
-    // visible route, so this never interferes with the wake flow.
+    // "Hey Jarvis" surfaces the orb — but ONLY once the voice session is
+    // provably alive. Navigating on the raw wake event unmounted the chat
+    // composer that consumes the voice-start request, killing the session
+    // before it began (observed live 2026-08-24: detection, then total
+    // silence, then the 10s watchdog re-arm). The greeting's first output
+    // amplitude is the aliveness signal: the session is active and it
+    // survives route changes by design, so navigation is safe from then on.
+    let wakeNavUntil = 0
+
     ctx.onDispose(
       host.onEvent('wake.detected', () => {
-        host.navigate('/hud')
+        wakeNavUntil = Date.now() + 12_000
+      })
+    )
+    ctx.onDispose(
+      host.onEvent('voice.amplitude', event => {
+        if (Date.now() < wakeNavUntil && event.payload?.source === 'out' && (event.payload?.level ?? 0) > 0.02) {
+          wakeNavUntil = 0
+          host.navigate('/hud')
+        }
       })
     )
   }

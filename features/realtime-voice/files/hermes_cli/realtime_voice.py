@@ -105,6 +105,63 @@ def resolve_token_defaults(home: Path, config: Dict[str, Any]) -> Dict[str, str]
     }
 
 
+LOCAL_ADDITIONS_NAME = "local-additions.json"
+
+
+def _local_additions_path(index_path: "Path") -> "Path":
+    return index_path.parent / LOCAL_ADDITIONS_NAME
+
+
+def read_local_additions(index_path: "Path") -> List[Dict[str, Any]]:
+    """Voice-created projects live BESIDE the synced index, never inside it:
+    the hourly sync overwrites the index file wholesale, so a write into it
+    would not survive the next pull. The read path merges both."""
+    try:
+        import json as _json
+
+        raw = _json.loads(_local_additions_path(index_path).read_text(encoding="utf-8"))
+        rows = raw.get("projects") if isinstance(raw, dict) else raw
+        return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def create_local_project(index_path: "Path", name: str, goal: str = "", tasks: Optional[List[str]] = None) -> Dict[str, Any]:
+    """Durable minimal write path: append to local-additions.json atomically."""
+    import json as _json
+    import os as _os
+    import tempfile as _tempfile
+
+    name = (name or "").strip()[:120]
+    if not name:
+        raise ValueError("project name required")
+
+    existing = read_local_additions(index_path)
+    row = {
+        "id": f"LP-{len(existing) + 1:03d}",
+        "name": name,
+        "status": "Planning",
+        "priority": "Normal",
+        "notes": (goal or "").strip()[:500],
+        "nextAction": (tasks or [""])[0][:240] if tasks else "",
+        "tasks": [{"done": False, "label": str(t)[:160]} for t in (tasks or [])[:12]],
+        "source": "voice-intake",
+    }
+    existing.append(row)
+    payload = _json.dumps({"projects": existing}, ensure_ascii=False, indent=2) + "\n"
+    dest = _local_additions_path(index_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = _tempfile.mkstemp(prefix=".local-add-", suffix=".json", dir=str(dest.parent))
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(payload)
+        _os.replace(tmp, str(dest))
+    finally:
+        if _os.path.exists(tmp):
+            _os.unlink(tmp)
+    return row
+
+
 def _project_rows(data: Any) -> List[Dict[str, Any]]:
     """Accept either a bare list of projects or ``{"projects": [...]}``."""
     projects = data.get("projects") if isinstance(data, dict) else data
@@ -131,6 +188,7 @@ def build_project_review(
     query: Optional[str] = None,
     status_filter: Optional[str] = None,
     limit: int = 5,
+    detail: bool = False,
 ) -> Dict[str, Any]:
     """Compact, deterministic review of a generic project index.
 
@@ -161,6 +219,22 @@ def build_project_review(
             "tasks_total": len(tasks),
             "target_end": str(_first(project, "target_end", "targetEnd", default="")),
         }
+        if detail:
+            row.update({
+                "build_type": str(_first(project, "buildType", "build_type", default="")),
+                "client": str(_first(project, "client_name", "client", default="")),
+                "company": str(_first(project, "company", default="")),
+                "id": str(_first(project, "id", default="")),
+                "notes": str(_first(project, "notes", "description", default=""))[:600],
+                "owner": str(_first(project, "owner", default="")),
+                "payment": str(_first(project, "payment", default="")),
+                "start": str(_first(project, "start", default="")),
+                "task_list": [
+                    {"done": bool(task.get("done")), "label": str(task.get("label", ""))[:160]}
+                    for task in tasks
+                    if isinstance(task, dict)
+                ],
+            })
         haystack = " ".join(str(value).lower() for value in row.values())
         if query and query not in haystack:
             continue

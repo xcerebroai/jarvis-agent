@@ -19,6 +19,8 @@ import {
   REALTIME_MODEL,
   type RealtimeSessionConfigOptions,
   CLEAR_DISPLAY_TOOL_NAME,
+  CREATE_PROJECT_TOOL_NAME,
+  SHOW_DETAIL_TOOL_NAME,
   REVIEW_PROJECTS_TOOL_NAME,
   SHOW_PROJECT_TOOL_NAME,
   SHOW_PROJECTS_TOOL_NAME,
@@ -111,7 +113,7 @@ function parseToolArguments(raw: unknown): Record<string, unknown> {
   }
 }
 
-const DISPLAY_TOOL_NAMES = new Set<string>([SHOW_PROJECTS_TOOL_NAME, SHOW_PROJECT_TOOL_NAME, CLEAR_DISPLAY_TOOL_NAME])
+const DISPLAY_TOOL_NAMES = new Set<string>([SHOW_PROJECTS_TOOL_NAME, SHOW_PROJECT_TOOL_NAME, SHOW_DETAIL_TOOL_NAME, CREATE_PROJECT_TOOL_NAME, CLEAR_DISPLAY_TOOL_NAME])
 
 export class RealtimeVoiceSession {
   private readonly deps: RealtimeSessionDeps

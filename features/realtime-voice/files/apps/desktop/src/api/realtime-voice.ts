@@ -53,6 +53,7 @@ export function getRealtimeVoiceConfig(): Promise<RealtimeVoiceConfigResponse> {
  * configured, in which case the renderer omits the `review_projects` tool.
  */
 export function getRealtimeProjectReview(options: {
+  detail?: boolean
   query?: string
   status?: string
   limit?: number
@@ -63,5 +64,22 @@ export function getRealtimeProjectReview(options: {
     method: 'POST',
     body: options,
     timeoutMs: 5_000
+  })
+}
+
+/** Voice-intake project creation: writes the durable local-additions overlay
+ *  beside the synced index (the sync overwrites the index wholesale) and is
+ *  merged into every read. */
+export function createRealtimeProject(options: {
+  name: string
+  goal?: string
+  tasks?: string[]
+}): Promise<{ ok: boolean; project: Record<string, unknown> }> {
+  return hermesApi<{ ok: boolean; project: Record<string, unknown> }>({
+    ...profileScoped(),
+    path: '/api/audio/realtime/project-create',
+    method: 'POST',
+    body: { goal: options.goal ?? '', name: options.name, tasks: options.tasks ?? [] },
+    timeoutMs: 8_000
   })
 }

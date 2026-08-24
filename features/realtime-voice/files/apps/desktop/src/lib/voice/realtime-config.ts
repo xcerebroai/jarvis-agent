@@ -177,7 +177,7 @@ export function buildInstructions(options: RealtimeSessionConfigOptions = {}): s
   if (cfg.reviewProjectsEnabled) {
     lines.push(
       `Use ${REVIEW_PROJECTS_TOOL_NAME} for every request to review, list, summarize, prioritize, or check the status, blocker, progress, or next action of the projects in the configured project index. That includes questions like \"what am I working on\", \"what's blocked\", \"what's pending\", and \"how's the business\" — never answer those from memory. This is the fast authoritative path; do not call ${USE_JARVIS_TOOL_NAME} for a normal project review.`,
-      `When the user asks you to SHOW, DISPLAY, or PULL UP projects or the board, call ${SHOW_PROJECTS_TOOL_NAME} — the panels appear on screen; narrate briefly what is now showing. Focus a single project with ${SHOW_PROJECT_TOOL_NAME} when discussing it. On "clear the screen" call ${CLEAR_DISPLAY_TOOL_NAME}.`,
+      `When the user asks you to SHOW, DISPLAY, or PULL UP projects or the board, call ${SHOW_PROJECTS_TOOL_NAME} — the panels appear on screen; narrate briefly what is now showing. Focus a single project with ${SHOW_PROJECT_TOOL_NAME} when discussing it; expand full details with ${SHOW_DETAIL_TOOL_NAME} on "expand it" or "go over the details". For "start a new project", run the spoken intake then ${CREATE_PROJECT_TOOL_NAME}. On "clear the screen" call ${CLEAR_DISPLAY_TOOL_NAME}.`,
       `After ${REVIEW_PROJECTS_TOOL_NAME}, give the status counts and at most five priority items. Each item gets one short line: project, status, blocker or next action. Keep the spoken review under 90 words and offer a deeper drill-down instead of reading the full inventory.`
     )
   }
@@ -247,6 +247,8 @@ export const REVIEW_PROJECTS_TOOL = {
 export const SHOW_PROJECTS_TOOL_NAME = 'show_projects'
 export const SHOW_PROJECT_TOOL_NAME = 'show_project'
 export const CLEAR_DISPLAY_TOOL_NAME = 'clear_display'
+export const SHOW_DETAIL_TOOL_NAME = 'show_project_detail'
+export const CREATE_PROJECT_TOOL_NAME = 'create_project'
 
 export const DISPLAY_TOOLS = [
   {
@@ -272,6 +274,36 @@ export const DISPLAY_TOOLS = [
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Project name or close match.' }
+      },
+      required: ['name'],
+      additionalProperties: false
+    }
+  },
+  {
+    type: 'function',
+    name: SHOW_DETAIL_TOOL_NAME,
+    description:
+      'Expand one project into the full detail stage on screen — complete task list, client, dates, payment, blocker — and narrate the details. Use on "expand it", "go over the details", "open up <project>".',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Project name or close match.' }
+      },
+      required: ['name'],
+      additionalProperties: false
+    }
+  },
+  {
+    type: 'function',
+    name: CREATE_PROJECT_TOOL_NAME,
+    description:
+      'Create a new project after a short spoken intake. FIRST ask the user for the name, the goal, and any first tasks; confirm what you heard aloud; only THEN call this once. The new project persists and its panel materializes on the board.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Confirmed project name.' },
+        goal: { type: 'string', description: 'One-line goal.' },
+        tasks: { type: 'array', items: { type: 'string' }, description: 'First tasks, if any.' }
       },
       required: ['name'],
       additionalProperties: false

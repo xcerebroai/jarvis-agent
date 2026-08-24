@@ -1,8 +1,8 @@
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 3bd334f..1835734 100644
+index 2046c1c..bc86325 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
-@@ -14553,6 +14553,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
+@@ -14542,6 +14542,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
    updateStreamThrottleFromActiveWork()
  })
  
@@ -19,10 +19,10 @@ index 3bd334f..1835734 100644
    if (!payload || !isHexColor(payload.background) || !isHexColor(payload.foreground)) {
      return
 diff --git a/apps/desktop/electron/preload.ts b/apps/desktop/electron/preload.ts
-index 8e8f9d4..8e3eb16 100644
+index c438221..c04c798 100644
 --- a/apps/desktop/electron/preload.ts
 +++ b/apps/desktop/electron/preload.ts
-@@ -240,6 +240,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
+@@ -247,6 +247,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
    watchDirectory: dir => ipcRenderer.invoke('hermes:watchDirectory', dir),
    stopPreviewFileWatch: id => ipcRenderer.invoke('hermes:stopPreviewFileWatch', id),
    setActiveWork: payload => ipcRenderer.send('hermes:active-work', payload),
@@ -470,10 +470,10 @@ index 5389d9f..e5ec345 100644
          const speechThreshold = options.silenceLevel ?? 0
          const silenceMs = options.silenceMs ?? 0
 diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
-index be93d82..bba81c0 100644
+index 52a7597..4d6b87c 100644
 --- a/apps/desktop/src/global.d.ts
 +++ b/apps/desktop/src/global.d.ts
-@@ -262,6 +262,10 @@ declare global {
+@@ -268,6 +268,10 @@ declare global {
        watchDirectory?: (dir: string) => Promise<HermesPreviewWatch>
        stopPreviewFileWatch: (id: string) => Promise<boolean>
        setActiveWork?: (payload: HermesActiveWork) => void
@@ -514,7 +514,7 @@ index eb64c4f..8fdfaba 100644
    setVoicePlaybackState(currentState('speaking', options, audio))
  
 diff --git a/apps/desktop/src/types/hermes.ts b/apps/desktop/src/types/hermes.ts
-index 0c8b6bb..4ccc868 100644
+index f00bdd0..bcda062 100644
 --- a/apps/desktop/src/types/hermes.ts
 +++ b/apps/desktop/src/types/hermes.ts
 @@ -29,6 +29,58 @@ export interface AudioSpeakResponse {
@@ -577,10 +577,10 @@ index 0c8b6bb..4ccc868 100644
    label: string
    name: string
 diff --git a/hermes_cli/web_models.py b/hermes_cli/web_models.py
-index 2a44cfe..8833f53 100644
+index 2a44cfe..c10cb7b 100644
 --- a/hermes_cli/web_models.py
 +++ b/hermes_cli/web_models.py
-@@ -306,6 +306,26 @@ class TTSSpeakRequest(BaseModel):
+@@ -306,6 +306,34 @@ class TTSSpeakRequest(BaseModel):
      text: str
  
  
@@ -602,25 +602,34 @@ index 2a44cfe..8833f53 100644
 +    query: Optional[str] = None
 +    status: Optional[str] = None
 +    limit: int = 5
++    detail: bool = False
++
++class RealtimeProjectCreateRequest(BaseModel):
++    """Voice-intake project creation (writes the local-additions overlay)."""
++
++    name: str
++    goal: str = ""
++    tasks: list[str] = []
 +
 +
  # --- from web_server.py (originally lines 11549-11551) ---
  
  class OAuthSubmitBody(BaseModel):
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 201d37f..eb5c6ed 100644
+index 201d37f..22bc08f 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
-@@ -1648,6 +1648,8 @@ from hermes_cli.web_models import (  # noqa: F401
+@@ -1648,6 +1648,9 @@ from hermes_cli.web_models import (  # noqa: F401
      LearningNodeEdit,
      DebugShareRequest,
      TTSSpeakRequest,
 +    RealtimeTokenRequest,
++    RealtimeProjectCreateRequest,
 +    RealtimeProjectReviewRequest,
      OAuthSubmitBody,
      BulkDeleteSessions,
      SessionImport,
-@@ -5493,6 +5495,220 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+@@ -5493,6 +5496,262 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
      }
  
  
@@ -830,12 +839,54 @@ index 201d37f..eb5c6ed 100644
 +    except Exception:
 +        raise HTTPException(status_code=502, detail="The configured project index could not be read.")
 +
++    # Voice-created projects live in a local overlay beside the synced index
++    # (the hourly sync overwrites the index wholesale); merge them for reads.
++    local_rows = realtime_voice.read_local_additions(source)
++    if local_rows:
++        merged = data.get("projects") if isinstance(data, dict) else data
++        if isinstance(merged, list):
++            data = {**data, "projects": [*merged, *local_rows]} if isinstance(data, dict) else [*merged, *local_rows]
++
 +    return realtime_voice.build_project_review(
 +        data,
 +        query=request.query,
 +        status_filter=request.status,
 +        limit=request.limit,
++        detail=bool(getattr(request, "detail", False)),
 +    )
++
++
++@app.post("/api/audio/realtime/project-create")
++async def realtime_project_create(
++    payload: RealtimeProjectCreateRequest,
++    profile: Optional[str] = None,
++):
++    """Create a project via voice intake. Writes the durable local-additions
++    overlay next to the synced index — never the index itself, which the
++    hourly sync overwrites. Merged into every read."""
++    from hermes_cli import realtime_voice
++    from hermes_constants import get_hermes_home
++
++    with _config_profile_scope(profile):
++        config = load_config() or {}
++        source = realtime_voice.resolve_index_path(get_hermes_home(), config)
++
++    if source is None:
++        raise HTTPException(
++            status_code=404,
++            detail="No project index is configured (voice.realtime.review_projects.index_path).",
++        )
++
++    try:
++        row = realtime_voice.create_local_project(
++            source, payload.name, goal=payload.goal, tasks=payload.tasks
++        )
++    except ValueError as exc:
++        raise HTTPException(status_code=400, detail=str(exc))
++    except OSError:
++        raise HTTPException(status_code=502, detail="Could not write the local project overlay.")
++
++    return {"ok": True, "project": row}
 +
 +
  def _split_text_for_speak_stream(text: str, cap: int) -> list:

@@ -197,6 +197,17 @@ grep -q "display.retrieving" "$V/voice-supervisor.ts" && ok "retrieve gesture ev
 grep -q "DISPLAY_TOOL_NAMES.has" "$V/realtime-session.ts" && ok "session accepts display tool calls" || bad "session drops display calls"
 
 echo
+echo "== 5f. P4 expand + create verbs =="
+V="$SRC/apps/desktop/src/lib/voice"
+grep -q "SHOW_DETAIL_TOOL_NAME = 'show_project_detail'" "$V/realtime-config.ts" && ok "show_project_detail declared" || bad "detail verb missing"
+grep -q "CREATE_PROJECT_TOOL_NAME = 'create_project'" "$V/realtime-config.ts" && ok "create_project declared" || bad "create verb missing"
+grep -q "createRealtimeProject" "$SRC/apps/desktop/src/api/realtime-voice.ts" && ok "create API client present" || bad "create client missing"
+grep -q "project-create" "$SRC/hermes_cli/web_server.py" && ok "create endpoint in tracked patch" || bad "create endpoint missing"
+grep -q "read_local_additions" "$SRC/hermes_cli/realtime_voice.py" && ok "local-additions overlay (sync-safe writes)" || bad "local overlay missing"
+grep -q "detail: bool = False" "$SRC/hermes_cli/realtime_voice.py" && ok "detail mode in compact read" || bad "detail mode missing"
+grep -q "display.detail" "$V/voice-supervisor.ts" && ok "detail stage event emitted" || bad "detail event missing"
+
+echo
 echo "== 6. revert restores an EXACT clean upstream =="
 bash "$APPLY" revert "$SRC" >/dev/null 2>&1
 AFTER="$(git -C "$SRCG" status --porcelain | sort)"

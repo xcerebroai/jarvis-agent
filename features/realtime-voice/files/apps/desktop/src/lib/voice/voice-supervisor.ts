@@ -26,7 +26,7 @@ import { emitGatewayEvent, onGatewayEvent } from '@/contrib/events'
 import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/store/composer'
 import { atom } from 'nanostores'
 
-import { getRealtimeProjectReview, getRealtimeVoiceConfig, mintRealtimeToken } from '@/hermes'
+import { createRealtimeProject, getRealtimeProjectReview, getRealtimeVoiceConfig, mintRealtimeToken } from '@/hermes'
 import { translateNow } from '@/i18n'
 import { $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
@@ -36,6 +36,8 @@ import { armWakeWord, resumeWakeAfterVoice } from '@/store/wake-word'
 import type { AgentDelegate } from './agent-delegate'
 import {
   CLEAR_DISPLAY_TOOL_NAME,
+  CREATE_PROJECT_TOOL_NAME,
+  SHOW_DETAIL_TOOL_NAME,
   type RealtimeSessionConfigOptions,
   REVIEW_PROJECTS_TOOL_NAME,
   SHOW_PROJECT_TOOL_NAME,
@@ -230,16 +232,38 @@ function runDisplayTool(session: RealtimeVoiceSession, name: string, callId: str
     return
   }
 
+  if (name === CREATE_PROJECT_TOOL_NAME) {
+    const projectName = typeof args.name === 'string' ? args.name.trim() : ''
+    const goal = typeof args.goal === 'string' ? args.goal : ''
+    const tasks = Array.isArray(args.tasks) ? args.tasks.map(String) : []
+
+    emitGatewayEvent({ payload: { focus: false }, type: 'display.retrieving' })
+    void createRealtimeProject({ goal, name: projectName, tasks })
+      .then(created =>
+        getRealtimeProjectReview({ limit: 8 }).then(result => {
+          emitGatewayEvent({ payload: { created: created.project, focus: false, result }, type: 'display.projects' })
+          session.sendToolOutput(callId, `Created project "${projectName}" (${tasks.length} tasks). It is now on the board; confirm aloud.`)
+        })
+      )
+      .catch(error => {
+        notifyError(error, realtimeToolNoResult())
+        session.sendToolOutput(callId, realtimeToolNoResult())
+      })
+
+    return
+  }
+
   const query = typeof args.query === 'string' ? args.query.trim() : typeof args.name === 'string' ? args.name.trim() : undefined
   const statusFilter = typeof args.status === 'string' ? args.status.trim() : undefined
-  const focus = name === SHOW_PROJECT_TOOL_NAME
+  const detail = name === SHOW_DETAIL_TOOL_NAME
+  const focus = name === SHOW_PROJECT_TOOL_NAME || detail
 
   emitGatewayEvent({ payload: { focus }, type: 'display.retrieving' })
-  void getRealtimeProjectReview({ limit: focus ? 1 : 8, query, status: statusFilter })
+  void getRealtimeProjectReview({ detail, limit: focus ? 1 : 8, query, status: statusFilter })
     .then(result => {
       emitGatewayEvent({
         payload: { focus, query: query ?? null, result, status: statusFilter ?? null },
-        type: focus ? 'display.focus' : 'display.projects'
+        type: detail ? 'display.detail' : focus ? 'display.focus' : 'display.projects'
       })
       const counts = Object.entries(result.status_counts ?? {})
         .map(([status, count]) => `${count} ${status}`)
@@ -373,7 +397,7 @@ async function connect(renewal: boolean): Promise<void> {
         }
       },
       onToolCall: call => {
-        if (call.name === SHOW_PROJECTS_TOOL_NAME || call.name === SHOW_PROJECT_TOOL_NAME || call.name === CLEAR_DISPLAY_TOOL_NAME) {
+        if (call.name === SHOW_PROJECTS_TOOL_NAME || call.name === SHOW_PROJECT_TOOL_NAME || call.name === SHOW_DETAIL_TOOL_NAME || call.name === CREATE_PROJECT_TOOL_NAME || call.name === CLEAR_DISPLAY_TOOL_NAME) {
           runDisplayTool(session, call.name, call.callId, call.args ?? {})
 
           return

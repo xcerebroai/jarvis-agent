@@ -187,6 +187,16 @@ COUNT=$(grep -c "const resolved = await getRealtimeVoiceConfig()" "$V/voice-supe
 [ "$COUNT" -ge 2 ] && ok "config fetch retries before stripping identity+tools" || bad "config retry missing"
 
 echo
+echo "== 5e. P4 display verbs (voice-commanded display) =="
+V="$SRC/apps/desktop/src/lib/voice"
+grep -q "SHOW_PROJECTS_TOOL_NAME = 'show_projects'" "$V/realtime-config.ts" && ok "show_projects declared" || bad "show_projects missing"
+grep -q "CLEAR_DISPLAY_TOOL_NAME = 'clear_display'" "$V/realtime-config.ts" && ok "clear_display declared" || bad "clear_display missing"
+grep -q "...DISPLAY_TOOLS" "$V/realtime-config.ts" && ok "display tools in session tool list" || bad "display tools not registered"
+grep -q "runDisplayTool" "$V/voice-supervisor.ts" && ok "display dispatch wired" || bad "display dispatch missing"
+grep -q "display.retrieving" "$V/voice-supervisor.ts" && ok "retrieve gesture event emitted" || bad "retrieve event missing"
+grep -q "DISPLAY_TOOL_NAMES.has" "$V/realtime-session.ts" && ok "session accepts display tool calls" || bad "session drops display calls"
+
+echo
 echo "== 6. revert restores an EXACT clean upstream =="
 bash "$APPLY" revert "$SRC" >/dev/null 2>&1
 AFTER="$(git -C "$SRCG" status --porcelain | sort)"

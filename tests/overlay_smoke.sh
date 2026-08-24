@@ -463,6 +463,8 @@ if [ -f "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" ]; then
   chk "real amplitude feed consumed"          "grep -q \"onEvent('voice.amplitude'\" '$HUD'"
   chk "synthesized fallback present"          "grep -q 'createAmplitudeSource' '$HUD' && grep -q 'kick' '$HUD'"
   chk "orb click / Esc hard-kill wired"       "grep -q 'jarvis:voice-kill' '$HUD' && grep -q \"key === 'Escape'\" '$HUD'"
+  chk "panels materialize on display events"  "grep -q \"onEvent('display.projects'\" '$HUD' && grep -q 'ProjectCard' '$HUD'"
+  chk "orb action grammar present"            "grep -q \"kind: 'gather'\" '$HUD' && grep -q \"kind: 'sweep'\" '$HUD'"
   if command -v node >/dev/null 2>&1; then
     chk "plugin.js parses as ESM"             "node --input-type=module --check < '$HUD'"
   fi

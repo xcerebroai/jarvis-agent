@@ -20,7 +20,7 @@
  *     appear the source switches without a seam.
  */
 import { host, PALETTE_AREA, ROUTES_AREA, SIDEBAR_NAV_AREA, useValue } from '@hermes/plugin-sdk'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { jsx, jsxs } from 'react/jsx-runtime'
 
 // --- amplitudeSource: the single seam between real and synthesized motion ---
@@ -205,7 +205,7 @@ void main() {
 const GLOW_FS = `#version 300 es
 precision highp float;
 in vec2 vUv;
-uniform float uTime, uIntensity, uSwirl;
+uniform float uTime, uIntensity, uSwirl, uSweep;
 uniform vec3 uCore, uMid;
 out vec4 frag;
 
@@ -226,6 +226,13 @@ void main() {
   float hot = exp(-r * r * 40.0) * 1.4;
   vec3 col = uMid * body + uCore * (body * 0.6 + hot);
   float a = clamp((body + hot) * uIntensity, 0.0, 1.6);
+
+  // CLEARING sweep: one expanding wavefront ring; panels dissolve on it.
+  if (uSweep > 0.0 && uSweep < 1.0) {
+    float ring = exp(-pow((r - uSweep * 1.35) * 22.0, 2.0)) * (1.0 - uSweep);
+    col += uCore * ring;
+    a += ring * 0.9;
+  }
   frag = vec4(col * a, a * 0.8);
 }`
 
@@ -537,6 +544,19 @@ function startOrb(canvas, tracker) {
       tracker.reportReal(mode === 'speaking' ? out.real : mode === 'listening' ? mic.real : false)
       const energy = env.step(rawVoice, dt)
 
+      // Action grammar: brief legible gestures (300-800ms), enveloped like
+      // voice — they compose with speech on the same lattice.
+      const g = tracker.gesture
+      const gAge = g ? now - g.at : Infinity
+      const gEnv = g ? Math.min(1, gAge / 120) * Math.exp(-Math.max(0, gAge - 300) / 350) : 0
+      const gather = g?.kind === 'gather' ? gEnv : 0
+      const project = g?.kind === 'project' ? gEnv : 0
+      const sweep = g?.kind === 'sweep' ? Math.min(1, gAge / 650) : 0
+
+      if (g && (gAge > 1400 || (g.kind === 'sweep' && sweep >= 1))) {
+        tracker.gesture = null
+      }
+
       rotY += (dt / 1000) * live.spin * (1 + energy * 0.5)
       const rotX = 0.42 + Math.sin(now / 11_000) * 0.07
 
@@ -554,7 +574,7 @@ function startOrb(canvas, tracker) {
       const aspect = W / H
       const scale = 0.62 * live.radius
       const breath = 1 + Math.sin((now / 1000) * live.breathHz * Math.PI * 2) * live.breathAmp
-      const radius = breath * (1 + energy * 0.05)
+      const radius = breath * (1 + energy * 0.05 - gather * 0.04 + project * 0.03)
 
       // ---- scene pass (into the scene FBO; bloom + composite follow) ----
       gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.scene.fb)
@@ -570,8 +590,9 @@ function startOrb(canvas, tracker) {
       gl.uniform1f(gl.getUniformLocation(glowProg, 'uAspect'), aspect)
       gl.uniform1f(gl.getUniformLocation(glowProg, 'uSize'), 1.55 * live.radius)
       gl.uniform1f(gl.getUniformLocation(glowProg, 'uTime'), now / 1000)
-      gl.uniform1f(gl.getUniformLocation(glowProg, 'uIntensity'), 0.10 * live.glow)
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uIntensity'), 0.10 * live.glow + project * 0.12)
       gl.uniform1f(gl.getUniformLocation(glowProg, 'uSwirl'), 0.4)
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uSweep'), sweep)
       gl.uniform3fv(gl.getUniformLocation(glowProg, 'uCore'), COLORS.primary)
       gl.uniform3fv(gl.getUniformLocation(glowProg, 'uMid'), COLORS.rim)
       gl.drawArrays(gl.TRIANGLES, 0, 6)
@@ -588,7 +609,7 @@ function startOrb(canvas, tracker) {
       gl.uniform1f(uni('uScale'), scale)
       gl.uniform1f(uni('uRadius'), radius)
       gl.uniform1f(uni('uTime'), now / 1000)
-      gl.uniform1f(uni('uEnergy'), energy * live.energyGain + live.pulseFloor)
+      gl.uniform1f(uni('uEnergy'), energy * live.energyGain + live.pulseFloor + gather * 0.9 + project * 0.7)
       gl.uniform1f(uni('uPulseRate'), live.pulseRate)
       gl.uniform1f(uni('uShimmer'), live.shimmer)
       gl.uniform1f(uni('uBaseGlow'), live.baseGlow)
@@ -609,7 +630,7 @@ function startOrb(canvas, tracker) {
       ]
 
       shellStates.forEach((st, i) => {
-        const a = now / 1000 * st.speed * st.dir * live.shellSpeed * (1 + energy * 0.8)
+        const a = now / 1000 * st.speed * st.dir * live.shellSpeed * (1 + energy * 0.8 + gather * 1.5 + project * 0.9)
         const ca = Math.cos(a)
         const sa = Math.sin(a)
         const ctx2 = Math.cos(st.tiltX)
@@ -655,8 +676,9 @@ function startOrb(canvas, tracker) {
       gl.useProgram(glowProg)
       gl.bindVertexArray(quadVao)
       gl.uniform1f(gl.getUniformLocation(glowProg, 'uSize'), 0.34 * live.radius * (1 + energy * 0.18))
-      gl.uniform1f(gl.getUniformLocation(glowProg, 'uIntensity'), live.coreIntensity * (1 + energy * 1.1))
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uIntensity'), live.coreIntensity * (1 + energy * 1.1 + gather * 1.4))
       gl.uniform1f(gl.getUniformLocation(glowProg, 'uSwirl'), 1.0)
+      gl.uniform1f(gl.getUniformLocation(glowProg, 'uSweep'), 0.0)
       gl.uniform3fv(gl.getUniformLocation(glowProg, 'uCore'), COLORS.core)
       gl.uniform3fv(gl.getUniformLocation(glowProg, 'uMid'), COLORS.mid)
       gl.drawArrays(gl.TRIANGLES, 0, 6)
@@ -709,13 +731,97 @@ function startOrb(canvas, tracker) {
     window.cancelAnimationFrame(raf)
   }
 }
+
+// --- Materializing panels: the orb projects them; they assemble on its pulses.
+const STATUS_COLOR = {
+  Blocked: '#F87171',
+  'Build Mode': '#60A5FA',
+  Live: '#34D399',
+  'Payment Follow-Up': '#FBBF24',
+  Planning: '#7A8CA3',
+  Ready: '#93C5FD',
+  Testing: '#A78BFA'
+}
+
+function ProjectCard({ dissolving, focus, index, row, shown }) {
+  const side = index % 2 === 0 ? 'left' : 'right'
+  const slot = Math.floor(index / 2)
+  const done = row.tasks_done ?? 0
+  const total = row.tasks_total ?? 0
+  const statusColor = STATUS_COLOR[row.status] || '#60A5FA'
+  const pos = focus
+    ? { left: '56%', top: '20%', width: '340px' }
+    : side === 'left'
+      ? { left: '3.5%', top: 8 + slot * 21 + '%', width: '250px' }
+      : { right: '3.5%', top: 8 + slot * 21 + '%', width: '250px' }
+
+  return jsxs('div', {
+    style: {
+      background: 'rgba(5, 10, 18, 0.88)',
+      border: '1px solid rgba(59, 130, 246, ' + (focus ? 0.75 : 0.38) + ')',
+      borderRadius: '3px',
+      boxShadow: focus
+        ? '0 0 26px rgba(59,130,246,0.35), inset 0 0 18px rgba(59,130,246,0.08)'
+        : '0 0 14px rgba(59,130,246,0.14)',
+      color: '#D9E6F2',
+      fontFamily: "'Inter', system-ui, sans-serif",
+      opacity: shown && !dissolving ? 1 : 0,
+      padding: focus ? '14px 16px' : '9px 11px',
+      pointerEvents: 'none',
+      position: 'absolute',
+      transform: shown && !dissolving ? 'scale(1)' : 'scale(0.9)',
+      transition: 'opacity 380ms cubic-bezier(0.22, 1, 0.36, 1), transform 380ms cubic-bezier(0.22, 1, 0.36, 1)',
+      transitionDelay: dissolving ? Math.max(0, 3 - index) * 40 + 'ms' : 150 + index * 70 + 'ms',
+      zIndex: 2,
+      ...pos
+    },
+    children: [
+      jsxs('div', {
+        style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' },
+        children: [
+          jsx('div', {
+            style: { fontSize: focus ? '14px' : '11.5px', fontWeight: 600, letterSpacing: '0.04em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+            children: row.name
+          }),
+          jsx('div', {
+            style: { color: statusColor, flexShrink: 0, fontSize: focus ? '10.5px' : '9px', letterSpacing: '0.12em', textTransform: 'uppercase' },
+            children: row.status
+          })
+        ]
+      }),
+      (focus || row.status === 'Blocked') && (row.note || row.next_action)
+        ? jsx('div', {
+            style: { color: 'rgba(122,140,163,0.95)', fontSize: focus ? '11px' : '9.5px', lineHeight: 1.45, marginTop: '6px' },
+            children: String(row.note || row.next_action).slice(0, focus ? 260 : 90)
+          })
+        : null,
+      total > 0
+        ? jsxs('div', {
+            style: { alignItems: 'center', display: 'flex', gap: '7px', marginTop: focus ? '10px' : '6px' },
+            children: [
+              jsx('div', {
+                style: { background: 'rgba(59,130,246,0.18)', borderRadius: '1px', flex: 1, height: '2px' },
+                children: jsx('div', {
+                  style: { background: statusColor, height: '2px', transition: 'width 600ms ease', width: Math.round((done / total) * 100) + '%' }
+                })
+              }),
+              jsx('div', { style: { color: 'rgba(122,140,163,0.9)', fontSize: '8.5px' }, children: done + '/' + total })
+            ]
+          })
+        : null
+    ]
+  })
+}
+
 function HudPage() {
   const canvasRef = useRef(null)
   const labelRef = useRef(null)
   const sourceRef = useRef(null)
   const busy = useValue(host.state.busy)
+  const [display, setDisplay] = useState({ dissolving: false, focus: null, rows: [], shown: false })
   const tracker = useRef({
     amp: null,
+    gesture: null,
     lastDeltaAt: 0,
     listenUntil: 0,
     mode: () => 'idle',
@@ -813,6 +919,29 @@ function HudPage() {
         tracker.thinkUntil = 0
         tracker.speakUntil = Math.min(tracker.speakUntil, performance.now() + SPEAK_HOLD_MS)
       }),
+      host.onEvent('display.retrieving', () => {
+        tracker.gesture = { at: performance.now(), kind: 'gather' }
+      }),
+      host.onEvent('display.projects', event => {
+        const rows = event.payload?.result?.projects ?? []
+
+        tracker.gesture = { at: performance.now(), kind: 'project' }
+        setDisplay({ dissolving: false, focus: null, rows: rows.slice(0, 8), shown: false })
+        window.setTimeout(() => setDisplay(prev => ({ ...prev, shown: true })), 80)
+      }),
+      host.onEvent('display.focus', event => {
+        const row = event.payload?.result?.projects?.[0]
+
+        if (row) {
+          tracker.gesture = { at: performance.now(), kind: 'project' }
+          setDisplay(prev => ({ ...prev, dissolving: false, focus: row, shown: true }))
+        }
+      }),
+      host.onEvent('display.clear', () => {
+        tracker.gesture = { at: performance.now(), kind: 'sweep' }
+        setDisplay(prev => ({ ...prev, dissolving: true }))
+        window.setTimeout(() => setDisplay({ dissolving: false, focus: null, rows: [], shown: false }), 620)
+      }),
       host.onEvent('voice.amplitude', event => {
         const { level = 0, source = 'out' } = event.payload ?? {}
 
@@ -846,6 +975,16 @@ function HudPage() {
       jsx('canvas', {
         ref: canvasRef,
         style: { height: '100%', left: 0, position: 'absolute', top: 0, width: '100%' }
+      }),
+      jsx('div', {
+        style: { inset: 0, pointerEvents: 'none', position: 'absolute' },
+        children: [
+          ...display.rows.map((row, index) =>
+            jsx(ProjectCard, { dissolving: display.dissolving, focus: false, index, row, shown: display.shown }, row.name || String(index))),
+          display.focus
+            ? jsx(ProjectCard, { dissolving: display.dissolving, focus: true, index: 0, row: display.focus, shown: true }, 'focus')
+            : null
+        ]
       }),
       jsxs('div', {
         style: {

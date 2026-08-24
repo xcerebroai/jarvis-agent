@@ -177,6 +177,7 @@ export function buildInstructions(options: RealtimeSessionConfigOptions = {}): s
   if (cfg.reviewProjectsEnabled) {
     lines.push(
       `Use ${REVIEW_PROJECTS_TOOL_NAME} for every request to review, list, summarize, prioritize, or check the status, blocker, progress, or next action of the projects in the configured project index. That includes questions like \"what am I working on\", \"what's blocked\", \"what's pending\", and \"how's the business\" — never answer those from memory. This is the fast authoritative path; do not call ${USE_JARVIS_TOOL_NAME} for a normal project review.`,
+      `When the user asks you to SHOW, DISPLAY, or PULL UP projects or the board, call ${SHOW_PROJECTS_TOOL_NAME} — the panels appear on screen; narrate briefly what is now showing. Focus a single project with ${SHOW_PROJECT_TOOL_NAME} when discussing it. On "clear the screen" call ${CLEAR_DISPLAY_TOOL_NAME}.`,
       `After ${REVIEW_PROJECTS_TOOL_NAME}, give the status counts and at most five priority items. Each item gets one short line: project, status, blocker or next action. Keep the spoken review under 90 words and offer a deeper drill-down instead of reading the full inventory.`
     )
   }
@@ -239,6 +240,51 @@ export const REVIEW_PROJECTS_TOOL = {
   }
 } as const
 
+/** Display verbs — the voice physically pulls things up on screen. Execution
+ *  is renderer-side: the supervisor fetches the same compact index reads and
+ *  emits display.* events the HUD panels materialize from; the tool output is
+ *  a short confirmation so the voice can narrate what it is showing. */
+export const SHOW_PROJECTS_TOOL_NAME = 'show_projects'
+export const SHOW_PROJECT_TOOL_NAME = 'show_project'
+export const CLEAR_DISPLAY_TOOL_NAME = 'clear_display'
+
+export const DISPLAY_TOOLS = [
+  {
+    type: 'function',
+    name: SHOW_PROJECTS_TOOL_NAME,
+    description:
+      'Pull the project board up on screen: panels materialize around the orb showing the projects from the index. Use whenever the user asks to show, display, pull up, or put up projects or the board — including filtered views ("show me what is blocked").',
+    parameters: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Optional name/search filter.' },
+        status: { type: 'string', description: 'Optional exact status filter (e.g. Blocked).' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    type: 'function',
+    name: SHOW_PROJECT_TOOL_NAME,
+    description:
+      'Focus one project large on screen (highlight it) while you explain it. Use when the user asks about a specific project by name, or asks "what is blocked" while the board is up.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Project name or close match.' }
+      },
+      required: ['name'],
+      additionalProperties: false
+    }
+  },
+  {
+    type: 'function',
+    name: CLEAR_DISPLAY_TOOL_NAME,
+    description: 'Dissolve everything currently displayed around the orb. Use on "clear the screen", "clear it", "close that".',
+    parameters: { type: 'object', properties: {}, additionalProperties: false }
+  }
+] as const
+
 /**
  * Build the `session.update` payload the renderer sends over the data channel
  * once the connection opens: audio-only output, the configured voice,
@@ -249,7 +295,9 @@ export const REVIEW_PROJECTS_TOOL = {
  */
 export function buildRealtimeSessionConfig(options: RealtimeSessionConfigOptions = {}) {
   const cfg = resolveIdentity(options)
-  const tools = cfg.reviewProjectsEnabled ? [REVIEW_PROJECTS_TOOL, USE_JARVIS_TOOL] : [USE_JARVIS_TOOL]
+  const tools = cfg.reviewProjectsEnabled
+    ? [REVIEW_PROJECTS_TOOL, ...DISPLAY_TOOLS, USE_JARVIS_TOOL]
+    : [USE_JARVIS_TOOL]
 
   return {
     type: 'realtime' as const,

@@ -18,7 +18,10 @@ import {
   nextRealtimeGreeting,
   REALTIME_MODEL,
   type RealtimeSessionConfigOptions,
+  CLEAR_DISPLAY_TOOL_NAME,
   REVIEW_PROJECTS_TOOL_NAME,
+  SHOW_PROJECT_TOOL_NAME,
+  SHOW_PROJECTS_TOOL_NAME,
   USE_JARVIS_TOOL_NAME
 } from './realtime-config'
 
@@ -107,6 +110,8 @@ function parseToolArguments(raw: unknown): Record<string, unknown> {
     return {}
   }
 }
+
+const DISPLAY_TOOL_NAMES = new Set<string>([SHOW_PROJECTS_TOOL_NAME, SHOW_PROJECT_TOOL_NAME, CLEAR_DISPLAY_TOOL_NAME])
 
 export class RealtimeVoiceSession {
   private readonly deps: RealtimeSessionDeps
@@ -432,7 +437,9 @@ export class RealtimeVoiceSession {
 
       if (
         record.type !== 'function_call' ||
-        (record.name !== USE_JARVIS_TOOL_NAME && record.name !== REVIEW_PROJECTS_TOOL_NAME)
+        (record.name !== USE_JARVIS_TOOL_NAME &&
+          record.name !== REVIEW_PROJECTS_TOOL_NAME &&
+          !DISPLAY_TOOL_NAMES.has(record.name))
       ) {
         continue
       }

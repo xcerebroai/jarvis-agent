@@ -22,7 +22,7 @@
 // public defaults are JARVIS / no user name / "hey jarvis" / Marin / concise.
 
 import { emitAmplitude } from '@/lib/voice/amplitude-events'
-import { onGatewayEvent } from '@/contrib/events'
+import { emitGatewayEvent, onGatewayEvent } from '@/contrib/events'
 import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/store/composer'
 import { atom } from 'nanostores'
 
@@ -34,7 +34,13 @@ import { isVoiceStopCommand } from '@/lib/voice-stop-word'
 import { armWakeWord, resumeWakeAfterVoice } from '@/store/wake-word'
 
 import type { AgentDelegate } from './agent-delegate'
-import { type RealtimeSessionConfigOptions, REVIEW_PROJECTS_TOOL_NAME } from './realtime-config'
+import {
+  CLEAR_DISPLAY_TOOL_NAME,
+  type RealtimeSessionConfigOptions,
+  REVIEW_PROJECTS_TOOL_NAME,
+  SHOW_PROJECT_TOOL_NAME,
+  SHOW_PROJECTS_TOOL_NAME
+} from './realtime-config'
 import { RealtimeSessionError, type RealtimeStatus, RealtimeVoiceSession } from './realtime-session'
 
 /** The on-screen conversation status the composer controls render. The Realtime
@@ -213,6 +219,46 @@ function resumeWakeForVoiceSession(): void {
 
 // ── Tool bridge ──────────────────────────────────────────────────────────────
 
+/** P4 display verbs: fetch the same compact index reads, emit display.*
+ *  events for the HUD panels + orb action grammar, confirm compactly so the
+ *  voice narrates what it is showing. */
+function runDisplayTool(session: RealtimeVoiceSession, name: string, callId: string, args: Record<string, unknown>): void {
+  if (name === CLEAR_DISPLAY_TOOL_NAME) {
+    emitGatewayEvent({ payload: {}, type: 'display.clear' })
+    session.sendToolOutput(callId, 'Display cleared.')
+
+    return
+  }
+
+  const query = typeof args.query === 'string' ? args.query.trim() : typeof args.name === 'string' ? args.name.trim() : undefined
+  const statusFilter = typeof args.status === 'string' ? args.status.trim() : undefined
+  const focus = name === SHOW_PROJECT_TOOL_NAME
+
+  emitGatewayEvent({ payload: { focus }, type: 'display.retrieving' })
+  void getRealtimeProjectReview({ limit: focus ? 1 : 8, query, status: statusFilter })
+    .then(result => {
+      emitGatewayEvent({
+        payload: { focus, query: query ?? null, result, status: statusFilter ?? null },
+        type: focus ? 'display.focus' : 'display.projects'
+      })
+      const counts = Object.entries(result.status_counts ?? {})
+        .map(([status, count]) => `${count} ${status}`)
+        .join(', ')
+
+      session.sendToolOutput(
+        callId,
+        focus
+          ? `Focused on screen: ${result.projects?.[0]?.name ?? query ?? 'project'}. ${JSON.stringify(result.projects?.[0] ?? {})}`
+          : `Displayed ${result.matches ?? 0} of ${result.total_projects ?? 0} projects (${counts}). Panels are on screen; summarize aloud briefly.`
+      )
+    })
+    .catch(error => {
+      emitGatewayEvent({ payload: {}, type: 'display.clear' })
+      notifyError(error, realtimeToolNoResult())
+      session.sendToolOutput(callId, realtimeToolNoResult())
+    })
+}
+
 function runProjectReview(session: RealtimeVoiceSession, callId: string, args: Record<string, unknown>): void {
   const query = typeof args.query === 'string' ? args.query.trim() : undefined
   const statusFilter = typeof args.status === 'string' ? args.status.trim() : undefined
@@ -327,6 +373,12 @@ async function connect(renewal: boolean): Promise<void> {
         }
       },
       onToolCall: call => {
+        if (call.name === SHOW_PROJECTS_TOOL_NAME || call.name === SHOW_PROJECT_TOOL_NAME || call.name === CLEAR_DISPLAY_TOOL_NAME) {
+          runDisplayTool(session, call.name, call.callId, call.args ?? {})
+
+          return
+        }
+
         if (call.name === REVIEW_PROJECTS_TOOL_NAME) {
           runProjectReview(session, call.callId, call.arguments)
         } else {

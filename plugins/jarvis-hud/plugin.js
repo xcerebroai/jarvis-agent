@@ -991,6 +991,66 @@ function HudPage() {
 
   const [booted, setBooted] = useState(false)
   const [clock, setClock] = useState('')
+  const [jobs, setJobs] = useState([])
+  const [activity, setActivity] = useState([])
+  const [isFull, setIsFull] = useState(false)
+
+  useEffect(() => {
+    // Scheduled jobs: a real gateway read (cron.manage list), refreshed slowly.
+    const pull = () => {
+      void host
+        .request('cron.manage', { action: 'list' })
+        .then(res => {
+          const rows = Array.isArray(res?.jobs) ? res.jobs : Array.isArray(res) ? res : []
+
+          setJobs(rows.slice(0, 4))
+        })
+        .catch(() => undefined)
+    }
+
+    pull()
+    const timer = window.setInterval(pull, 60_000)
+
+    return () => window.clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    // Activity feed: the live event stream itself — truthful theater.
+    const LABELS = {
+      'display.clear': 'DISPLAY CLEARED',
+      'display.detail': 'DETAIL STAGE',
+      'display.projects': 'BOARD PROJECTED',
+      'message.complete': 'REPLY DELIVERED',
+      'message.start': 'AGENT ENGAGED',
+      'wake.detected': 'WAKE DETECTED'
+    }
+
+    return host.onEvent('*', event => {
+      const label = LABELS[event.type] ?? (event.type?.startsWith('tool.') ? 'TOOL \u00b7 ' + event.type.slice(5).toUpperCase() : null)
+
+      if (!label) {
+        return
+      }
+
+      const at = new Date()
+      const stamp = String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0') + ':' + String(at.getSeconds()).padStart(2, '0')
+
+      setActivity(prev => [{ at: stamp, key: at.getTime() + label, label }, ...prev].slice(0, 7))
+    })
+  }, [])
+
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: true } }))
+    window.dispatchEvent(new CustomEvent('jarvis:display-request'))
+    const denseRetry = window.setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('jarvis:display-request'))
+    }, 2500)
+
+    return () => {
+      window.clearTimeout(denseRetry)
+      window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: false } }))
+    }
+  }, [])
 
   useEffect(() => {
     tracker.bootAt = performance.now()
@@ -1262,6 +1322,54 @@ function HudPage() {
             ]
           })
         : null,
+      // instrument zones: dense by default — jobs, activity, metrics
+      jobs.length
+        ? jsxs('div', {
+            style: { background: 'rgba(4,9,17,0.6)', border: '1px solid rgba(59,130,246,0.22)', bottom: '52px', clipPath: 'polygon(8px 0, 100% 0, 100% 100%, 0 100%, 0 8px)', left: '2.8%', padding: '9px 12px', pointerEvents: 'none', position: 'absolute', width: '240px', zIndex: 2 },
+            children: [
+              jsx('div', { style: { ...LABEL, fontSize: '8.5px', marginBottom: '6px' }, children: 'SCHEDULED OPERATIONS' }),
+              ...jobs.map((job, i) =>
+                jsxs('div', { style: { alignItems: 'baseline', animation: 'jvFadeUp 400ms ' + i * 90 + 'ms both', display: 'flex', fontSize: '9.5px', gap: '8px', justifyContent: 'space-between', padding: '2px 0' }, children: [
+                  jsx('span', { style: { color: '#D9E6F2', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: String(job.name || job.id || '').slice(0, 30) }),
+                  jsx('span', { style: { color: 'rgba(96,165,250,0.85)', fontFamily: T.data, fontSize: '8.5px', whiteSpace: 'nowrap' }, children: String(job.schedule_display || job.schedule?.display || '').slice(0, 12) })
+                ] }, job.id || i))
+            ]
+          })
+        : null,
+      activity.length
+        ? jsxs('div', {
+            style: { background: 'rgba(4,9,17,0.6)', border: '1px solid rgba(59,130,246,0.22)', bottom: '52px', clipPath: 'polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%)', padding: '9px 12px', pointerEvents: 'none', position: 'absolute', right: '2.8%', width: '240px', zIndex: 2 },
+            children: [
+              jsx('div', { style: { ...LABEL, fontSize: '8.5px', marginBottom: '6px' }, children: 'LIVE ACTIVITY' }),
+              ...activity.map(item =>
+                jsxs('div', { style: { alignItems: 'baseline', animation: 'jvFadeUp 320ms both', display: 'flex', fontSize: '9px', gap: '8px', padding: '1.5px 0' }, children: [
+                  jsx('span', { style: { color: 'rgba(96,165,250,0.75)', fontFamily: T.data, fontSize: '8px' }, children: item.at }),
+                  jsx('span', { style: { color: 'rgba(217,230,242,0.9)', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.14em' }, children: item.label })
+                ] }, item.key))
+            ]
+          })
+        : null,
+      // edge tab: sessions/nav reachable without stock chrome
+      jsx('div', {
+        onClick: () => window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: false } })),
+        style: { alignItems: 'center', background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.35)', borderLeft: 'none', color: 'rgba(147,197,253,0.9)', cursor: 'pointer', display: 'flex', fontFamily: T.label, fontSize: '8px', height: '86px', justifyContent: 'center', left: 0, letterSpacing: '0.28em', padding: '0 3px', position: 'absolute', textTransform: 'uppercase', top: '44%', writingMode: 'vertical-rl', zIndex: 6 },
+        children: 'NAV'
+      }),
+      // fullscreen toggle
+      jsx('div', {
+        onClick: () => {
+          const root = document.documentElement
+
+          if (document.fullscreenElement) {
+            void document.exitFullscreen?.().catch(() => undefined)
+            setIsFull(false)
+          } else {
+            void root.requestFullscreen?.().then(() => setIsFull(true)).catch(() => undefined)
+          }
+        },
+        style: { color: 'rgba(96,165,250,0.8)', cursor: 'pointer', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.28em', padding: '4px 8px', position: 'absolute', right: '48px', bottom: '17px', textTransform: 'uppercase', zIndex: 6 },
+        children: isFull ? 'EXIT FULLSCREEN' : 'FULLSCREEN'
+      }),
       // boot overlay
       !booted
         ? jsxs('div', {
@@ -1394,6 +1502,23 @@ export default {
         }
       }
     ])
+
+    // Command mode is home: the SDK has no home-route claim, so on a fresh
+    // boot landing on the app's default route, step into the cockpit.
+    // Deep links and explicit routes are respected (only '' and '/' redirect).
+    ctx.onDispose(
+      (() => {
+        const timer = window.setTimeout(() => {
+          const hash = String(window.location.hash || '').replace(/^#/, '')
+
+          if (hash === '' || hash === '/') {
+            host.navigate('/hud')
+          }
+        }, 1200)
+
+        return () => window.clearTimeout(timer)
+      })()
+    )
 
     // "Hey Jarvis" surfaces the orb — but ONLY once the voice session is
     // provably alive. Navigating on the raw wake event unmounted the chat

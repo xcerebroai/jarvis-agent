@@ -30,6 +30,7 @@ import { createRealtimeProject, getRealtimeProjectReview, getRealtimeVoiceConfig
 import { translateNow } from '@/i18n'
 import { $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
+import { $sidebarOpen, setSidebarOpen } from '@/store/layout'
 import { isVoiceStopCommand } from '@/lib/voice-stop-word'
 import { armWakeWord, resumeWakeAfterVoice } from '@/store/wake-word'
 
@@ -562,8 +563,42 @@ function killVoice(): void {
   void resumeWakeAfterVoice().catch(() => undefined)
 }
 
+// --- Command-mode chrome bridge ---------------------------------------------
+// The cockpit owns the window edge-to-edge: the HUD dispatches these DOM
+// events on mount/unmount and the feature layer drives the host chrome
+// (setSidebarOpen is not SDK-exported — fidelity-wins ruling applies).
+// Prior state is remembered and restored when command mode ends.
+let chromeWasOpen: boolean | null = null
+
+// --- Data requests from the cockpit (dense-by-default zones) ----------------
+// Same truthful path as the voice verbs: fetch the compact read, emit the
+// same display.* events. Voice and cockpit share one pipeline.
 if (typeof window !== 'undefined') {
   window.addEventListener('jarvis:voice-kill', () => killVoice())
+
+  window.addEventListener('jarvis:chrome', event => {
+    const hide = Boolean((event as CustomEvent).detail?.hide)
+
+    try {
+      if (hide) {
+        chromeWasOpen ??= $sidebarOpen.get()
+        setSidebarOpen(false)
+      } else {
+        setSidebarOpen(chromeWasOpen ?? true)
+        chromeWasOpen = null
+      }
+    } catch {
+      // chrome control is best-effort; the cockpit renders regardless
+    }
+  })
+
+  window.addEventListener('jarvis:display-request', () => {
+    void getRealtimeProjectReview({ limit: 8 })
+      .then(result => {
+        emitGatewayEvent({ payload: { focus: false, result, silent: true }, type: 'display.projects' })
+      })
+      .catch(() => undefined)
+  })
 }
 
 function end(): void {

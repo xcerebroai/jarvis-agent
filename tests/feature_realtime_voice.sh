@@ -173,6 +173,20 @@ grep -q 'foregroundContext' "$V/realtime-config.ts" && ok "context instruction f
 grep -q 'WAKE_REARM_MS' "$V/voice-supervisor.ts" && ok "wake re-arm watchdog present" || bad "wake watchdog missing"
 
 echo
+echo "== 5d. P1-P3 voice contracts (stop, knowledge, output amplitude) =="
+V="$SRC/apps/desktop/src/lib/voice"
+grep -q "transcription: { model:" "$V/realtime-config.ts" && ok "input transcription enabled (stop-word feed)" || bad "input transcription missing"
+grep -q "hardStop(): void" "$V/realtime-session.ts" && ok "hardStop present (<300ms halt)" || bad "hardStop missing"
+grep -q "isVoiceStopCommand(transcript)" "$V/voice-supervisor.ts" && ok "spoken stop enforcement wired" || bad "stop enforcement missing"
+grep -q "jarvis:voice-kill" "$V/voice-supervisor.ts" && ok "manual kill event listener" || bad "manual kill listener missing"
+grep -q "startOutputMeter" "$V/realtime-session.ts" && ok "output meter (orb speaks on its own voice)" || bad "output meter missing"
+grep -q "emitAmplitude('out', level)" "$V/voice-supervisor.ts" && ok "output amplitude emitted as 'out'" || bad "output amplitude mislabeled"
+grep -q "emitAmplitude('mic', level)" "$V/voice-supervisor.ts" && ok "mic amplitude truthfully labeled" || bad "mic label wrong"
+grep -q "never answer those from memory" "$V/realtime-config.ts" && ok "project questions must use the tool" || bad "tool-forcing instruction missing"
+COUNT=$(grep -c "const resolved = await getRealtimeVoiceConfig()" "$V/voice-supervisor.ts")
+[ "$COUNT" -ge 2 ] && ok "config fetch retries before stripping identity+tools" || bad "config retry missing"
+
+echo
 echo "== 6. revert restores an EXACT clean upstream =="
 bash "$APPLY" revert "$SRC" >/dev/null 2>&1
 AFTER="$(git -C "$SRCG" status --porcelain | sort)"

@@ -57,6 +57,10 @@ export interface RealtimeSessionCallbacks {
   onToolCall?: (call: RealtimeToolCall) => void
   /** Mic input level (0..1), for the listening indicator. */
   onLevel?: (level: number) => void
+  /** Assistant OUTPUT level (0..1) — the voice the user hears. */
+  onOutputLevel?: (level: number) => void
+  /** Completed transcription of a user utterance (stop-word enforcement). */
+  onUserTranscript?: (transcript: string) => void
   /** User started speaking — used to reflect native barge-in in the UI. */
   onUserSpeechStarted?: () => void
   /** The peer connection dropped (network / session-max). `expired` is true on
@@ -112,6 +116,8 @@ export class RealtimeVoiceSession {
   private dc: RTCDataChannel | null = null
   private micStream: MediaStream | null = null
   private remoteAudio: HTMLAudioElement | null = null
+  private outputAudioContext: AudioContext | null = null
+  private outputMeterFrame = 0
   private audioContext: AudioContext | null = null
   private meterRaf: number | null = null
 
@@ -315,6 +321,7 @@ export class RealtimeVoiceSession {
     this.remoteAudio = audio
     audio.autoplay = true
     audio.srcObject = stream
+    this.startOutputMeter(stream)
     void audio.play?.().catch(() => undefined)
   }
 
@@ -354,6 +361,11 @@ export class RealtimeVoiceSession {
           this.greetingSent = true
           this.send(buildGreetingResponseEvent(nextRealtimeGreeting(this.config)))
         }
+
+        break
+
+      case 'conversation.item.input_audio_transcription.completed':
+        this.deps.callbacks.onUserTranscript?.(String((event as { transcript?: string }).transcript ?? ''))
 
         break
 
@@ -515,6 +527,51 @@ export class RealtimeVoiceSession {
     }
   }
 
+  private startOutputMeter(stream: MediaStream): void {
+    // P3: the orb must move when JARVIS speaks. Same RMS meter as the mic,
+    // pointed at the REMOTE (assistant) stream. Fully guarded; audio is
+    // untouched (analyser in parallel, element remains the audible path).
+    const audioWindow = window as Window & { webkitAudioContext?: BrowserAudioContext }
+    const AudioContextCtor = window.AudioContext || audioWindow.webkitAudioContext
+
+    if (!AudioContextCtor) {
+      return
+    }
+
+    try {
+      const context = new AudioContextCtor()
+      const analyser = context.createAnalyser()
+      const source = context.createMediaStreamSource(stream)
+
+      analyser.fftSize = 256
+      const data = new Uint8Array(analyser.fftSize)
+      source.connect(analyser)
+      this.outputAudioContext = context
+
+      const tick = () => {
+        if (!this.outputAudioContext) {
+          return
+        }
+
+        analyser.getByteTimeDomainData(data)
+
+        let sum = 0
+
+        for (const value of data) {
+          const centered = value - 128
+          sum += centered * centered
+        }
+
+        this.deps.callbacks.onOutputLevel?.(Math.min(1, Math.sqrt(sum / data.length) / 42))
+        this.outputMeterFrame = window.requestAnimationFrame(tick)
+      }
+
+      this.outputMeterFrame = window.requestAnimationFrame(tick)
+    } catch {
+      // metering is optional
+    }
+  }
+
   private startMeter(): void {
     if (!this.micStream) {
       return
@@ -569,6 +626,9 @@ export class RealtimeVoiceSession {
       this.meterRaf = null
     }
 
+    window.cancelAnimationFrame(this.outputMeterFrame)
+    void this.outputAudioContext?.close().catch(() => undefined)
+    this.outputAudioContext = null
     void this.audioContext?.close().catch(() => undefined)
     this.audioContext = null
 
@@ -588,6 +648,27 @@ export class RealtimeVoiceSession {
       this.remoteAudio.srcObject = null
       this.remoteAudio = null
     }
+  }
+
+  /** Instant audible halt (<300ms): mute and pause the remote audio element
+   *  synchronously, cancel the in-flight response, then close. */
+  hardStop(): void {
+    if (this.remoteAudio) {
+      try {
+        this.remoteAudio.muted = true
+        this.remoteAudio.pause?.()
+      } catch {
+        // the close below still tears everything down
+      }
+    }
+
+    try {
+      this.cancelResponse()
+    } catch {
+      // ignore — closing anyway
+    }
+
+    this.close()
   }
 
   private fail(code: RealtimeErrorCode, message: string): RealtimeSessionError {

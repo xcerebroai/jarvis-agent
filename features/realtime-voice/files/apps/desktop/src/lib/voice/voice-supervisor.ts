@@ -30,6 +30,7 @@ import { getRealtimeProjectReview, getRealtimeVoiceConfig, mintRealtimeToken } f
 import { translateNow } from '@/i18n'
 import { $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
+import { isVoiceStopCommand } from '@/lib/voice-stop-word'
 import { armWakeWord, resumeWakeAfterVoice } from '@/store/wake-word'
 
 import type { AgentDelegate } from './agent-delegate'
@@ -158,9 +159,28 @@ async function loadSessionConfig(): Promise<void> {
       voice: resolved.voice
     }
   } catch {
-    // Defaults: JARVIS, no user name, "hey jarvis", Marin, review off.
-    realtimeEnabled = true
-    config = {}
+    try {
+      // One retry: a transient failure here silently costs the operator
+      // their identity, greetings, AND the project-review tool for the
+      // whole session — too much to lose to one dropped request.
+      const resolved = await getRealtimeVoiceConfig()
+
+      realtimeEnabled = resolved.enabled !== false
+      config = {
+        assistantName: resolved.assistant_name,
+        userName: resolved.user_name,
+        wakePhrase: resolved.wake_phrase,
+        delivery: resolved.delivery,
+        greetings: Array.isArray(resolved.greetings) ? resolved.greetings : [],
+        reviewProjectsEnabled: Boolean(resolved.review_projects_enabled),
+        model: resolved.model,
+        voice: resolved.voice
+      }
+    } catch {
+      // Defaults: JARVIS, no user name, "hey jarvis", Marin, review off.
+      realtimeEnabled = true
+      config = {}
+    }
   }
 }
 
@@ -294,7 +314,17 @@ async function connect(renewal: boolean): Promise<void> {
       onStatusChange: next => patchState({ status: toConversationStatus(next) }),
       onLevel: level => {
         patchState({ level })
+        emitAmplitude('mic', level)
+      },
+      onOutputLevel: level => {
         emitAmplitude('out', level)
+      },
+      onUserTranscript: transcript => {
+        // P1: the stop word must stop — even while the assistant is mid-
+        // sentence. Local enforcement; never trusts model barge-in.
+        if (isVoiceStopCommand(transcript)) {
+          killVoice()
+        }
       },
       onToolCall: call => {
         if (call.name === REVIEW_PROJECTS_TOOL_NAME) {
@@ -442,6 +472,24 @@ async function maybeAutoStart(): Promise<void> {
 }
 
 /** Explicit end. Closes everything exactly once and re-arms wake. */
+/** Hard kill: instant audio halt, session over, wake re-armed. Used by the
+ *  spoken stop word and by the manual kills (orb click / Esc in the HUD,
+ *  which dispatch the DOM event below from plugin code). */
+function killVoice(): void {
+  try {
+    activeSession?.hardStop()
+  } catch {
+    // teardown below still runs
+  }
+
+  teardown('idle')
+  void resumeWakeAfterVoice().catch(() => undefined)
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('jarvis:voice-kill', () => killVoice())
+}
+
 function end(): void {
   teardown('idle')
 }

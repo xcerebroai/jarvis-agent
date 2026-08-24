@@ -176,7 +176,7 @@ export function buildInstructions(options: RealtimeSessionConfigOptions = {}): s
 
   if (cfg.reviewProjectsEnabled) {
     lines.push(
-      `Use ${REVIEW_PROJECTS_TOOL_NAME} for every request to review, list, summarize, prioritize, or check the status, blocker, progress, or next action of the projects in the configured project index. This is the fast authoritative path; do not call ${USE_JARVIS_TOOL_NAME} for a normal project review.`,
+      `Use ${REVIEW_PROJECTS_TOOL_NAME} for every request to review, list, summarize, prioritize, or check the status, blocker, progress, or next action of the projects in the configured project index. That includes questions like \"what am I working on\", \"what's blocked\", \"what's pending\", and \"how's the business\" — never answer those from memory. This is the fast authoritative path; do not call ${USE_JARVIS_TOOL_NAME} for a normal project review.`,
       `After ${REVIEW_PROJECTS_TOOL_NAME}, give the status counts and at most five priority items. Each item gets one short line: project, status, blocker or next action. Keep the spoken review under 90 words and offer a deeper drill-down instead of reading the full inventory.`
     )
   }
@@ -257,6 +257,11 @@ export function buildRealtimeSessionConfig(options: RealtimeSessionConfigOptions
     output_modalities: ['audio'] as const,
     audio: {
       input: {
+        // Local stop-word enforcement needs the user's words: transcription
+        // streams what the user says even while the assistant is speaking,
+        // so "stop" can hard-halt playback without trusting model barge-in
+        // (which demonstrably kept talking through it).
+        transcription: { model: 'gpt-4o-mini-transcribe' },
         turn_detection: REALTIME_TURN_DETECTION
       },
       output: {

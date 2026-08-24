@@ -379,7 +379,29 @@ function HudPage() {
       }
     }
 
+    const killVoice = () => {
+      window.dispatchEvent(new CustomEvent('jarvis:voice-kill'))
+      tracker.speakUntil = 0
+      tracker.listenUntil = 0
+    }
+
+    const onKey = event => {
+      if (event.key === 'Escape') {
+        killVoice()
+      }
+    }
+
+    window.addEventListener('keydown', onKey)
+    canvas.style.pointerEvents = 'auto'
+    canvas.style.cursor = 'pointer'
+    canvas.title = 'Click to stop JARVIS'
+    canvas.addEventListener('click', killVoice)
+
     const disposers = [
+      () => {
+        window.removeEventListener('keydown', onKey)
+        canvas.removeEventListener('click', killVoice)
+      },
       startOrb(canvas, tracker),
       host.onEvent('wake.detected', () => {
         tracker.listenUntil = performance.now() + LISTEN_HOLD_MS

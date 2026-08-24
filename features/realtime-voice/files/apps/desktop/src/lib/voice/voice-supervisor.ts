@@ -23,6 +23,7 @@
 
 import { emitAmplitude } from '@/lib/voice/amplitude-events'
 import { onGatewayEvent } from '@/contrib/events'
+import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/store/composer'
 import { atom } from 'nanostores'
 
 import { getRealtimeProjectReview, getRealtimeVoiceConfig, mintRealtimeToken } from '@/hermes'
@@ -483,6 +484,29 @@ function registerDelegate(delegate: AgentDelegate): () => void {
     }
   }
 }
+
+// --- Route-independent voice-start fallback ---------------------------------
+// takeVoiceConversationStart has exactly ONE consumer in the app: the chat
+// composer's voice hook. On any route without a mounted composer (the HUD is
+// the obvious one — where the user watches the orb), a wake parks a start
+// request that nobody consumes and voice never begins (observed live
+// 2026-08-24: chime + orb listening, zero supervisor activity). The composer
+// keeps first claim: we wait a beat, and only if the request is still
+// unhandled does the supervisor start the conversation itself. The take()
+// counter guarantees single consumption — no double-start race.
+const FALLBACK_CLAIM_DELAY_MS = 350
+
+$voiceConversationStartRequest.subscribe(requestId => {
+  if (!requestId) {
+    return
+  }
+
+  setTimeout(() => {
+    if (takeVoiceConversationStart(requestId)) {
+      void voiceSupervisor.start().catch(() => undefined)
+    }
+  }, FALLBACK_CLAIM_DELAY_MS)
+})
 
 // --- Wake re-arm watchdog ---------------------------------------------------
 // The gateway's wake detector is one-shot: on detection it closes the mic and

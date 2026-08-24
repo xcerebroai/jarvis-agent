@@ -76,11 +76,11 @@ describe('createForegroundDelegate', () => {
     const context = buildForegroundContext({
       messages,
       project: 'JARVIS Realtime Voice',
-      sessionTitle: 'Configure Cortana-like voice',
-      workspace: '/Users/quentinflores'
+      sessionTitle: 'Plan the quarterly review',
+      workspace: '/Users/operator'
     })
 
-    expect(context).toContain('Active desktop session: Configure Cortana-like voice')
+    expect(context).toContain('Active desktop session: Plan the quarterly review')
     expect(context).toContain('Active project: JARVIS Realtime Voice')
     expect(context).toContain('Recent visible conversation:')
     expect(context).toContain('User: I want full duplex voice.')

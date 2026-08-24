@@ -1,8 +1,8 @@
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 09170cc6..93d54789 100644
+index 3bd334f..1835734 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
-@@ -13800,6 +13800,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
+@@ -14553,6 +14553,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
    updateStreamThrottleFromActiveWork()
  })
  
@@ -19,10 +19,10 @@ index 09170cc6..93d54789 100644
    if (!payload || !isHexColor(payload.background) || !isHexColor(payload.foreground)) {
      return
 diff --git a/apps/desktop/electron/preload.ts b/apps/desktop/electron/preload.ts
-index 2d1ba597..26256ebb 100644
+index 8e8f9d4..8e3eb16 100644
 --- a/apps/desktop/electron/preload.ts
 +++ b/apps/desktop/electron/preload.ts
-@@ -222,6 +222,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
+@@ -240,6 +240,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
    watchDirectory: dir => ipcRenderer.invoke('hermes:watchDirectory', dir),
    stopPreviewFileWatch: id => ipcRenderer.invoke('hermes:stopPreviewFileWatch', id),
    setActiveWork: payload => ipcRenderer.send('hermes:active-work', payload),
@@ -31,7 +31,7 @@ index 2d1ba597..26256ebb 100644
    setNativeTheme: mode => ipcRenderer.send('hermes:native-theme', mode),
    setTranslucency: payload => ipcRenderer.send('hermes:translucency', payload),
 diff --git a/apps/desktop/electron/stream-throttle.test.ts b/apps/desktop/electron/stream-throttle.test.ts
-index fc41bcf1..57979c6a 100644
+index fc41bcf..57979c6 100644
 --- a/apps/desktop/electron/stream-throttle.test.ts
 +++ b/apps/desktop/electron/stream-throttle.test.ts
 @@ -132,6 +132,45 @@ test('repeated busy reports do not re-apply or stack timers', () => {
@@ -81,7 +81,7 @@ index fc41bcf1..57979c6a 100644
    const timers = makeTimers()
    const throttle = createStreamThrottle(timers)
 diff --git a/apps/desktop/electron/stream-throttle.ts b/apps/desktop/electron/stream-throttle.ts
-index 912b40b9..9342e302 100644
+index 912b40b..9342e30 100644
 --- a/apps/desktop/electron/stream-throttle.ts
 +++ b/apps/desktop/electron/stream-throttle.ts
 @@ -44,6 +44,11 @@ export interface StreamThrottle {
@@ -184,7 +184,7 @@ index 912b40b9..9342e302 100644
    }
  }
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
-index ffe6c470..3b9130fb 100644
+index ffe6c47..3b9130f 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
 @@ -1,10 +1,11 @@
@@ -452,11 +452,28 @@ index ffe6c470..3b9130fb 100644
  
    const handleToggleAutoSpeak = useCallback(() => {
      void setAutoSpeakReplies(!$autoSpeakReplies.get()).catch(error =>
+diff --git a/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts b/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts
+index 5389d9f..e5ec345 100644
+--- a/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts
++++ b/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts
+@@ -1,3 +1,4 @@
++import { emitAmplitude } from '@/lib/voice/amplitude-events'
+ import { useEffect, useRef, useState } from 'react'
+ 
+ type BrowserAudioContext = typeof AudioContext
+@@ -131,6 +132,7 @@ export function useMicRecorder(copy: MicRecorderErrorCopy): {
+ 
+         setLevel(normalized)
+         options.onLevel?.(normalized)
++        emitAmplitude('mic', normalized)
+ 
+         const speechThreshold = options.silenceLevel ?? 0
+         const silenceMs = options.silenceMs ?? 0
 diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
-index 1bd046c8..dc9173a5 100644
+index be93d82..bba81c0 100644
 --- a/apps/desktop/src/global.d.ts
 +++ b/apps/desktop/src/global.d.ts
-@@ -245,6 +245,10 @@ declare global {
+@@ -262,6 +262,10 @@ declare global {
        watchDirectory?: (dir: string) => Promise<HermesPreviewWatch>
        stopPreviewFileWatch: (id: string) => Promise<boolean>
        setActiveWork?: (payload: HermesActiveWork) => void
@@ -468,7 +485,7 @@ index 1bd046c8..dc9173a5 100644
        setNativeTheme?: (mode: 'dark' | 'light' | 'system') => void
        /** Main-process fact: this OS can back glass with a native material. */
 diff --git a/apps/desktop/src/hermes.ts b/apps/desktop/src/hermes.ts
-index 6242ef59..901d24e5 100644
+index 6242ef5..901d24e 100644
 --- a/apps/desktop/src/hermes.ts
 +++ b/apps/desktop/src/hermes.ts
 @@ -23,6 +23,7 @@ export * from './api/messaging'
@@ -479,8 +496,25 @@ index 6242ef59..901d24e5 100644
  export * from './api/sessions'
  export * from './api/skills'
  export * from './api/system'
+diff --git a/apps/desktop/src/lib/voice-playback.ts b/apps/desktop/src/lib/voice-playback.ts
+index eb64c4f..8fdfaba 100644
+--- a/apps/desktop/src/lib/voice-playback.ts
++++ b/apps/desktop/src/lib/voice-playback.ts
+@@ -1,3 +1,4 @@
++import { attachElementAmplitude } from '@/lib/voice/amplitude-events'
+ import { resolveGatewayWsUrl } from '@hermes/shared'
+ 
+ import { getApiRequestConnection, getApiRequestProfile, speakText } from '@/hermes'
+@@ -561,6 +562,7 @@ async function playSpeechDataUrl(
+   }
+ 
+   const audio = new Audio(response.data_url)
++  attachElementAmplitude(audio)
+   currentAudio = audio
+   setVoicePlaybackState(currentState('speaking', options, audio))
+ 
 diff --git a/apps/desktop/src/types/hermes.ts b/apps/desktop/src/types/hermes.ts
-index dc5e3d24..9e5e287a 100644
+index 0c8b6bb..4ccc868 100644
 --- a/apps/desktop/src/types/hermes.ts
 +++ b/apps/desktop/src/types/hermes.ts
 @@ -29,6 +29,58 @@ export interface AudioSpeakResponse {
@@ -543,7 +577,7 @@ index dc5e3d24..9e5e287a 100644
    label: string
    name: string
 diff --git a/hermes_cli/web_models.py b/hermes_cli/web_models.py
-index 2a44cfef..8833f531 100644
+index 2a44cfe..8833f53 100644
 --- a/hermes_cli/web_models.py
 +++ b/hermes_cli/web_models.py
 @@ -306,6 +306,26 @@ class TTSSpeakRequest(BaseModel):
@@ -574,10 +608,10 @@ index 2a44cfef..8833f531 100644
  
  class OAuthSubmitBody(BaseModel):
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 35f8f422..76da0c43 100644
+index 201d37f..eb5c6ed 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
-@@ -1529,6 +1529,8 @@ from hermes_cli.web_models import (  # noqa: F401
+@@ -1648,6 +1648,8 @@ from hermes_cli.web_models import (  # noqa: F401
      LearningNodeEdit,
      DebugShareRequest,
      TTSSpeakRequest,
@@ -586,7 +620,7 @@ index 35f8f422..76da0c43 100644
      OAuthSubmitBody,
      BulkDeleteSessions,
      SessionImport,
-@@ -5256,6 +5258,220 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+@@ -5493,6 +5495,220 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
      }
  
  

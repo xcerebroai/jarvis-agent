@@ -4,6 +4,7 @@ apps/desktop/src/app/chat/composer/hooks/use-voice-session.test.tsx
 apps/desktop/src/app/chat/composer/hooks/use-voice-session.ts
 apps/desktop/src/lib/voice/agent-delegate.test.ts
 apps/desktop/src/lib/voice/agent-delegate.ts
+apps/desktop/src/lib/voice/amplitude-events.ts
 apps/desktop/src/lib/voice/realtime-config.test.ts
 apps/desktop/src/lib/voice/realtime-config.ts
 apps/desktop/src/lib/voice/realtime-session.test.ts

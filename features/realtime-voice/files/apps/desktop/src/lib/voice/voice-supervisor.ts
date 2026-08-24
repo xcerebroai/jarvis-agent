@@ -31,6 +31,7 @@ import { resumeWakeAfterVoice } from '@/store/wake-word'
 
 import type { AgentDelegate } from './agent-delegate'
 import { type RealtimeSessionConfigOptions, REVIEW_PROJECTS_TOOL_NAME } from './realtime-config'
+import { emitAmplitude } from '@/lib/voice/amplitude-events'
 import { RealtimeSessionError, type RealtimeStatus, RealtimeVoiceSession } from './realtime-session'
 
 /** The on-screen conversation status the composer controls render. The Realtime
@@ -292,7 +293,10 @@ async function connect(renewal: boolean): Promise<void> {
     suppressGreeting,
     callbacks: {
       onStatusChange: next => patchState({ status: toConversationStatus(next) }),
-      onLevel: level => patchState({ level }),
+      onLevel: level => {
+        patchState({ level })
+        emitAmplitude('out', level)
+      },
       onToolCall: call => {
         if (call.name === REVIEW_PROJECTS_TOOL_NAME) {
           runProjectReview(session, call.callId, call.arguments)

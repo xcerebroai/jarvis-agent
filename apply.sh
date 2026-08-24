@@ -428,6 +428,22 @@ mkdir -p "$HERMES_HOME/skins"
 cp -f "$OVERLAY_DIR/skins/jarvis.yaml" "$HERMES_HOME/skins/jarvis.yaml"
 echo "  ✓ skin    -> $HERMES_HOME/skins/jarvis.yaml"
 
+# The JARVIS HUD orb — a runtime desktop plugin, delivered as a data-home
+# artifact like the skin (the loader's default-trusted door:
+# <home>/desktop-plugins/<name>/plugin.js, hot-reloaded by the app). Not a
+# tree patch: zero upstream drift surface. Consumes the realtime-voice
+# feature's voice.amplitude events when present and degrades to its own
+# synthesized pulse when not — never a hard dependency.
+if [ -f "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" ]; then
+  mkdir -p "$HERMES_HOME/desktop-plugins/jarvis-hud"
+  if cmp -s "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" "$HERMES_HOME/desktop-plugins/jarvis-hud/plugin.js" 2>/dev/null; then
+    echo "  · plugin  -> desktop-plugins/jarvis-hud already current"
+  else
+    cp -f "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" "$HERMES_HOME/desktop-plugins/jarvis-hud/plugin.js"
+    echo "  ✓ plugin  -> $HERMES_HOME/desktop-plugins/jarvis-hud/plugin.js"
+  fi
+fi
+
 # Seed the JARVIS persona as SOUL.md. Absent -> seed. Present -> replace ONLY
 # when provably pristine: upstream's runtime writes its default SOUL.md during
 # install BEFORE this overlay stage runs (≤ v1.1.7 shipped that race, so fresh

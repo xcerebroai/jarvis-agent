@@ -149,6 +149,17 @@ else
 fi
 
 echo
+echo "== 5b. amplitude hook (HUD orb feed) =="
+# The analyser tap: payload module present, both tracked taps landed, and the
+# emit is throttled. Consumers degrade to synthesized motion when no events
+# flow — that contract lives in the HUD plugin (checked by the overlay smoke).
+[ -f "$SRC/apps/desktop/src/lib/voice/amplitude-events.ts" ] && ok "amplitude-events module installed" || bad "amplitude-events module missing"
+grep -q "emitAmplitude('mic'" "$SRC/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts" && ok "mic tap present" || bad "mic tap missing"
+grep -q "attachElementAmplitude(audio)" "$SRC/apps/desktop/src/lib/voice-playback.ts" && ok "playback tap present" || bad "playback tap missing"
+grep -q "EMIT_INTERVAL_MS" "$SRC/apps/desktop/src/lib/voice/amplitude-events.ts" && ok "emission is throttled" || bad "throttle constant missing"
+grep -q "emitAmplitude('out'" "$SRC/apps/desktop/src/lib/voice/voice-supervisor.ts" && ok "realtime level forwarded" || bad "supervisor level not forwarded"
+
+echo
 echo "== 6. revert restores an EXACT clean upstream =="
 bash "$APPLY" revert "$SRC" >/dev/null 2>&1
 AFTER="$(git -C "$SRCG" status --porcelain | sort)"

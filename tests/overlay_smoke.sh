@@ -449,6 +449,27 @@ else
 fi
 
 echo
+echo "== 15c. JARVIS HUD plugin installs and stands alone =="
+# Runtime plugin: data-home artifact, no tree patch. Contract checks: apply
+# installs it; only allowlisted imports (SDK + react — the loader rejects
+# anything else); wake wiring present; and the synthesized-pulse fallback
+# exists so a keyless, hook-less install still animates.
+HUD="$HOME_DIR/desktop-plugins/jarvis-hud/plugin.js"
+if [ -f "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" ]; then
+  chk "plugin installed into the data home"   "[ -f '$HUD' ]"
+  chk "imports limited to SDK + react"        "! grep -E \"from '\" '$HUD' | grep -vE \"from '(@hermes/plugin-sdk|react|react/jsx-runtime)'\" | grep -q ."
+  chk "route + sidebar + palette registered"  "grep -q 'ROUTES_AREA' '$HUD' && grep -q 'SIDEBAR_NAV_AREA' '$HUD' && grep -q 'PALETTE_AREA' '$HUD'"
+  chk "wake surfaces the orb"                 "grep -q \"onEvent('wake.detected'\" '$HUD'"
+  chk "real amplitude feed consumed"          "grep -q \"onEvent('voice.amplitude'\" '$HUD'"
+  chk "synthesized fallback present"          "grep -q 'createAmplitudeSource' '$HUD' && grep -q 'kick' '$HUD'"
+  if command -v node >/dev/null 2>&1; then
+    chk "plugin.js parses as ESM"             "node --input-type=module --check < '$HUD'"
+  fi
+else
+  bad "plugins/jarvis-hud/plugin.js missing from overlay"
+fi
+
+echo
 echo "== 16. 'jarvis update' targets the ACTIVE install, not a stale sibling =="
 # The shims used to hardcode HERMES_SRC to the overlay checkout's SIBLING.
 # On a customer install that is correct — the overlay sits at

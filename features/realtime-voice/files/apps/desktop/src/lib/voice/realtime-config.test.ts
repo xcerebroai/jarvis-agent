@@ -76,6 +76,35 @@ describe('realtime-config', () => {
     expect(config.tool_choice).toBe('auto')
   })
 
+  it('P5.2: routes beyond-its-belt asks to delegation and bans refusal — a canned "do X in a website" ask', () => {
+    const text = buildInstructions()
+
+    // The rule the witnessed run lacked: engine-capable ⇒ delegate, never "can't".
+    expect(text).toContain('CAPABILITY RULE')
+    expect(text).toContain("I'll put the agent on it — watch the screen.")
+    expect(text).toMatch(/never say you can't|banned/i)
+    // The exact witnessed ask is named as a must-delegate example.
+    expect(text).toContain('help me connect my Stripe account to the agent through the API')
+    expect(text).toContain('INTERACTIVE WEBSITE WORK')
+    expect(text).toContain('pasted into the agent\'s session, never spoken aloud')
+    // Safety is narrowed so integrations/API keys are not mistaken for money-moving actions.
+    expect(text).toMatch(/creating or copying API keys.*NOT in that class/)
+
+    // Tool contracts carry the same routing: website work is explicitly in scope.
+    const delegate = ACTION_TOOLS.find(tool => tool.name === 'delegate_task')!
+    expect(delegate.description).toMatch(/VISIBLE browser/)
+    expect(delegate.description).toMatch(/Stripe/)
+    expect(delegate.description).toMatch(/never say it cannot be done/)
+    expect(delegate.parameters.properties.kind.enum).toEqual(['task', 'research', 'browser'])
+    const build = BUILD_TOOLS.find(tool => tool.name === 'start_build')!
+    expect(build.description).toMatch(/connect my Stripe account to the agent through the API/)
+
+    // Sight scope contract: the user's screen, never ours; "look at <app>".
+    const look = SIGHT_TOOLS.find(tool => tool.name === 'look_at_screen')!
+    expect(look.description).toMatch(/never JARVIS's own window/)
+    expect(look.parameters.properties.app).toBeDefined()
+  })
+
   it('omits review_projects by default and includes it only when configured', () => {
     const off = buildRealtimeSessionConfig()
     expect(off.tools).toEqual([...ACTION_TOOLS, ...BUILD_TOOLS, ...SIGHT_TOOLS, USE_JARVIS_TOOL])

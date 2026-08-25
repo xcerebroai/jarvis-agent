@@ -294,3 +294,56 @@ def test_board_entry_links_build(tmp_path):
     assert row["build_id"] == "b1" and row["source"] == "build-session" and row["status"] == "Build Mode"
     review = rv.build_project_review({"projects": rv.read_local_additions(index)}, limit=8)
     assert review["projects"][0]["build_id"] == "b1"
+
+
+# --- P5.2: sight SCOPE — "my screen" is the owner's, never our own window -----
+
+_DISPLAYS = [
+    {"id": 1, "index": 1, "main": True, "bounds": (0, 0, 1728, 1117)},
+    {"id": 2, "index": 2, "main": False, "bounds": (1728, 0, 2560, 1440)},
+]
+_JARVIS = {"owner": "JARVIS", "pid": 4242, "id": 900, "title": "JARVIS", "bounds": (0, 0, 1728, 1117)}
+_CHROME = {"owner": "Google Chrome", "pid": 501, "id": 701, "title": "Stripe Dashboard", "bounds": (100, 60, 1400, 900)}
+_NOTES = {"owner": "Notes", "pid": 502, "id": 702, "title": "Ideas", "bounds": (1800, 100, 900, 700)}
+_MENUBAR = {"owner": "Window Server", "pid": 409, "id": 20, "title": "StatusIndicator", "bounds": (1549, 2, 29, 29)}
+
+
+def test_sight_excludes_our_own_window_when_we_are_frontmost():
+    target = rv.select_capture_target([_MENUBAR, _JARVIS, _CHROME, _NOTES], _DISPLAYS, (400, 400), self_pids={4242})
+    assert target["kind"] == "window" and target["window_id"] == 701 and target["app"] == "Google Chrome"
+    assert target["includes_self"] is False and "behind JARVIS" in target["reason"]
+
+
+def test_sight_excludes_self_by_owner_name_even_with_unknown_pid():
+    target = rv.select_capture_target([_JARVIS, _NOTES], _DISPLAYS, None, self_pids=set())
+    assert target["kind"] == "window" and target["window_id"] == 702
+
+
+def test_sight_look_at_app_picks_that_apps_window_regardless_of_z_order():
+    target = rv.select_capture_target([_JARVIS, _CHROME, _NOTES], _DISPLAYS, None, self_pids={4242}, app="notes")
+    assert target["kind"] == "window" and target["window_id"] == 702 and target["display_index"] == 2
+    missing = rv.select_capture_target([_JARVIS, _CHROME], _DISPLAYS, None, self_pids={4242}, app="Xcode")
+    assert missing["kind"] == "none" and "Xcode" in missing["error"]
+    # never our own window, even when asked for it by name — and a window whose
+    # TITLE merely mentions JARVIS must not be captured as "JARVIS" either
+    terminal = {"owner": "Terminal", "pid": 503, "id": 704, "title": "quentinflores — JARVIS build", "bounds": (0, 200, 860, 500)}
+    ours = rv.select_capture_target([_JARVIS, terminal], _DISPLAYS, None, self_pids={4242}, app="jarvis")
+    assert ours["kind"] == "none" and "own window" in ours["error"]
+    # owner-name match beats a title fragment: "chrome" → Chrome, not a Terminal titled "chrome notes"
+    titled = {"owner": "Terminal", "pid": 503, "id": 705, "title": "chrome notes", "bounds": (0, 200, 860, 500)}
+    assert rv.select_capture_target([titled, _CHROME], _DISPLAYS, None, self_pids=set(), app="chrome")["window_id"] == 701
+    assert rv.select_capture_target([titled], _DISPLAYS, None, self_pids=set(), app="chrome")["window_id"] == 705
+
+
+def test_sight_falls_back_to_the_display_under_the_pointer_and_says_if_we_are_in_it():
+    target = rv.select_capture_target([_JARVIS, _MENUBAR], _DISPLAYS, (2000, 300), self_pids={4242})
+    assert target["kind"] == "display" and target["display_index"] == 2 and target["bounds"] == [1728, 0, 2560, 1440]
+    assert target["includes_self"] is True
+    alone = rv.select_capture_target([], _DISPLAYS, (10, 10), self_pids={4242})
+    assert alone["kind"] == "display" and alone["display_index"] == 1 and alone["includes_self"] is False
+
+
+def test_sight_ignores_tiny_and_system_windows():
+    tiny = {"owner": "Google Chrome", "pid": 501, "id": 703, "title": "popup", "bounds": (0, 0, 40, 40)}
+    target = rv.select_capture_target([_MENUBAR, tiny, _JARVIS], _DISPLAYS, (10, 10), self_pids={4242})
+    assert target["kind"] == "display"

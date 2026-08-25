@@ -1054,7 +1054,7 @@ function HudPage() {
     // Honest numbers ride along on the rail: a look's real time + cost, a
     // judgment's elapsed, a build's state.
     const DETAIL = {
-      'voice.sight.done': p => (p.latencyMs / 1000).toFixed(1) + 's \u00b7 ' + (typeof p.costUsd === 'number' ? '$' + p.costUsd.toFixed(4) : 'cost n/a'),
+      'voice.sight.done': p => (p.target?.app ? String(p.target.app).slice(0, 14) + ' \u00b7 ' : '') + (p.latencyMs / 1000).toFixed(1) + 's \u00b7 ' + (typeof p.costUsd === 'number' ? '$' + p.costUsd.toFixed(4) : 'cost n/a'),
       'voice.judgment.done': p => (p.elapsedMs / 1000).toFixed(1) + 's',
       'voice.judgment.failed': p => (p.elapsedMs / 1000).toFixed(1) + 's',
       'build.update': p => String(p.name || '').slice(0, 18) + ' \u00b7 ' + String(p.inFlight ? 'working' : p.state || '').toUpperCase(),
@@ -1262,7 +1262,7 @@ function HudPage() {
         const next = {
           goal: String(payload.goal || ''),
           id: payload.id,
-          kind: payload.kind === 'research' ? 'research' : 'task',
+          kind: payload.kind === 'research' ? 'research' : payload.kind === 'browser' ? 'browser' : 'task',
           sessionId: payload.sessionId || null,
           media: [],
           startedAt: Date.now(),
@@ -1394,7 +1394,7 @@ function HudPage() {
         window.clearTimeout(p51TimersRef.current.sight)
         tracker.gesture = { at: performance.now(), kind: 'gather' }
         uiSound('tick')
-        setSight({ at: Date.now(), question: String(event.payload?.question || ''), status: 'capturing' })
+        setSight({ app: String(event.payload?.app || ''), at: Date.now(), question: String(event.payload?.question || ''), status: 'capturing' })
       }),
       host.onEvent('voice.sight.done', event => {
         const p = event.payload ?? {}
@@ -1678,7 +1678,7 @@ function HudPage() {
               jsxs('div', {
                 style: { alignItems: 'baseline', display: 'flex', justifyContent: 'space-between', marginBottom: '6px' },
                 children: [
-                  jsx('div', { style: { ...LABEL, fontSize: '8.5px' }, children: task.kind === 'research' ? 'RESEARCH OPERATION' : 'TASK OPERATION' }),
+                  jsx('div', { style: { ...LABEL, fontSize: '8.5px' }, children: task.kind === 'research' ? 'RESEARCH OPERATION' : task.kind === 'browser' ? 'BROWSER OPERATION \u00b7 WATCH THE SCREEN' : 'TASK OPERATION' }),
                   jsx('div', {
                     style: {
                       color: task.status === 'cancelled' ? '#F87171' : task.status === 'done' ? '#34D399' : '#93C5FD',
@@ -1750,6 +1750,9 @@ function HudPage() {
                         jsx('div', { style: { ...LABEL, fontSize: '8.5px' }, children: 'SIGHT \u00b7 SCREEN CAPTURE' }),
                         jsx('div', { className: sight.status === 'capturing' ? 'jv-chip' : '', style: { color: sight.status === 'failed' ? '#F87171' : sight.status === 'done' ? '#34D399' : '#93C5FD', fontFamily: T.label, fontSize: '8px', letterSpacing: '0.26em', textTransform: 'uppercase' }, children: sight.status === 'capturing' ? 'CAPTURING \u00b7 ANALYZING' : sight.status === 'done' ? 'ANALYZED' : 'FAILED' })
                       ] }),
+                      sight.target
+                        ? jsx('div', { style: { color: sight.target.includes_self ? '#FBBF24' : '#93C5FD', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.2em', marginTop: '4px', textTransform: 'uppercase' }, children: sight.target.kind === 'window' ? 'TARGET \u00b7 ' + String(sight.target.app || 'window').slice(0, 28) + (sight.target.title ? ' \u00b7 ' + String(sight.target.title).slice(0, 30) : '') : 'TARGET \u00b7 DISPLAY ' + (sight.target.display_index || 1) + (sight.target.includes_self ? ' \u00b7 INCLUDES JARVIS' : '') })
+                        : sight.app ? jsx('div', { style: { color: '#93C5FD', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.2em', marginTop: '4px', textTransform: 'uppercase' }, children: 'TARGET \u00b7 ' + String(sight.app).slice(0, 28) }) : null,
                       sight.question ? jsx('div', { style: { color: 'rgba(139,161,188,0.95)', fontFamily: T.label, fontSize: '10px', letterSpacing: '0.08em', marginTop: '4px', textTransform: 'uppercase' }, children: String(sight.question).slice(0, 90) }) : null,
                       sight.status === 'capturing' ? jsx('div', { className: 'jv-task-sweep', style: { background: 'rgba(59,130,246,0.16)', height: '2px', marginTop: '8px' } }) : null,
                       sight.thumbnail ? jsx('img', { alt: '', src: sight.thumbnail, style: { animation: 'jvFadeUp 400ms both', border: '1px solid rgba(96,165,250,0.4)', display: 'block', marginTop: '8px', maxHeight: '150px', objectFit: 'cover', objectPosition: 'top', width: '100%' } }) : null,

@@ -577,10 +577,10 @@ index f00bdd09cc8..bcda0621bff 100644
    label: string
    name: string
 diff --git a/hermes_cli/web_models.py b/hermes_cli/web_models.py
-index 2a44cfef083..d73e5f03c05 100644
+index 2a44cfef083..00a30346517 100644
 --- a/hermes_cli/web_models.py
 +++ b/hermes_cli/web_models.py
-@@ -306,6 +306,71 @@ class TTSSpeakRequest(BaseModel):
+@@ -306,6 +306,73 @@ class TTSSpeakRequest(BaseModel):
      text: str
  
  
@@ -624,9 +624,11 @@ index 2a44cfef083..d73e5f03c05 100644
 +
 +
 +class RealtimeLookRequest(BaseModel):
-+    """P5.1 sight: one on-demand look at the screen."""
++    """P5.1 sight: one on-demand look at the screen. ``app`` (P5.2) targets a
++    specific application's window ("look at Chrome")."""
 +
 +    question: str = ""
++    app: Optional[str] = None
 +
 +
 +class RealtimeThumbnailRequest(BaseModel):
@@ -653,7 +655,7 @@ index 2a44cfef083..d73e5f03c05 100644
  
  class OAuthSubmitBody(BaseModel):
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 201d37f1972..6308ee2823d 100644
+index 201d37f1972..39d5c8fbdb6 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
 @@ -1648,6 +1648,14 @@ from hermes_cli.web_models import (  # noqa: F401
@@ -1027,7 +1029,7 @@ index 201d37f1972..6308ee2823d 100644
 +
 +    loop = asyncio.get_running_loop()
 +    return await loop.run_in_executor(
-+        None, lambda: realtime_voice.look_at_screen(home, config, api_key, body.question)
++        None, lambda: realtime_voice.look_at_screen(home, config, api_key, body.question, app=body.app)
 +    )
 +
 +

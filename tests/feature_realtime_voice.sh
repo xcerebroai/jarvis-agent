@@ -213,7 +213,7 @@ grep -q "OPEN_APP_TOOL_NAME = 'open_app'" "$V/realtime-config.ts" && ok "open_ap
 grep -q "OPEN_URL_TOOL_NAME = 'open_url'" "$V/realtime-config.ts" && ok "open_url declared" || bad "open_url missing"
 grep -q "DELEGATE_TASK_TOOL_NAME = 'delegate_task'" "$V/realtime-config.ts" && ok "delegate_task declared" || bad "delegate_task missing"
 grep -q "CANCEL_TASK_TOOL_NAME = 'cancel_task'" "$V/realtime-config.ts" && ok "cancel_task declared" || bad "cancel_task missing"
-grep -q "SAFETY: before delegating anything destructive" "$V/realtime-config.ts" && ok "spoken safety confirm in instructions" || bad "safety instruction missing"
+grep -q "SAFETY (narrow): only for destructive" "$V/realtime-config.ts" && ok "spoken safety confirm in instructions (narrow: money-moving/destructive only)" || bad "safety instruction missing"
 grep -q "speakSystemUpdate" "$V/realtime-session.ts" && ok "out-of-band completion narration seam" || bad "speakSystemUpdate missing"
 grep -q "sessionId: () => targetRuntimeId" "$V/agent-delegate.ts" && ok "delegate exposes pinned session id" || bad "sessionId probe missing"
 grep -q "DELEGATED_TASK_TIMEOUT_MS)" "$V/voice-supervisor.ts" && ok "delegated jobs get the long timeout" || bad "long timeout missing"
@@ -253,6 +253,21 @@ for ep in project-context project-set look thumbnail builds; do
 done
 grep -q "shell=True" "$SRC/hermes_cli/realtime_voice.py" && bad "shell=True crept into the backend" || ok "still no shell=True in the backend"
 grep -q "voice.sight.started" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && grep -q "build.list" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && grep -q "voice.judgment.started" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && ok "cockpit renders sight / build dock / judgment from real events" || bad "cockpit instruments missing"
+
+echo
+echo "== 5i. P5.2: sight scope (never our own window) + delegation, not refusal =="
+grep -q "def select_capture_target" "$SRC/hermes_cli/realtime_voice.py" && grep -q "SELF_OWNER_NAMES" "$SRC/hermes_cli/realtime_voice.py" && ok "capture target excludes our own window (pure selector)" || bad "self-exclusion selector missing"
+grep -q "CGWindowListCopyWindowInfo" "$SRC/hermes_cli/realtime_voice.py" && grep -q '"-l", str(int(target\["window_id"\]))' "$SRC/hermes_cli/realtime_voice.py" && ok "frontmost WINDOW capture via screencapture -l" || bad "window capture missing"
+grep -q "display under the pointer" "$SRC/hermes_cli/realtime_voice.py" && ok "multi-display: display with pointer focus" || bad "pointer display fallback missing"
+grep -q "app: Optional\[str\] = None" "$SRC/hermes_cli/web_models.py" && grep -q "app=body.app" "$SRC/hermes_cli/web_server.py" && ok "look endpoint accepts \"look at <app>\"" || bad "look endpoint lacks app"
+grep -q "never JARVIS" "$V/realtime-config.ts" && grep -q "app: { type: 'string'" "$V/realtime-config.ts" && ok "look_at_screen contract: user's screen + app param" || bad "sight contract missing"
+grep -q "CAPABILITY RULE" "$V/realtime-config.ts" && grep -q "watch the screen" "$V/realtime-config.ts" && ok "engine-capable ⇒ delegate; refusal banned" || bad "capability rule missing"
+grep -q "help me connect my Stripe account to the agent through the API" "$V/realtime-config.ts" && ok "witnessed ask is a named must-delegate example" || bad "witnessed ask not covered"
+grep -q "enum: \['task', 'research', 'browser'\]" "$V/realtime-config.ts" && ok "delegate_task has a browser kind" || bad "browser kind missing"
+grep -q "SAFETY (narrow)" "$V/realtime-config.ts" && ok "safety narrowed so API keys/integrations are not blocked" || bad "safety still over-broad"
+grep -q "VISIBLE_BROWSER_RULES" "$V/voice-supervisor.ts" && grep -q "PASTE keys into this session" "$V/voice-supervisor.ts" && ok "visible browser + narration + in-session secrets in every delegated prompt" || bad "visible-browser rules missing"
+grep -q "P5.2: a \"do X in a website\" delegation" "$V/voice-supervisor.test.ts" && grep -q "P5.2: routes beyond-its-belt asks" "$V/realtime-config.test.ts" && ok "delegation-not-refusal regression tests shipped" || bad "delegation regression tests missing"
+grep -q "test_sight_excludes_our_own_window_when_we_are_frontmost" "$OVERLAY_DIR/tests/test_realtime_voice_unit.py" && ok "sight self-exclusion regression test shipped" || bad "sight regression test missing"
 
 echo
 echo "== 6. revert restores an EXACT clean upstream =="

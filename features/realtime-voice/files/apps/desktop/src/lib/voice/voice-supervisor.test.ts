@@ -418,6 +418,45 @@ describe('voiceSupervisor', () => {
     expect(session.sendToolOutput).toHaveBeenCalledWith('s1', expect.stringMatching(/2\.3 seconds; about 0\.09 cents at list price via gpt-4\.1-mini/))
   })
 
+  it('P5.2: "look at <app>" passes the app through and the answer names what was looked at', async () => {
+    const session = await startAndConnect()
+
+    lookAtScreen.mockResolvedValueOnce({ answer: 'Stripe developer keys page.', cost_usd: 0.001, latency_ms: 3000, model: 'gpt-4.1-mini', ok: true, target: { app: 'Google Chrome', kind: 'window', title: 'Stripe Dashboard', window_id: 701 } } as never)
+    session.callbacks.onToolCall?.({ callId: 's3', name: 'look_at_screen', arguments: { app: 'Chrome', question: 'what page is this' } })
+    await tick(8)
+
+    expect(lookAtScreen).toHaveBeenCalledWith({ app: 'Chrome', question: 'what page is this' })
+    expect(session.sendToolOutput).toHaveBeenCalledWith('s3', expect.stringContaining('Looked at Google Chrome — "Stripe Dashboard"'))
+  })
+
+  it('P5.2: a display fallback with JARVIS in the shot is reported, never hidden', async () => {
+    const session = await startAndConnect()
+
+    lookAtScreen.mockResolvedValueOnce({ answer: 'The JARVIS cockpit.', latency_ms: 2500, ok: true, target: { display_index: 1, includes_self: true, kind: 'display' } } as never)
+    session.callbacks.onToolCall?.({ callId: 's4', name: 'look_at_screen', arguments: {} })
+    await tick(8)
+
+    expect(session.sendToolOutput).toHaveBeenCalledWith('s4', expect.stringContaining('JARVIS was the only window open'))
+  })
+
+  it('P5.2: a "do X in a website" delegation runs in the VISIBLE browser with narration and in-session secrets', async () => {
+    const session = await startAndConnect()
+    const delegate = makeDelegate(new Promise<string>(() => undefined))
+
+    voiceSupervisor.registerDelegate(delegate)
+    session.callbacks.onToolCall?.({ callId: 'd1', name: 'delegate_task', arguments: { goal: 'Walk Stripe\'s dashboard and connect the API to the agent', kind: 'browser' } })
+    await tick(8)
+
+    expect(delegate.runTurn).toHaveBeenCalledTimes(1)
+    const prompt = String(delegate.runTurn.mock.calls[0][0])
+    expect(prompt).toContain('Interactive browser task')
+    expect(prompt).toMatch(/VISIBLE in-app browser/)
+    expect(prompt).toMatch(/Narrate as you go/)
+    expect(prompt).toMatch(/PASTE keys into this session/)
+    expect(prompt).toMatch(/Do not claim inability/)
+    expect(session.sendToolOutput).toHaveBeenCalledWith('d1', expect.stringContaining('watch the screen'))
+  })
+
   it('look_at_screen without the Screen Recording grant explains the permission flow instead of pretending to see', async () => {
     const session = await startAndConnect()
 

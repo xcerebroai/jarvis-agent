@@ -747,9 +747,247 @@ def request_screen_capture_access() -> bool:
     return granted
 
 
-def capture_screen(dest_dir: "Path", max_edge: int = SIGHT_DEFAULT_MAX_EDGE) -> Dict[str, Any]:
-    """Grab the main display to a JPEG under dest_dir, downscaled to max_edge.
-    argv-only subprocesses; nothing shell-interpolated."""
+# --- Sight SCOPE: "my screen" means the OWNER's screen, never our own window.
+# CoreGraphics via ctypes (no pyobjc in the install): enumerate on-screen
+# windows front-to-back, drop our own app's windows (owner PID = the desktop
+# process that spawned this gateway, plus the product's owner names) and
+# system chrome, and capture the frontmost remaining WINDOW (`screencapture
+# -l` reads a window's own backing store, so our HUD sitting on top of it does
+# not leak in). Only when no candidate window exists do we fall back to the
+# full display under the pointer — reported honestly as possibly including us.
+
+SELF_OWNER_NAMES = {"jarvis", "hermes", "hermes helper", "hermes helper (renderer)"}
+_SYSTEM_OWNERS = {
+    "window server", "dock", "control center", "notification center", "systemuiserver",
+    "spotlight", "screenshot", "wallpaper", "textinputmenuagent", "coreservicesuiagent",
+}
+_MIN_WINDOW_EDGE = 120
+_UTF8 = 0x08000100
+
+
+def _coregraphics():
+    """Lazily bound CoreFoundation/CoreGraphics handles (macOS only)."""
+    import ctypes
+    import sys
+
+    if sys.platform != "darwin":
+        return None
+    try:
+        cf = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+        cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+    except OSError:
+        return None
+
+    class CGPoint(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+    class CGSize(ctypes.Structure):
+        _fields_ = [("w", ctypes.c_double), ("h", ctypes.c_double)]
+
+    class CGRect(ctypes.Structure):
+        _fields_ = [("origin", CGPoint), ("size", CGSize)]
+
+    cf.CFStringCreateWithCString.restype = ctypes.c_void_p
+    cf.CFStringCreateWithCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_uint32]
+    cf.CFArrayGetCount.restype = ctypes.c_long
+    cf.CFArrayGetCount.argtypes = [ctypes.c_void_p]
+    cf.CFArrayGetValueAtIndex.restype = ctypes.c_void_p
+    cf.CFArrayGetValueAtIndex.argtypes = [ctypes.c_void_p, ctypes.c_long]
+    cf.CFDictionaryGetValue.restype = ctypes.c_void_p
+    cf.CFDictionaryGetValue.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    cf.CFNumberGetValue.restype = ctypes.c_bool
+    cf.CFNumberGetValue.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p]
+    cf.CFStringGetCString.restype = ctypes.c_bool
+    cf.CFStringGetCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+    cf.CFRelease.argtypes = [ctypes.c_void_p]
+    cg.CGWindowListCopyWindowInfo.restype = ctypes.c_void_p
+    cg.CGWindowListCopyWindowInfo.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    cg.CGRectMakeWithDictionaryRepresentation.restype = ctypes.c_bool
+    cg.CGRectMakeWithDictionaryRepresentation.argtypes = [ctypes.c_void_p, ctypes.POINTER(CGRect)]
+    cg.CGEventCreate.restype = ctypes.c_void_p
+    cg.CGEventCreate.argtypes = [ctypes.c_void_p]
+    cg.CGEventGetLocation.restype = CGPoint
+    cg.CGEventGetLocation.argtypes = [ctypes.c_void_p]
+    cg.CGGetActiveDisplayList.argtypes = [ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32), ctypes.POINTER(ctypes.c_uint32)]
+    cg.CGDisplayBounds.restype = CGRect
+    cg.CGDisplayBounds.argtypes = [ctypes.c_uint32]
+    cg.CGMainDisplayID.restype = ctypes.c_uint32
+    return {"cf": cf, "cg": cg, "CGRect": CGRect, "ctypes": ctypes}
+
+
+def list_windows() -> List[Dict[str, Any]]:
+    """On-screen, layer-0 windows, front-to-back: owner, pid, id, title, bounds."""
+    api = _coregraphics()
+    if not api:
+        return []
+    cf, cg, CGRect, ctypes = api["cf"], api["cg"], api["CGRect"], api["ctypes"]
+
+    def key(name: str):
+        return cf.CFStringCreateWithCString(None, name.encode("utf-8"), _UTF8)
+
+    def number(d, k) -> Optional[int]:
+        v = cf.CFDictionaryGetValue(d, k)
+        if not v:
+            return None
+        out = ctypes.c_int64()
+        return int(out.value) if cf.CFNumberGetValue(v, 4, ctypes.byref(out)) else None  # kCFNumberSInt64Type
+
+    def text(d, k) -> str:
+        v = cf.CFDictionaryGetValue(d, k)
+        if not v:
+            return ""
+        buf = ctypes.create_string_buffer(1024)
+        return buf.value.decode("utf-8", "replace") if cf.CFStringGetCString(v, buf, 1024, _UTF8) else ""
+
+    keys = {n: key(n) for n in ("kCGWindowLayer", "kCGWindowOwnerName", "kCGWindowOwnerPID", "kCGWindowNumber", "kCGWindowName", "kCGWindowBounds", "kCGWindowAlpha")}
+    rows: List[Dict[str, Any]] = []
+    arr = cg.CGWindowListCopyWindowInfo(1 | 16, 0)  # kCGWindowListOptionOnScreenOnly | ExcludeDesktopElements
+    if not arr:
+        return rows
+    try:
+        for i in range(cf.CFArrayGetCount(arr)):
+            d = cf.CFArrayGetValueAtIndex(arr, i)
+            if number(d, keys["kCGWindowLayer"]) != 0:
+                continue
+            rect = CGRect()
+            bounds_ref = cf.CFDictionaryGetValue(d, keys["kCGWindowBounds"])
+            if not bounds_ref or not cg.CGRectMakeWithDictionaryRepresentation(bounds_ref, ctypes.byref(rect)):
+                continue
+            rows.append({
+                "owner": text(d, keys["kCGWindowOwnerName"]),
+                "pid": number(d, keys["kCGWindowOwnerPID"]) or 0,
+                "id": number(d, keys["kCGWindowNumber"]) or 0,
+                "title": text(d, keys["kCGWindowName"]),
+                "bounds": (rect.origin.x, rect.origin.y, rect.size.w, rect.size.h),
+            })
+    finally:
+        cf.CFRelease(arr)
+        for k in keys.values():
+            cf.CFRelease(k)
+    return rows
+
+
+def list_displays() -> List[Dict[str, Any]]:
+    api = _coregraphics()
+    if not api:
+        return []
+    cg, ctypes = api["cg"], api["ctypes"]
+    ids = (ctypes.c_uint32 * 16)()
+    count = ctypes.c_uint32()
+    cg.CGGetActiveDisplayList(16, ids, ctypes.byref(count))
+    main = cg.CGMainDisplayID()
+    out = []
+    for i in range(count.value):
+        r = cg.CGDisplayBounds(ids[i])
+        out.append({"id": int(ids[i]), "index": i + 1, "main": int(ids[i]) == int(main), "bounds": (r.origin.x, r.origin.y, r.size.w, r.size.h)})
+    return out
+
+
+def pointer_location() -> Optional[tuple]:
+    api = _coregraphics()
+    if not api:
+        return None
+    cg = api["cg"]
+    event = cg.CGEventCreate(None)
+    if not event:
+        return None
+    try:
+        p = cg.CGEventGetLocation(event)
+        return (p.x, p.y)
+    finally:
+        api["cf"].CFRelease(event)
+
+
+def self_window_pids() -> set:
+    """The desktop process that spawned this gateway owns our windows."""
+    import os as _os
+
+    return {_os.getppid()}
+
+
+def _contains(bounds, x, y) -> bool:
+    bx, by, bw, bh = bounds
+    return bx <= x < bx + bw and by <= y < by + bh
+
+
+def _display_for(displays, bounds_or_point) -> Optional[Dict[str, Any]]:
+    if not displays:
+        return None
+    if len(bounds_or_point) == 4:
+        bx, by, bw, bh = bounds_or_point
+        x, y = bx + bw / 2, by + bh / 2
+    else:
+        x, y = bounds_or_point
+    for d in displays:
+        if _contains(d["bounds"], x, y):
+            return d
+    return next((d for d in displays if d.get("main")), displays[0])
+
+
+def select_capture_target(
+    windows: List[Dict[str, Any]],
+    displays: List[Dict[str, Any]],
+    pointer: Optional[tuple],
+    self_pids: set,
+    app: Optional[str] = None,
+    self_names: Optional[set] = None,
+) -> Dict[str, Any]:
+    """Pure decision: WHAT to capture. Never our own window; the owner's."""
+    self_names = {n.lower() for n in (self_names if self_names is not None else SELF_OWNER_NAMES)}
+
+    def is_self(w) -> bool:
+        return w.get("pid") in self_pids or str(w.get("owner", "")).strip().lower() in self_names
+
+    def is_real(w) -> bool:
+        _x, _y, bw, bh = w.get("bounds") or (0, 0, 0, 0)
+        return bw >= _MIN_WINDOW_EDGE and bh >= _MIN_WINDOW_EDGE and str(w.get("owner", "")).strip().lower() not in _SYSTEM_OWNERS
+
+    def as_window(w, reason: str) -> Dict[str, Any]:
+        display = _display_for(displays, w["bounds"])
+        return {
+            "kind": "window", "window_id": int(w["id"]), "app": w.get("owner", ""), "title": w.get("title", ""),
+            "bounds": list(w["bounds"]), "display_index": display["index"] if display else 1, "reason": reason, "includes_self": False,
+        }
+
+    wanted = (app or "").strip().lower()
+    if wanted:
+        if any(wanted in name or name in wanted for name in self_names):
+            return {"kind": "none", "error": "that is JARVIS's own window — say which app to look at instead", "app": app}
+        usable = [w for w in windows if is_real(w) and not is_self(w)]
+        # App (owner) name first; a window-title fragment only when no app matches.
+        matches = [w for w in usable if wanted in str(w.get("owner", "")).lower()] or [w for w in usable if wanted in str(w.get("title", "")).lower()]
+        if not matches:
+            return {"kind": "none", "error": f"no visible window for '{app}'", "app": app}
+        return as_window(matches[0], f"requested app '{app}'")
+
+    candidates = [w for w in windows if is_real(w) and not is_self(w)]
+    first_real = next((w for w in windows if is_real(w) or is_self(w)), None)
+    we_are_frontmost = first_real is not None and is_self(first_real)
+    if candidates:
+        return as_window(candidates[0], "frontmost window behind JARVIS" if we_are_frontmost else "frontmost window")
+
+    display = _display_for(displays, pointer) if pointer else (next((d for d in displays if d.get("main")), displays[0]) if displays else None)
+    if not display:
+        return {"kind": "display", "display_index": 1, "bounds": None, "reason": "no window list available", "includes_self": we_are_frontmost}
+    return {"kind": "display", "display_index": display["index"], "bounds": list(display["bounds"]), "reason": "no other window on screen; display under the pointer", "includes_self": we_are_frontmost}
+
+
+def resolve_capture_target(app: Optional[str] = None) -> Dict[str, Any]:
+    """Live selection on this machine (macOS); a plain display elsewhere."""
+    import sys
+
+    if sys.platform != "darwin":
+        return {"kind": "display", "display_index": 1, "bounds": None, "reason": "platform default", "includes_self": False}
+    try:
+        return select_capture_target(list_windows(), list_displays(), pointer_location(), self_window_pids(), app=app)
+    except Exception as exc:  # pragma: no cover - CoreGraphics oddities never block a look
+        return {"kind": "display", "display_index": 1, "bounds": None, "reason": f"window list failed: {exc.__class__.__name__}", "includes_self": False}
+
+
+def capture_screen(dest_dir: "Path", max_edge: int = SIGHT_DEFAULT_MAX_EDGE, target: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Grab the target (a window by id, or a display region) to a JPEG under
+    dest_dir, downscaled to max_edge. argv-only subprocesses; nothing
+    shell-interpolated. No target → the main display."""
     import subprocess
     import sys
     import time
@@ -759,7 +997,13 @@ def capture_screen(dest_dir: "Path", max_edge: int = SIGHT_DEFAULT_MAX_EDGE) -> 
     started = time.monotonic()
     try:
         if sys.platform == "darwin":
-            result = subprocess.run(["screencapture", "-x", "-t", "jpg", str(path)], capture_output=True, text=True, timeout=20)
+            argv = ["screencapture", "-x", "-t", "jpg"]
+            if target and target.get("kind") == "window" and target.get("window_id"):
+                argv += ["-o", "-l", str(int(target["window_id"]))]
+            elif target and target.get("kind") == "display" and target.get("bounds"):
+                bx, by, bw, bh = target["bounds"]
+                argv += ["-R", f"{int(bx)},{int(by)},{int(bw)},{int(bh)}"]
+            result = subprocess.run(argv + [str(path)], capture_output=True, text=True, timeout=20)
             if result.returncode != 0 or not path.exists():
                 return {"ok": False, "error": (result.stderr or "").strip() or "screencapture failed"}
             subprocess.run(["sips", "-Z", str(int(max_edge)), str(path)], capture_output=True, text=True, timeout=20)
@@ -892,8 +1136,9 @@ def _append_look_log(home: "Path", entry: Dict[str, Any]) -> None:
         pass
 
 
-def look_at_screen(home: "Path", config: Dict[str, Any], api_key: str, question: str = "") -> Dict[str, Any]:
-    """The whole look: permission gate → capture → vision → accounting."""
+def look_at_screen(home: "Path", config: Dict[str, Any], api_key: str, question: str = "", app: Optional[str] = None) -> Dict[str, Any]:
+    """The whole look: permission gate → target (never our own window) →
+    capture → vision → accounting. ``app`` = "look at <app>"."""
     import datetime as _dt
     import time
 
@@ -908,10 +1153,16 @@ def look_at_screen(home: "Path", config: Dict[str, Any], api_key: str, question:
         if not granted_now:
             return {"ok": False, "permission": "requested", "error": "Screen Recording permission is not granted"}
     started = time.monotonic()
-    capture = capture_screen(home / "cache" / "sight", sight["max_edge"])
+    target = resolve_capture_target(app)
+    if target.get("kind") == "none":
+        return {"ok": False, "error": target.get("error") or "nothing to capture", "target": target}
+    capture = capture_screen(home / "cache" / "sight", sight["max_edge"], target)
     if not capture.get("ok"):
-        return {"ok": False, "error": capture.get("error") or "capture failed"}
-    analysis = analyze_screen_image(Path(capture["path"]), question, api_key, sight["model"], sight["detail"])
+        return {"ok": False, "error": capture.get("error") or "capture failed", "target": target}
+    scoped_question = (question or "").strip()
+    if target.get("kind") == "window" and target.get("app"):
+        scoped_question = f"(The screenshot is the window of {target['app']}{' — ' + target['title'] if target.get('title') else ''}.) " + (scoped_question or "Describe what is shown and anything that needs attention.")
+    analysis = analyze_screen_image(Path(capture["path"]), scoped_question, api_key, sight["model"], sight["detail"])
     total_ms = int((time.monotonic() - started) * 1000)
     result = {
         "ok": bool(analysis.get("ok")),
@@ -929,6 +1180,7 @@ def look_at_screen(home: "Path", config: Dict[str, Any], api_key: str, question:
         "height": capture.get("height"),
         "bytes": capture.get("bytes"),
         "image_path": capture.get("path"),
+        "target": target,
         "thumbnail": _thumbnail_data_url(Path(capture["path"])),
         "at": _dt.datetime.now().replace(microsecond=0).isoformat(),
     }

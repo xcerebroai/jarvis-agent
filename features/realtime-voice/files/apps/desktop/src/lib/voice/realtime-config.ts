@@ -195,9 +195,11 @@ export function buildInstructions(options: RealtimeSessionConfigOptions = {}): s
   )
 
   lines.push(
+    `CAPABILITY RULE — this overrides everything else: you are the voice of a full agent that has a VISIBLE browser, a terminal, files, skills and API access on this computer. If the full agent could plausibly do something, you DELEGATE it — ${START_BUILD_TOOL_NAME} for integrations, account connections, credentials, or anything with several steps; ${DELEGATE_TASK_TOOL_NAME} for a single job (kind "browser" for website or dashboard work). You never say you can't, you're unable, you don't have access, it isn't possible, or that you are "just a voice assistant". Those phrases are banned for anything the agent can do. The correct sentence is: "I'll put the agent on it — watch the screen." Then call the tool with a faithful, complete goal. Examples that MUST be delegated, never refused: "help me connect my Stripe account to the agent through the API", "walk Stripe's dashboard and get an API key", "sign me up on X", "change this setting in my Google account", "install/configure Y".`,
+    `INTERACTIVE WEBSITE WORK: the agent drives the browser VISIBLY and narrates each step; when it needs the user (a login, a 2FA code, a key), it says exactly what and where. Secrets are pasted into the agent's session, never spoken aloud, never read back. Frame every such goal with that: "use the visible browser, narrate, ask for the key to be pasted in-session".`,
     `To OPEN things instantly: call ${OPEN_APP_TOOL_NAME} when asked to open, launch, or start an application ("open Notes", "launch Safari"). Call ${OPEN_URL_TOOL_NAME} for websites. Both are instant — confirm in a few words once the tool returns.`,
     `To DO WORK: call ${DELEGATE_TASK_TOOL_NAME} when the request is a real job — multi-step work, changes to files or systems, or anything that takes more than a moment. For "research X", "look into X", "find out about X", call it with kind "research"; the agent investigates with its browser and tools while the findings stream on screen. Write the goal fully and self-contained. The tool returns at once: announce in one short line that the task is underway, then stay available — keep answering questions normally while it runs. When a completion update arrives, relay the outcome conversationally: lead with the key findings or the result, a few sentences at most.`,
-    `SAFETY: before delegating anything destructive, irreversible, or costly — deleting things, sending messages or money, bulk changes — first state plainly what is about to happen and get a clear spoken yes. No confirmation, no tool call.`,
+    `SAFETY (narrow): only for destructive, irreversible, or money-moving actions — deleting things, sending messages or payments, bulk changes — state plainly what is about to happen and get a clear spoken yes first. Connecting accounts, reading dashboards, creating or copying API keys, configuring integrations, and installing things are NOT in that class: delegate them directly without a safety confirmation.`,
     `CANCELLING: "stop" only silences your voice; delegated work keeps running. When the user says "cancel that", "abort the task", or similar, call ${CANCEL_TASK_TOOL_NAME}, then confirm the cancellation in a few words.`,
     `Call ${USE_JARVIS_TOOL_NAME} for quick questions that need the agent's private memory, session history, files, or current external facts — cases where the user is waiting on the answer and it should take seconds. For anything longer-running, prefer ${DELEGATE_TASK_TOOL_NAME}.`,
     `Do NOT call the tool for ordinary conversation — greetings, small talk, acknowledgements, clarifying questions, or things you plainly know. Answer those natively and immediately.`,
@@ -375,15 +377,15 @@ export const ACTION_TOOLS = [
     type: 'function',
     name: DELEGATE_TASK_TOOL_NAME,
     description:
-      'Hand real work to the full JARVIS agent: multi-step jobs, research, file or code changes, anything that takes more than a moment. The work runs in the open desktop session while you keep talking. Returns immediately; a completion update arrives later. State the goal fully and self-contained — the agent has no memory of this voice conversation.',
+      'Hand real work to the full JARVIS agent, which has a VISIBLE browser, a terminal, files, skills and API access on this computer: multi-step jobs, research, file or code changes, and interactive website work — navigating a site or dashboard (Stripe, Google, GitHub…), signing in with the user\'s help, changing account settings, creating or copying API keys, connecting a service to the agent. Anything the full agent could do, delegate here (or start_build for multi-step integrations that need credentials) — never say it cannot be done. The work runs visibly in the desktop session while you keep talking; the user watches the screen. Returns immediately; a completion update arrives later. State the goal fully and self-contained — the agent has no memory of this voice conversation.',
     parameters: {
       type: 'object',
       properties: {
         goal: { type: 'string', description: 'Complete, self-contained statement of the job to do.' },
         kind: {
           type: 'string',
-          enum: ['task', 'research'],
-          description: 'Use "research" when the job is to investigate or look something up; otherwise "task".'
+          enum: ['task', 'research', 'browser'],
+          description: 'Use "research" to investigate or look something up; "browser" for interactive website/dashboard work the user will watch (sign-ins, settings, API keys, connecting services); otherwise "task".'
         }
       },
       required: ['goal'],
@@ -409,11 +411,12 @@ export const SIGHT_TOOLS = [
     type: 'function',
     name: LOOK_AT_SCREEN_TOOL_NAME,
     description:
-      'Look at the screen right now: captures the display and analyzes it with a vision model, returning what is visible and the answer to the question. Use for "what is on my screen", "look at this", "read this error", "what does this say", "can you see this". Takes a few seconds. The result states its time and estimated cost — mention them in one short clause after the answer.',
+      'Look at the USER\'s screen right now: captures the frontmost window of the app the user is looking at (never JARVIS\'s own window; the whole display only when nothing else is open) and analyzes it with a vision model. Use for "what is on my screen", "look at this", "read this error", "what does this say", "can you see this". For "look at <app>" (Chrome, Stripe, Notes, the terminal…) pass that app name so its window is captured specifically. Takes a few seconds. The result names what was looked at and states its time and estimated cost — mention them in one short clause after the answer.',
     parameters: {
       type: 'object',
       properties: {
-        question: { type: 'string', description: 'What the user wants to know about the screen. Empty for a general description.' }
+        question: { type: 'string', description: 'What the user wants to know about the screen. Empty for a general description.' },
+        app: { type: 'string', description: 'Optional: the application (or window title fragment) to look at specifically, e.g. "Chrome", "Safari", "Terminal", "Notes".' }
       },
       additionalProperties: false
     }
@@ -432,7 +435,7 @@ export const BUILD_TOOLS = [
     type: 'function',
     name: START_BUILD_TOOL_NAME,
     description:
-      'Start a BUILD: a persistent, named agent session for a real piece of work ("start a build: attach my Stripe account to the agent via API"). The build plans first and asks for what it needs (keys, accounts, decisions), then works visibly in its own session. Use for "start a build", "kick off a build", "begin building X". Returns at once; the plan arrives as an update — relay it and ask the user for the items it needs.',
+      'Start a BUILD: a persistent, named agent session for a real piece of work — integrations, account connections, "connect my Stripe account to the agent through the API", "hook up X", "set up Y", anything with several steps or credentials. The build plans first, asks for what it needs (keys pasted into its session, accounts, decisions), then works visibly — driving the browser on screen and narrating — in its own session. Use for "start a build", "help me connect/set up/integrate X", "get X working with the agent". Returns at once; the plan arrives as an update — relay it and ask the user for the items it needs.',
     parameters: {
       type: 'object',
       properties: {

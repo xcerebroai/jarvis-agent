@@ -439,10 +439,12 @@ function runUseJarvis(session: RealtimeVoiceSession, callId: string, request: st
 /** The one delegated task allowed at a time. Kept module-scope so it survives
  *  voice session renewals and even a spoken "stop" (which only detaches the
  *  narration — the work keeps running until it finishes or is cancelled). */
+type TaskKind = 'browser' | 'research' | 'task'
+
 let activeTask: {
   id: number
   goal: string
-  kind: 'research' | 'task'
+  kind: TaskKind
   turn: AgentTurn
   sessionProbe: number | null
 } | null = null
@@ -464,7 +466,16 @@ function clearTaskProbe(task: NonNullable<typeof activeTask>): void {
  *  work legitimately take minutes. */
 const DELEGATED_TASK_TIMEOUT_MS = 10 * 60 * 1000
 
-function buildTaskPrompt(goal: string, kind: 'research' | 'task'): string {
+function buildTaskPrompt(goal: string, kind: TaskKind): string {
+  if (kind === 'browser') {
+    return [
+      `Interactive browser task delegated from the voice assistant: ${goal}`,
+      '',
+      VISIBLE_BROWSER_RULES,
+      'When finished, end your reply with a 1-3 sentence plain-text summary of the outcome — it will be read aloud.'
+    ].join('\n')
+  }
+
   if (kind === 'research') {
     return [
       `Research task delegated from the voice assistant: ${goal}`,
@@ -478,9 +489,20 @@ function buildTaskPrompt(goal: string, kind: 'research' | 'task'): string {
   return [
     `Task delegated from the voice assistant: ${goal}`,
     '',
+    'If the job involves a website, dashboard, or account: ' + VISIBLE_BROWSER_RULES,
     'When finished, end your reply with a 1-3 sentence plain-text summary of the outcome — it will be read aloud.'
   ].join('\n')
 }
+
+/** The owner watches the screen: the agent works in the VISIBLE browser and
+ *  narrates. Secrets are pasted into the session, never spoken. Shared by
+ *  browser tasks, website-touching tasks, and build sessions. */
+const VISIBLE_BROWSER_RULES = [
+  'Use the VISIBLE in-app browser (browser_navigate, browser_snapshot, browser_click, browser_type, browser_vision) so the owner can watch every step on screen — never a headless fetch for pages they should see.',
+  'Narrate as you go: before each meaningful step, one short line saying what you are doing and what you see (these lines are relayed aloud).',
+  'When you need the owner — a login, a 2FA code, a choice, an API key — stop and say exactly what you need and where: ask them to PASTE keys into this session (or point you at a file/env var). Never ask for a secret to be spoken, never echo one back.',
+  'Do not claim inability: if a page blocks you, say what blocked you and what the owner can do.'
+].join('\n')
 
 /** Speak a completed/cancelled task's outcome through whatever voice session is
  *  live NOW — the one that started the task may have been renewed or ended. */
@@ -567,7 +589,7 @@ function normalizeUrl(raw: string): null | string {
   return /^[\w-]+(\.[\w-]+)+([/?#]\S*)?$/.test(trimmed) ? `https://${trimmed}` : null
 }
 
-async function startDelegatedTask(session: RealtimeVoiceSession, callId: string, goal: string, kind: 'research' | 'task'): Promise<void> {
+async function startDelegatedTask(session: RealtimeVoiceSession, callId: string, goal: string, kind: TaskKind): Promise<void> {
   if (activeTask) {
     session.sendToolOutput(
       callId,
@@ -635,7 +657,7 @@ async function startDelegatedTask(session: RealtimeVoiceSession, callId: string,
 
   session.sendToolOutput(
     callId,
-    `Task ${id} started (${kind}): ${goal}. It is running in the open desktop session — announce that in one short line and stay available. A completion update will arrive here when it finishes.`
+    `Task ${id} started (${kind}): ${goal}. It is running visibly in the open desktop session — say "I'll put the agent on it — watch the screen." (or similar, one line) and stay available. A completion update will arrive here when it finishes.`
   )
 }
 
@@ -719,7 +741,7 @@ function runActionTool(session: RealtimeVoiceSession, name: string, callId: stri
       return
     }
 
-    void startDelegatedTask(session, callId, goal, args.kind === 'research' ? 'research' : 'task')
+    void startDelegatedTask(session, callId, goal, args.kind === 'research' ? 'research' : args.kind === 'browser' ? 'browser' : 'task')
 
     return
   }
@@ -801,11 +823,12 @@ function formatLookCost(cost: null | number | undefined): string {
 
 function runLookAtScreen(session: RealtimeVoiceSession, callId: string, args: Record<string, unknown>): void {
   const question = typeof args.question === 'string' ? args.question.trim() : ''
+  const app = typeof args.app === 'string' ? args.app.trim() : ''
   const startedAt = Date.now()
 
-  emitGatewayEvent({ payload: { question, startedAt }, type: 'voice.sight.started' })
+  emitGatewayEvent({ payload: { app, question, startedAt }, type: 'voice.sight.started' })
 
-  void lookAtScreen({ question })
+  void lookAtScreen(app ? { app, question } : { question })
     .then(result => {
       if (!result.ok) {
         emitGatewayEvent({ payload: { error: result.error ?? 'look failed', permission: result.permission ?? null }, type: 'voice.sight.failed' })
@@ -820,16 +843,26 @@ function runLookAtScreen(session: RealtimeVoiceSession, callId: string, args: Re
           return
         }
 
+        if (result.target?.kind === 'none') {
+          session.sendToolOutput(callId, `${result.error ?? 'That app has no visible window'}. Tell the user, and offer to look at the frontmost window instead.`)
+
+          return
+        }
+
         session.sendToolOutput(callId, `The look failed (${result.error ?? 'unknown error'}). Tell the user briefly and offer to retry.`)
 
         return
       }
 
+      const target = result.target ?? null
+      const lookedAt = target?.kind === 'window'
+        ? `${target.app || 'the frontmost window'}${target.title ? ` — "${target.title}"` : ''}`
+        : `the ${target?.includes_self ? 'full display (JARVIS was the only window open, so it is in the shot)' : 'full display'}`
       const latency = result.latency_ms ?? Date.now() - startedAt
       const seconds = (latency / 1000).toFixed(1)
       const cost = formatLookCost(result.cost_usd)
 
-      recordActivity(`looked at the screen (${seconds}s, ${cost}): ${(result.answer ?? '').slice(0, 90)}`)
+      recordActivity(`looked at ${lookedAt} (${seconds}s, ${cost}): ${(result.answer ?? '').slice(0, 90)}`)
       emitGatewayEvent({
         payload: {
           analyzeMs: result.analyze_ms ?? null,
@@ -841,6 +874,7 @@ function runLookAtScreen(session: RealtimeVoiceSession, callId: string, args: Re
           latencyMs: latency,
           model: result.model ?? null,
           question,
+          target,
           thumbnail: result.thumbnail ?? '',
           usage: result.usage ?? null,
           width: result.width ?? null
@@ -849,7 +883,7 @@ function runLookAtScreen(session: RealtimeVoiceSession, callId: string, args: Re
       })
       session.sendToolOutput(
         callId,
-        `Screen analysis: ${result.answer}\n\n(Look took ${seconds} seconds; ${cost} at list price via ${result.model ?? 'the vision model'}.) Relay the answer conversationally, then add one short clause with that time and cost.`
+        `Looked at ${lookedAt}. Analysis: ${result.answer}\n\n(Look took ${seconds} seconds; ${cost} at list price via ${result.model ?? 'the vision model'}.) Relay the answer conversationally — name what was looked at if it is not obvious — then add one short clause with that time and cost.`
       )
     })
     .catch(error => {
@@ -1013,6 +1047,7 @@ function buildKickoffPrompt(name: string, goal: string): string {
     '1. FIRST reply (now): a concise plan — 3 to 6 numbered steps — then an explicit list of what you need from the owner before proceeding (credentials, account access, decisions, files). Do not start irreversible work yet.',
     '2. Secrets: ask the owner to paste keys directly into this session (or point you at a file / env var). Never ask for a secret to be spoken aloud and never echo one back.',
     '3. Once you have what you need, do the work here, step by step, visibly — real tool calls, real verification. Ask when genuinely blocked.',
+    '   ' + VISIBLE_BROWSER_RULES.replace(/\n/g, '\n   '),
     '4. Every reply MUST end with one line: "STATUS: <one or two plain sentences — what is done, what is next, what you need>". That line is read aloud.',
     '5. When the goal is fully achieved and verified, end with "STATUS: BUILD COMPLETE — <one sentence>".'
   ].join('\n')

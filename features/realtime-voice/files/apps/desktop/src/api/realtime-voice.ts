@@ -188,14 +188,28 @@ export interface RealtimeLookResponse {
   image_path?: string
   thumbnail?: string
   at?: string
+  /** What was captured: the frontmost non-JARVIS window (or the requested
+   *  app's), else the display under the pointer. `includes_self` is true only
+   *  on a display fallback with JARVIS in the shot — reported, never hidden. */
+  target?: {
+    kind: 'display' | 'none' | 'window'
+    app?: string
+    title?: string
+    window_id?: number
+    display_index?: number
+    bounds?: null | number[]
+    reason?: string
+    includes_self?: boolean
+    error?: string
+  }
 }
 
-export function lookAtScreen(options: { question?: string } = {}): Promise<RealtimeLookResponse> {
+export function lookAtScreen(options: { question?: string; app?: string } = {}): Promise<RealtimeLookResponse> {
   return hermesApi<RealtimeLookResponse>({
     ...profileScoped(),
     path: '/api/audio/realtime/look',
     method: 'POST',
-    body: { question: options.question ?? '' },
+    body: { question: options.question ?? '', ...(options.app ? { app: options.app } : {}) },
     // capture (~0.2s) + one vision round-trip; the server bounds the model
     // call at 60s.
     timeoutMs: 75_000

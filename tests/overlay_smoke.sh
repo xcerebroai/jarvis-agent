@@ -463,7 +463,7 @@ if [ -f "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" ]; then
   chk "real amplitude feed consumed"          "grep -q \"onEvent('voice.amplitude'\" '$HUD'"
   chk "synthesized fallback present"          "grep -q 'createAmplitudeSource' '$HUD' && grep -q 'kick' '$HUD'"
   chk "orb click / Esc hard-kill wired"       "grep -q 'jarvis:voice-kill' '$HUD' && grep -q \"key === 'Escape'\" '$HUD'"
-  chk "panels materialize on display events"  "grep -q \"onEvent('display.projects'\" '$HUD' && grep -q 'ProjectCard' '$HUD'"
+  chk "panels materialize on display events"  "grep -q \"onEvent('display.projects'\" '$HUD' && grep -q 'ProjectPlate' '$HUD' && grep -q 'function Plate(' '$HUD'"
   chk "orb action grammar present"            "grep -q \"kind: 'gather'\" '$HUD' && grep -q \"kind: 'sweep'\" '$HUD'"
   chk "task plate streams delegated work"     "grep -q \"onEvent('voice.task.started'\" '$HUD' && grep -q 'RESEARCH OPERATION' '$HUD'"
   chk "task plate settles on done/cancel"     "grep -q \"onEvent('voice.task.done'\" '$HUD' && grep -q \"onEvent('voice.task.cancelled'\" '$HUD'"

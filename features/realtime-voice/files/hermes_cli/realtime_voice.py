@@ -126,8 +126,17 @@ def read_local_additions(index_path: "Path") -> List[Dict[str, Any]]:
         return []
 
 
-def create_local_project(index_path: "Path", name: str, goal: str = "", tasks: Optional[List[str]] = None) -> Dict[str, Any]:
-    """Durable minimal write path: append to local-additions.json atomically."""
+def create_local_project(
+    index_path: "Path",
+    name: str,
+    goal: str = "",
+    tasks: Optional[List[str]] = None,
+    source: str = "voice-intake",
+    build_id: Optional[str] = None,
+    status: str = "Planning",
+) -> Dict[str, Any]:
+    """Durable minimal write path: append to local-additions.json atomically.
+    ``build_id`` links a board entry to its persistent build session."""
     import json as _json
     import os as _os
     import tempfile as _tempfile
@@ -145,8 +154,12 @@ def create_local_project(index_path: "Path", name: str, goal: str = "", tasks: O
         "notes": (goal or "").strip()[:500],
         "nextAction": (tasks or [""])[0][:240] if tasks else "",
         "tasks": [{"done": False, "label": str(t)[:160]} for t in (tasks or [])[:12]],
-        "source": "voice-intake",
+        "source": (source or "voice-intake")[:40],
     }
+    if status and status != "Planning":
+        row["status"] = str(status)[:40]
+    if build_id:
+        row["build_id"] = str(build_id)[:80]
     existing.append(row)
     payload = _json.dumps({"projects": existing}, ensure_ascii=False, indent=2) + "\n"
     dest = _local_additions_path(index_path)
@@ -189,8 +202,15 @@ def build_project_review(
     status_filter: Optional[str] = None,
     limit: int = 5,
     detail: bool = False,
+    index_path: Optional["Path"] = None,
+    today: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Compact, deterministic review of a generic project index.
+
+    P5.1: every row also carries the enriched schema — normalized priority,
+    deadline (+days), staleness_days, revenue_relevance — with the owner's
+    voice overrides (``local-overrides.json`` beside the index) applied. Pass
+    ``index_path`` to enable the overrides + staleness ledger.
 
     Only status/priority/note/next-action/progress/target are surfaced; any
     other stored field (long descriptions, links, private notes) is left in the
@@ -202,15 +222,18 @@ def build_project_review(
 
     rows: List[Dict[str, Any]] = []
     counts: Dict[str, int] = {}
+    source_rows = _project_rows(data)
+    overrides, ledger = load_enrichment(index_path, source_rows, today)
 
-    for project in _project_rows(data):
+    for raw_project in source_rows:
+        project = enrich_project(raw_project, overrides, ledger, today)
         status = str(_first(project, "status", default="?")) or "?"
         counts[status] = counts.get(status, 0) + 1
         tasks = project.get("tasks") if isinstance(project.get("tasks"), list) else []
         row = {
             "name": str(_first(project, "name", "project", "title", default="?")),
             "status": status,
-            "priority": str(_first(project, "priority", default="Normal")),
+            "priority": normalize_priority(_first(project, "priority", default="Normal")),
             # Note is drawn only from explicit summary fields — never from a
             # free-form "notes"/"description" body, which stays out of the review.
             "note": str(_first(project, "note", "blocker", default=""))[:240],
@@ -218,6 +241,14 @@ def build_project_review(
             "tasks_done": sum(1 for task in tasks if isinstance(task, dict) and task.get("done")),
             "tasks_total": len(tasks),
             "target_end": str(_first(project, "target_end", "targetEnd", default="")),
+            # P5.1 enriched schema (voice-editable via set_project_override)
+            "deadline": project.get("deadline", ""),
+            "days_to_deadline": project.get("days_to_deadline"),
+            "staleness_days": project.get("staleness_days"),
+            "revenue_relevance": project.get("revenue_relevance", "Unknown"),
+            "revenue_outstanding": project.get("revenue_outstanding", 0),
+            "overridden": project.get("overridden", []),
+            "build_id": str(project.get("build_id") or ""),
         }
         if detail:
             row.update({
@@ -242,7 +273,13 @@ def build_project_review(
             continue
         rows.append(row)
 
-    rows.sort(key=lambda row: (_PRIORITY_RANK.get(row["priority"].lower(), 9), row["name"].lower()))
+    rows.sort(
+        key=lambda row: (
+            _PRIORITY_RANK.get(row["priority"].lower(), 9),
+            row["days_to_deadline"] if isinstance(row.get("days_to_deadline"), int) else 10_000,
+            row["name"].lower(),
+        )
+    )
 
     return {
         "ok": True,
@@ -293,3 +330,704 @@ def open_system_app(name: str) -> Dict[str, Any]:
         return {"ok": True}
     except Exception as exc:  # pragma: no cover - platform-dependent failures
         return {"ok": False, "error": str(exc)}
+
+
+# =============================================================================
+# P5.1 — PRIORITY REASONING: enriched index schema + voice-editable overrides
+# =============================================================================
+# The synced index is overwritten wholesale on every pull, so anything the
+# owner says by voice ("mark Harris high priority") lives in a sidecar
+# ``local-overrides.json`` beside the index and is merged on every read. The
+# enrichment itself (normalized priority, deadline, staleness, revenue
+# relevance) is computed on the read path from whatever the source carries,
+# so it is correct even when the sync does not write those fields itself.
+
+LOCAL_OVERRIDES_NAME = "local-overrides.json"
+STALENESS_LEDGER_NAME = ".staleness-ledger.json"
+
+# Fields the voice may set. Anything else is refused (never a free-form write).
+OVERRIDE_FIELDS = ("priority", "deadline", "revenue_relevance", "note", "next_action", "status")
+
+_PRIORITY_CANON = {
+    "urgent": "Urgent", "critical": "Urgent", "top": "Urgent", "p0": "Urgent",
+    "high": "High", "p1": "High", "important": "High",
+    "normal": "Normal", "medium": "Normal", "default": "Normal", "p2": "Normal",
+    "low": "Low", "p3": "Low", "later": "Low", "someday": "Low",
+}
+_REVENUE_CANON = {"high": "High", "medium": "Medium", "med": "Medium", "low": "Low", "none": "Low", "unknown": "Unknown"}
+
+
+def normalize_priority(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return _PRIORITY_CANON.get(text, "Normal" if not text else str(value).strip().title())
+
+
+def normalize_revenue_relevance(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return _REVENUE_CANON.get(text, "Unknown" if not text else str(value).strip().title())
+
+
+def _atomic_write_json(dest: "Path", payload: Any) -> None:
+    import json as _json
+    import os as _os
+    import tempfile as _tempfile
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = _tempfile.mkstemp(prefix=".rv-", suffix=".json", dir=str(dest.parent))
+    try:
+        with _os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(_json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        _os.replace(tmp, str(dest))
+    finally:
+        if _os.path.exists(tmp):
+            _os.unlink(tmp)
+
+
+def _read_json(path: "Path", default: Any) -> Any:
+    try:
+        import json as _json
+
+        return _json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return default
+
+
+def project_key(project: Dict[str, Any]) -> str:
+    """Stable per-project key: the source id when present, else the name."""
+    pid = str(project.get("id") or "").strip()
+    return pid if pid else str(_first(project, "name", "project", "title", default="")).strip().lower()
+
+
+def read_local_overrides(index_path: "Path") -> Dict[str, Dict[str, Any]]:
+    raw = _read_json(index_path.parent / LOCAL_OVERRIDES_NAME, {})
+    rows = raw.get("overrides") if isinstance(raw, dict) else None
+    return {str(k): v for k, v in rows.items() if isinstance(v, dict)} if isinstance(rows, dict) else {}
+
+
+def resolve_project(rows: List[Dict[str, Any]], reference: str) -> Optional[Dict[str, Any]]:
+    """Match a spoken reference to one project: exact id, exact name, then a
+    unique substring / token match. Returns None when nothing (or more than
+    one thing) matches — the caller asks aloud rather than guessing."""
+    ref = (reference or "").strip().lower()
+    if not ref:
+        return None
+    names = [(project, str(_first(project, "name", "project", "title", default="")).strip()) for project in rows]
+    for project, name in names:
+        if str(project.get("id") or "").strip().lower() == ref or name.lower() == ref:
+            return project
+    partial = [project for project, name in names if ref in name.lower()]
+    if len(partial) == 1:
+        return partial[0]
+    # The owner often names the CLIENT ("mark Harris high priority"): a unique
+    # client/company match counts too.
+    if not partial:
+        by_client = [
+            project for project, _name in names
+            if ref in str(_first(project, "client_name", "client", "company", default="")).lower()
+        ]
+        if len(by_client) == 1:
+            return by_client[0]
+    tokens = [t for t in ref.replace("-", " ").split() if len(t) > 2]
+    if tokens:
+        scored = []
+        for project, name in names:
+            lowered = name.lower()
+            hits = sum(1 for t in tokens if t in lowered)
+            if hits:
+                scored.append((hits, project))
+        if scored:
+            scored.sort(key=lambda item: -item[0])
+            if len(scored) == 1 or scored[0][0] > scored[1][0]:
+                return scored[0][1]
+    return None
+
+
+def set_project_override(index_path: "Path", rows: List[Dict[str, Any]], reference: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+    """Voice edit: persist allowed fields for one resolved project. Raises
+    ValueError on an unresolvable reference or a disallowed field."""
+    import datetime as _dt
+
+    project = resolve_project(rows, reference)
+    if project is None:
+        raise ValueError(f"no single project matches '{reference}'")
+    clean: Dict[str, Any] = {}
+    for key, value in (fields or {}).items():
+        if key not in OVERRIDE_FIELDS:
+            raise ValueError(f"field '{key}' is not voice-editable")
+        text = str(value or "").strip()
+        if not text:
+            continue
+        if key == "priority":
+            text = normalize_priority(text)
+        elif key == "revenue_relevance":
+            text = normalize_revenue_relevance(text)
+        clean[key] = text[:240]
+    if not clean:
+        raise ValueError("no field values given")
+    key = project_key(project)
+    overrides = read_local_overrides(index_path)
+    current = dict(overrides.get(key) or {})
+    current.update(clean)
+    current["updated"] = _dt.datetime.now().replace(microsecond=0).isoformat()
+    current["name"] = str(_first(project, "name", "project", "title", default=""))
+    overrides[key] = current
+    _atomic_write_json(index_path.parent / LOCAL_OVERRIDES_NAME, {"overrides": overrides})
+    return {"key": key, "name": current["name"], "fields": clean}
+
+
+def _fingerprint(project: Dict[str, Any]) -> str:
+    import hashlib as _hashlib
+    import json as _json
+
+    material = {
+        "status": project.get("status"),
+        "tasks": project.get("tasks"),
+        "next": _first(project, "next_action", "nextAction", default=""),
+        "blocker": _first(project, "note", "blocker", default=""),
+        "notes": _first(project, "notes", "description", default=""),
+        "payment": project.get("payment"),
+        "target": _first(project, "target_end", "targetEnd", "deadline", default=""),
+    }
+    return _hashlib.sha1(_json.dumps(material, sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+
+
+def update_staleness_ledger(index_path: "Path", rows: List[Dict[str, Any]], now: Optional[str] = None) -> Dict[str, Dict[str, str]]:
+    """Staleness = days since a project's content last changed. The source has
+    no per-project timestamp, so the read path keeps a fingerprint ledger and
+    dates each change itself. First sighting counts from the day it was seen."""
+    import datetime as _dt
+
+    stamp = now or _dt.date.today().isoformat()
+    ledger_path = index_path.parent / STALENESS_LEDGER_NAME
+    ledger = _read_json(ledger_path, {})
+    ledger = ledger if isinstance(ledger, dict) else {}
+    changed = False
+    for project in rows:
+        key = project_key(project)
+        if not key:
+            continue
+        fp = _fingerprint(project)
+        entry = ledger.get(key)
+        if not isinstance(entry, dict) or entry.get("fp") != fp:
+            ledger[key] = {"fp": fp, "changed_at": stamp}
+            changed = True
+    if changed:
+        try:
+            _atomic_write_json(ledger_path, ledger)
+        except OSError:
+            pass
+    return ledger
+
+
+def _days_between(later: str, earlier: str) -> Optional[int]:
+    import datetime as _dt
+
+    try:
+        a = _dt.date.fromisoformat(str(later)[:10])
+        b = _dt.date.fromisoformat(str(earlier)[:10])
+    except ValueError:
+        return None
+    return (a - b).days
+
+
+def _derive_revenue(project: Dict[str, Any]) -> Dict[str, Any]:
+    payment = project.get("payment") if isinstance(project.get("payment"), dict) else {}
+    try:
+        total = float(payment.get("total") or 0)
+        paid = float(payment.get("paid") or 0)
+    except (TypeError, ValueError):
+        total, paid = 0.0, 0.0
+    outstanding = max(0.0, total - paid)
+    pay_status = str(payment.get("status") or "").strip().lower()
+    status = str(project.get("status") or "").strip().lower()
+    if status == "payment follow-up" or pay_status in ("overdue", "unpaid", "pending", "follow-up", "partial"):
+        relevance = "High"
+    elif outstanding >= 1000:
+        relevance = "High"
+    elif outstanding > 0:
+        relevance = "Medium"
+    elif total > 0:
+        relevance = "Low"  # paid in full — no money at stake right now
+    else:
+        relevance = "Unknown"
+    return {"revenue_relevance": relevance, "revenue_outstanding": round(outstanding, 2), "revenue_total": round(total, 2)}
+
+
+def enrich_project(project: Dict[str, Any], overrides: Dict[str, Dict[str, Any]], ledger: Dict[str, Dict[str, str]], today: Optional[str] = None) -> Dict[str, Any]:
+    """The enriched schema for one project: normalized priority, deadline,
+    days_to_deadline, staleness_days, revenue relevance — with voice overrides
+    applied on top of whatever the source or the sync wrote."""
+    import datetime as _dt
+
+    stamp = today or _dt.date.today().isoformat()
+    key = project_key(project)
+    override = overrides.get(key) or {}
+    merged = dict(project)
+    for field in OVERRIDE_FIELDS:
+        if override.get(field):
+            merged[field] = override[field]
+    deadline = str(_first(merged, "deadline", "target_end", "targetEnd", default="")).strip()[:10]
+    revenue = _derive_revenue(merged)
+    if override.get("revenue_relevance"):
+        revenue["revenue_relevance"] = normalize_revenue_relevance(override["revenue_relevance"])
+    changed_at = (ledger.get(key) or {}).get("changed_at") if key else None
+    enriched = {
+        "priority": normalize_priority(_first(merged, "priority", default="Normal")),
+        "deadline": deadline,
+        "days_to_deadline": _days_between(deadline, stamp) if deadline else None,
+        "staleness_days": _days_between(stamp, changed_at) if changed_at else None,
+        "overridden": sorted(k for k in OVERRIDE_FIELDS if override.get(k)),
+        **revenue,
+    }
+    return {**merged, **enriched}
+
+
+def load_enrichment(index_path: Optional["Path"], rows: List[Dict[str, Any]], today: Optional[str] = None):
+    """(overrides, ledger) for an index path; empty when no index is configured."""
+    if index_path is None:
+        return {}, {}
+    return read_local_overrides(index_path), update_staleness_ledger(index_path, rows, today)
+
+
+_REASONING_MAX_ROWS = 80
+
+
+def build_reasoning_context(data: Any, index_path: Optional["Path"] = None, today: Optional[str] = None) -> Dict[str, Any]:
+    """The full enriched board, compact, for the judgment bridge to the full
+    agent. One line per project — the model ranks; this only informs."""
+    rows = _project_rows(data)
+    overrides, ledger = load_enrichment(index_path, rows, today)
+    lines: List[str] = []
+    projects: List[Dict[str, Any]] = []
+    for project in rows[:_REASONING_MAX_ROWS]:
+        e = enrich_project(project, overrides, ledger, today)
+        tasks = e.get("tasks") if isinstance(e.get("tasks"), list) else []
+        done = sum(1 for t in tasks if isinstance(t, dict) and t.get("done"))
+        name = str(_first(e, "name", "project", "title", default="?"))
+        compact = {
+            "name": name,
+            "status": str(e.get("status") or "?"),
+            "priority": e["priority"],
+            "deadline": e["deadline"],
+            "days_to_deadline": e["days_to_deadline"],
+            "staleness_days": e["staleness_days"],
+            "revenue_relevance": e["revenue_relevance"],
+            "revenue_outstanding": e["revenue_outstanding"],
+            "tasks": f"{done}/{len(tasks)}",
+            "blocker": str(_first(e, "note", "blocker", default=""))[:140],
+            "next_action": str(_first(e, "next_action", "nextAction", default=""))[:140],
+            "client": str(_first(e, "client_name", "client", "company", default=""))[:60],
+        }
+        projects.append(compact)
+        bits = [
+            f"{name} [{compact['status']}, {compact['priority']} priority",
+            f"deadline {compact['deadline'] or 'none'}" + (f" ({compact['days_to_deadline']:+d}d)" if compact["days_to_deadline"] is not None else ""),
+            f"stale {compact['staleness_days']}d" if compact["staleness_days"] is not None else "stale ?",
+            f"revenue {compact['revenue_relevance']}" + (f" ${compact['revenue_outstanding']:.0f} outstanding" if compact["revenue_outstanding"] else ""),
+            f"tasks {compact['tasks']}]",
+        ]
+        line = ", ".join(bits)
+        if compact["blocker"]:
+            line += f" blocker: {compact['blocker']}"
+        if compact["next_action"]:
+            line += f" next: {compact['next_action']}"
+        lines.append(line)
+    return {
+        "ok": True,
+        "updated": _index_updated(data),
+        "today": today or __import__("datetime").date.today().isoformat(),
+        "total_projects": len(rows),
+        "truncated": max(0, len(rows) - _REASONING_MAX_ROWS),
+        "projects": projects,
+        "text": "\n".join(lines),
+    }
+
+
+# =============================================================================
+# P5.1 — SIGHT: on-demand screen capture → vision model, with honest accounting
+# =============================================================================
+# macOS capture uses the system `screencapture` (argv-only), gated by the
+# Screen Recording TCC check (CGPreflightScreenCaptureAccess). Without the
+# grant macOS silently returns a wallpaper-only frame, so the preflight is
+# what makes the permission flow truthful: not granted → request the grant,
+# open the Settings pane, and tell the voice layer instead of "seeing" nothing.
+
+SIGHT_DEFAULT_MODEL = "gpt-4.1-mini"
+SIGHT_DEFAULT_MAX_EDGE = 1600
+# Published list prices, USD per 1M tokens (input, output), for the estimate.
+# The estimate is labelled as such; it is never presented as a billed amount.
+SIGHT_LIST_PRICES_PER_M = {
+    "gpt-4.1-mini": (0.40, 1.60),
+    "gpt-4.1-nano": (0.10, 0.40),
+    "gpt-4.1": (2.00, 8.00),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-4o": (2.50, 10.00),
+    "gpt-5-nano": (0.05, 0.40),
+    "gpt-5-mini": (0.25, 2.00),
+    "gpt-5": (1.25, 10.00),
+}
+_SIGHT_SYSTEM_PROMPT = (
+    "You are the vision core of a desktop voice assistant. You are shown one "
+    "screenshot of the user's screen. Answer the question about what is "
+    "visible, concretely and briefly (under 90 words), in plain spoken prose: "
+    "name the apps/windows, the key text, numbers, and any errors. If the "
+    "question is empty, describe what the user is looking at and anything that "
+    "needs attention. Never guess at content that is not visible."
+)
+
+
+def resolve_sight_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    section = _voice_realtime_section(config)
+    sight = section.get("sight") if isinstance(section.get("sight"), dict) else {}
+    try:
+        max_edge = int(sight.get("max_edge") or SIGHT_DEFAULT_MAX_EDGE)
+    except (TypeError, ValueError):
+        max_edge = SIGHT_DEFAULT_MAX_EDGE
+    return {
+        "enabled": sight.get("enabled", True) is not False,
+        "model": _config_str(sight, "model", SIGHT_DEFAULT_MODEL),
+        "max_edge": max(640, min(max_edge, 3200)),
+        "detail": _config_str(sight, "detail", "auto"),
+    }
+
+
+def estimate_cost_usd(model: str, usage: Optional[Dict[str, Any]]) -> Optional[float]:
+    """List-price estimate from a usage block; None when the model is unpriced."""
+    prices = SIGHT_LIST_PRICES_PER_M.get((model or "").strip().lower())
+    if not prices or not isinstance(usage, dict):
+        return None
+    try:
+        prompt_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        completion_tokens = int(usage.get("completion_tokens") or usage.get("output_tokens") or 0)
+    except (TypeError, ValueError):
+        return None
+    return round((prompt_tokens * prices[0] + completion_tokens * prices[1]) / 1_000_000, 6)
+
+
+def screen_capture_access() -> Dict[str, Any]:
+    """macOS Screen Recording grant state for THIS process (TCC attributes a
+    spawned `screencapture` to the responsible app — the desktop bundle)."""
+    import sys
+
+    if sys.platform != "darwin":
+        return {"platform": sys.platform, "granted": True, "checked": False}
+    try:
+        import ctypes
+
+        cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        cg.CGPreflightScreenCaptureAccess.restype = ctypes.c_bool
+        return {"platform": "darwin", "granted": bool(cg.CGPreflightScreenCaptureAccess()), "checked": True}
+    except Exception as exc:  # pragma: no cover - CoreGraphics missing
+        return {"platform": "darwin", "granted": False, "checked": False, "error": str(exc)}
+
+
+def request_screen_capture_access() -> bool:
+    """Ask macOS for the Screen Recording grant (system dialog, once per app)
+    and open the Privacy pane so the owner can flip the switch. Returns the
+    grant state after the request (usually still False until the toggle)."""
+    import subprocess
+    import sys
+
+    if sys.platform != "darwin":
+        return True
+    granted = False
+    try:
+        import ctypes
+
+        cg = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics")
+        cg.CGRequestScreenCaptureAccess.restype = ctypes.c_bool
+        granted = bool(cg.CGRequestScreenCaptureAccess())
+    except Exception:
+        granted = False
+    if not granted:
+        try:
+            subprocess.run(
+                ["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"],
+                capture_output=True, timeout=10,
+            )
+        except Exception:
+            pass
+    return granted
+
+
+def capture_screen(dest_dir: "Path", max_edge: int = SIGHT_DEFAULT_MAX_EDGE) -> Dict[str, Any]:
+    """Grab the main display to a JPEG under dest_dir, downscaled to max_edge.
+    argv-only subprocesses; nothing shell-interpolated."""
+    import subprocess
+    import sys
+    import time
+
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    path = dest_dir / "last-look.jpg"
+    started = time.monotonic()
+    try:
+        if sys.platform == "darwin":
+            result = subprocess.run(["screencapture", "-x", "-t", "jpg", str(path)], capture_output=True, text=True, timeout=20)
+            if result.returncode != 0 or not path.exists():
+                return {"ok": False, "error": (result.stderr or "").strip() or "screencapture failed"}
+            subprocess.run(["sips", "-Z", str(int(max_edge)), str(path)], capture_output=True, text=True, timeout=20)
+            dims = subprocess.run(["sips", "-g", "pixelWidth", "-g", "pixelHeight", str(path)], capture_output=True, text=True, timeout=20)
+            width = height = 0
+            for line in (dims.stdout or "").splitlines():
+                if "pixelWidth" in line:
+                    width = int(line.split(":")[-1].strip() or 0)
+                elif "pixelHeight" in line:
+                    height = int(line.split(":")[-1].strip() or 0)
+        elif sys.platform.startswith("win"):
+            script = (
+                "Add-Type -AssemblyName System.Windows.Forms,System.Drawing;"
+                "$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds;"
+                "$bmp=New-Object System.Drawing.Bitmap $b.Width,$b.Height;"
+                "$g=[System.Drawing.Graphics]::FromImage($bmp);$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size);"
+                "$bmp.Save($args[0],[System.Drawing.Imaging.ImageFormat]::Jpeg);Write-Output \"$($b.Width)x$($b.Height)\""
+            )
+            result = subprocess.run(["powershell", "-NoProfile", "-Command", script, str(path)], capture_output=True, text=True, timeout=30)
+            if result.returncode != 0 or not path.exists():
+                return {"ok": False, "error": (result.stderr or "").strip() or "screen capture failed"}
+            try:
+                width, height = (int(v) for v in (result.stdout or "0x0").strip().split("x"))
+            except ValueError:
+                width = height = 0
+        else:
+            return {"ok": False, "error": f"screen capture is not supported on {sys.platform}"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    return {
+        "ok": True,
+        "path": str(path),
+        "width": width,
+        "height": height,
+        "bytes": path.stat().st_size,
+        "capture_ms": int((time.monotonic() - started) * 1000),
+    }
+
+
+def analyze_screen_image(path: "Path", question: str, api_key: str, model: str = SIGHT_DEFAULT_MODEL, detail: str = "auto", timeout_s: int = 60) -> Dict[str, Any]:
+    """One vision call against OpenAI chat completions with the JPEG inlined.
+    Returns the answer plus the provider's usage block, the wall-clock latency,
+    and a list-price cost estimate — the numbers the voice reports honestly."""
+    import base64
+    import json as _json
+    import time
+    import urllib.error
+    import urllib.request
+
+    started = time.monotonic()
+    try:
+        data = base64.b64encode(path.read_bytes()).decode("ascii")
+    except OSError as exc:
+        return {"ok": False, "error": f"could not read capture: {exc}"}
+    prompt = (question or "").strip() or "Describe what is on screen and anything that needs attention."
+    body = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _SIGHT_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{data}", "detail": detail or "auto"}},
+                ],
+            },
+        ],
+        "max_completion_tokens": 400,
+    }
+    request = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=_json.dumps(body).encode("utf-8"),
+        method="POST",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_s) as response:
+            payload = _json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return {"ok": False, "error": f"vision model rejected the request (HTTP {exc.code})", "latency_ms": int((time.monotonic() - started) * 1000)}
+    except Exception as exc:
+        return {"ok": False, "error": f"vision call failed: {exc.__class__.__name__}", "latency_ms": int((time.monotonic() - started) * 1000)}
+    latency_ms = int((time.monotonic() - started) * 1000)
+    answer = ""
+    try:
+        answer = str(payload["choices"][0]["message"]["content"] or "").strip()
+    except (KeyError, IndexError, TypeError):
+        answer = ""
+    usage = payload.get("usage") if isinstance(payload, dict) and isinstance(payload.get("usage"), dict) else None
+    return {
+        "ok": bool(answer),
+        "answer": answer,
+        "error": None if answer else "the vision model returned no answer",
+        "model": str(payload.get("model") or model) if isinstance(payload, dict) else model,
+        "usage": {k: usage.get(k) for k in ("prompt_tokens", "completion_tokens", "total_tokens")} if usage else None,
+        "latency_ms": latency_ms,
+        "cost_usd": estimate_cost_usd(model, usage),
+        "cost_basis": "list-price estimate" if estimate_cost_usd(model, usage) is not None else "unpriced model",
+    }
+
+
+def _thumbnail_data_url(path: "Path", max_edge: int = 480) -> str:
+    """Small JPEG data URL of a capture for the cockpit plate (macOS sips;
+    empty string elsewhere or on failure — the plate simply omits it)."""
+    import base64
+    import subprocess
+    import sys
+
+    try:
+        if sys.platform != "darwin":
+            return ""
+        thumb = path.with_name("last-look-thumb.jpg")
+        subprocess.run(["sips", "-Z", str(max_edge), str(path), "--out", str(thumb)], capture_output=True, text=True, timeout=20)
+        if not thumb.exists() or thumb.stat().st_size > 400_000:
+            return ""
+        return "data:image/jpeg;base64," + base64.b64encode(thumb.read_bytes()).decode("ascii")
+    except Exception:
+        return ""
+
+
+def _append_look_log(home: "Path", entry: Dict[str, Any]) -> None:
+    import json as _json
+
+    try:
+        log_dir = home / "cache" / "sight"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with (log_dir / "looks.jsonl").open("a", encoding="utf-8") as handle:
+            handle.write(_json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def look_at_screen(home: "Path", config: Dict[str, Any], api_key: str, question: str = "") -> Dict[str, Any]:
+    """The whole look: permission gate → capture → vision → accounting."""
+    import datetime as _dt
+    import time
+
+    sight = resolve_sight_config(config)
+    if not sight["enabled"]:
+        return {"ok": False, "error": "sight is disabled in config (voice.realtime.sight.enabled)"}
+    if not api_key:
+        return {"ok": False, "error": "no OpenAI key for the vision model (VOICE_TOOLS_OPENAI_KEY / OPENAI_API_KEY)"}
+    access = screen_capture_access()
+    if not access.get("granted"):
+        granted_now = request_screen_capture_access()
+        if not granted_now:
+            return {"ok": False, "permission": "requested", "error": "Screen Recording permission is not granted"}
+    started = time.monotonic()
+    capture = capture_screen(home / "cache" / "sight", sight["max_edge"])
+    if not capture.get("ok"):
+        return {"ok": False, "error": capture.get("error") or "capture failed"}
+    analysis = analyze_screen_image(Path(capture["path"]), question, api_key, sight["model"], sight["detail"])
+    total_ms = int((time.monotonic() - started) * 1000)
+    result = {
+        "ok": bool(analysis.get("ok")),
+        "answer": analysis.get("answer") or "",
+        "error": analysis.get("error"),
+        "question": (question or "").strip(),
+        "model": analysis.get("model") or sight["model"],
+        "usage": analysis.get("usage"),
+        "cost_usd": analysis.get("cost_usd"),
+        "cost_basis": analysis.get("cost_basis"),
+        "latency_ms": total_ms,
+        "capture_ms": capture.get("capture_ms"),
+        "analyze_ms": analysis.get("latency_ms"),
+        "width": capture.get("width"),
+        "height": capture.get("height"),
+        "bytes": capture.get("bytes"),
+        "image_path": capture.get("path"),
+        "thumbnail": _thumbnail_data_url(Path(capture["path"])),
+        "at": _dt.datetime.now().replace(microsecond=0).isoformat(),
+    }
+    _append_look_log(home, {k: v for k, v in result.items() if k != "thumbnail"})
+    return result
+
+
+def thumbnail_for_path(home: "Path", raw_path: str, max_edge: int = 480) -> Dict[str, Any]:
+    """Cockpit thumbnail of an agent-produced screenshot. Confined to image
+    files under the Hermes home (where the browser tool keeps screenshots)."""
+    import os as _os
+
+    candidate = Path(str(raw_path or "").strip()).expanduser()
+    try:
+        resolved = candidate.resolve()
+        root = home.resolve()
+    except OSError:
+        return {"ok": False, "error": "bad path"}
+    if _os.path.commonpath([str(resolved), str(root)]) != str(root):
+        return {"ok": False, "error": "path is outside the Hermes home"}
+    if resolved.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp") or not resolved.is_file():
+        return {"ok": False, "error": "not an image file"}
+    data_url = _thumbnail_data_url(resolved, max_edge)
+    return {"ok": bool(data_url), "thumbnail": data_url, "path": str(resolved)}
+
+
+# =============================================================================
+# P5.1 — BUILD SESSIONS: the persistent registry (survives app restarts)
+# =============================================================================
+# A build is a real named agent session plus this durable record. The desktop
+# creates the session over the gateway, registers it here, and re-reads the
+# registry on launch to pin the cockpit plates and route "how's X going?".
+
+BUILDS_FILE = "builds/sessions.json"
+BUILD_STATES = ("planning", "working", "waiting", "done", "failed", "idle")
+
+
+def _builds_path(home: "Path") -> "Path":
+    return home / BUILDS_FILE
+
+
+def list_builds(home: "Path") -> List[Dict[str, Any]]:
+    raw = _read_json(_builds_path(home), {})
+    rows = raw.get("builds") if isinstance(raw, dict) else None
+    return [r for r in rows if isinstance(r, dict) and r.get("id")] if isinstance(rows, list) else []
+
+
+def _write_builds(home: "Path", rows: List[Dict[str, Any]]) -> None:
+    _atomic_write_json(_builds_path(home), {"builds": rows})
+
+
+def upsert_build(home: "Path", build: Dict[str, Any]) -> Dict[str, Any]:
+    import datetime as _dt
+
+    build_id = str(build.get("id") or "").strip()
+    name = str(build.get("name") or "").strip()[:120]
+    goal = str(build.get("goal") or "").strip()[:2000]
+    if not build_id or not name or not goal:
+        raise ValueError("build id, name and goal are required")
+    now = _dt.datetime.now().replace(microsecond=0).isoformat()
+    rows = list_builds(home)
+    existing = next((r for r in rows if r.get("id") == build_id), None)
+    record = {
+        **(existing or {"created_at": now}),
+        "id": build_id,
+        "name": name,
+        "goal": goal,
+        "state": str(build.get("state") or (existing or {}).get("state") or "planning"),
+        "session_id": build.get("session_id") or (existing or {}).get("session_id"),
+        "stored_session_id": build.get("stored_session_id") or (existing or {}).get("stored_session_id"),
+        "project_id": build.get("project_id") or (existing or {}).get("project_id"),
+        "last_summary": str(build.get("last_summary") or (existing or {}).get("last_summary") or "")[:1200],
+        "updated_at": now,
+    }
+    if record["state"] not in BUILD_STATES:
+        record["state"] = "planning"
+    if existing is None:
+        rows.append(record)
+    else:
+        rows[rows.index(existing)] = record
+    _write_builds(home, rows)
+    return record
+
+
+def update_build(home: "Path", build_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    import datetime as _dt
+
+    rows = list_builds(home)
+    for index, row in enumerate(rows):
+        if row.get("id") == build_id:
+            allowed = {k: v for k, v in (patch or {}).items() if k in ("state", "session_id", "stored_session_id", "project_id", "last_summary", "name")}
+            if "state" in allowed and allowed["state"] not in BUILD_STATES:
+                allowed.pop("state")
+            if "last_summary" in allowed:
+                allowed["last_summary"] = str(allowed["last_summary"] or "")[:1200]
+            rows[index] = {**row, **allowed, "updated_at": _dt.datetime.now().replace(microsecond=0).isoformat()}
+            _write_builds(home, rows)
+            return rows[index]
+    return None

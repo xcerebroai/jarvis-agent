@@ -182,6 +182,18 @@ export function buildInstructions(options: RealtimeSessionConfigOptions = {}): s
     )
   }
 
+  if (cfg.reviewProjectsEnabled) {
+    lines.push(
+      `JUDGMENT versus FACTS: ${REVIEW_PROJECTS_TOOL_NAME} and the show tools answer factual questions instantly (what is blocked, the status of X). For judgment — what to focus on, what matters most, rank these, what is slipping, whether something is worth the time or money — call ${ASK_JUDGMENT_TOOL_NAME}: say "Let me look at the whole board." first, then relay the reasoned answer in your own words, decision first. It takes several seconds; do not answer judgment questions from the fast path alone.`,
+      `EDITING THE BOARD BY VOICE: "mark X high priority", "set X's deadline to <date>", "X is revenue critical", "note that X is waiting on the client" → call ${SET_PROJECT_FIELD_TOOL_NAME} (ISO dates). Confirm in a few words once it returns.`
+    )
+  }
+
+  lines.push(
+    `To SEE the screen: call ${LOOK_AT_SCREEN_TOOL_NAME} when asked what is on screen, to look at this, read this error, or what something says. Say "Taking a look." first — it takes a few seconds. Relay the answer conversationally, then add one short clause with the look's time and estimated cost from the tool result (e.g. "that took three seconds, well under a cent"). If it reports a missing screen-recording permission, say exactly what to enable and offer to try again.`,
+    `BUILD SESSIONS: for "start a build", "kick off a build", "begin building X", call ${START_BUILD_TOOL_NAME} with a complete goal and a short name. It opens a dedicated persistent session that plans first and asks for what it needs; when its plan arrives as an update, relay it and ask the user for those items. Everything the user then says for that build — answers, decisions, "go ahead", where a key is — goes through ${BUILD_MESSAGE_TOOL_NAME}. For "how's the X build going" call ${BUILD_STATUS_TOOL_NAME}. Builds survive restarts and several can exist. Secrets: never read a credential aloud or invent one; tell the user to paste it into the build session and pass that along.`
+  )
+
   lines.push(
     `To OPEN things instantly: call ${OPEN_APP_TOOL_NAME} when asked to open, launch, or start an application ("open Notes", "launch Safari"). Call ${OPEN_URL_TOOL_NAME} for websites. Both are instant — confirm in a few words once the tool returns.`,
     `To DO WORK: call ${DELEGATE_TASK_TOOL_NAME} when the request is a real job — multi-step work, changes to files or systems, or anything that takes more than a moment. For "research X", "look into X", "find out about X", call it with kind "research"; the agent investigates with its browser and tools while the findings stream on screen. Write the goal fully and self-contained. The tool returns at once: announce in one short line that the task is underway, then stay available — keep answering questions normally while it runs. When a completion update arrives, relay the outcome conversationally: lead with the key findings or the result, a few sentences at most.`,
@@ -387,6 +399,121 @@ export const ACTION_TOOLS = [
   }
 ] as const
 
+/** P5.1 SIGHT: on-demand screen capture → vision model. One look per call;
+ *  the tool result carries the answer plus the look's real latency and a
+ *  list-price cost estimate, which the voice reports honestly. */
+export const LOOK_AT_SCREEN_TOOL_NAME = 'look_at_screen'
+
+export const SIGHT_TOOLS = [
+  {
+    type: 'function',
+    name: LOOK_AT_SCREEN_TOOL_NAME,
+    description:
+      'Look at the screen right now: captures the display and analyzes it with a vision model, returning what is visible and the answer to the question. Use for "what is on my screen", "look at this", "read this error", "what does this say", "can you see this". Takes a few seconds. The result states its time and estimated cost — mention them in one short clause after the answer.',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'What the user wants to know about the screen. Empty for a general description.' }
+      },
+      additionalProperties: false
+    }
+  }
+] as const
+
+/** P5.1 BUILD SESSIONS: persistent named agent sessions, distinct from a
+ *  one-shot delegate_task. A build plans first, asks for what it needs, works
+ *  visibly in its own session, and survives app restarts. */
+export const START_BUILD_TOOL_NAME = 'start_build'
+export const BUILD_STATUS_TOOL_NAME = 'build_status'
+export const BUILD_MESSAGE_TOOL_NAME = 'build_message'
+
+export const BUILD_TOOLS = [
+  {
+    type: 'function',
+    name: START_BUILD_TOOL_NAME,
+    description:
+      'Start a BUILD: a persistent, named agent session for a real piece of work ("start a build: attach my Stripe account to the agent via API"). The build plans first and asks for what it needs (keys, accounts, decisions), then works visibly in its own session. Use for "start a build", "kick off a build", "begin building X". Returns at once; the plan arrives as an update — relay it and ask the user for the items it needs.',
+    parameters: {
+      type: 'object',
+      properties: {
+        goal: { type: 'string', description: 'Complete, self-contained statement of what the build must achieve.' },
+        name: { type: 'string', description: 'Short name for the build, 2-4 words (e.g. "Stripe integration").' }
+      },
+      required: ['goal'],
+      additionalProperties: false
+    }
+  },
+  {
+    type: 'function',
+    name: BUILD_STATUS_TOOL_NAME,
+    description:
+      'Ask how a build is going ("how is the Stripe integration going?", "status on the build"). With a name it asks that build session for a two-sentence status; without a name it lists the builds and their states.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Build name or close match. Omit to list all builds.' }
+      },
+      additionalProperties: false
+    }
+  },
+  {
+    type: 'function',
+    name: BUILD_MESSAGE_TOOL_NAME,
+    description:
+      'Pass what the user said to a running build session: answers to its questions, decisions, "go ahead", where a credential is, or a change of direction. Returns at once; the build\'s reply arrives as an update. Never invent credentials — relay only what the user said, or tell the build the user will paste the secret directly into the session.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Build name or close match.' },
+        message: { type: 'string', description: 'The user\'s message for the build, complete and self-contained.' }
+      },
+      required: ['name', 'message'],
+      additionalProperties: false
+    }
+  }
+] as const
+
+/** P5.1 PRIORITY REASONING: the board is voice-editable (priority, deadline,
+ *  revenue relevance, …) and judgment questions route to the full agent with
+ *  the enriched board as context. Facts stay on the fast path. Included only
+ *  when a project index is configured. */
+export const SET_PROJECT_FIELD_TOOL_NAME = 'set_project_field'
+export const ASK_JUDGMENT_TOOL_NAME = 'ask_judgment'
+export const PROJECT_EDITABLE_FIELDS = ['priority', 'deadline', 'revenue_relevance', 'note', 'next_action', 'status'] as const
+
+export const REASONING_TOOLS = [
+  {
+    type: 'function',
+    name: SET_PROJECT_FIELD_TOOL_NAME,
+    description:
+      'Edit one project on the board by voice: "mark Harris high priority", "set the Coastal deadline to September 5th", "the JV project is revenue critical", "note that X is waiting on the client". Persists and re-renders the board. Dates must be ISO (YYYY-MM-DD); priority is urgent/high/normal/low; revenue_relevance is high/medium/low.',
+    parameters: {
+      type: 'object',
+      properties: {
+        name: { type: 'string', description: 'Project (or client) name or close match. Omit when it is the project on stage ("it").' },
+        field: { type: 'string', enum: [...PROJECT_EDITABLE_FIELDS], description: 'Which field to set.' },
+        value: { type: 'string', description: 'The new value.' }
+      },
+      required: ['field', 'value'],
+      additionalProperties: false
+    }
+  },
+  {
+    type: 'function',
+    name: ASK_JUDGMENT_TOOL_NAME,
+    description:
+      'Route a JUDGMENT question to the full agent with the whole enriched board (priority, deadlines, staleness, revenue relevance) and recent activity as context: "what should I focus on", "what matters most this week", "rank these", "what is slipping", "is X worth the time". Takes several seconds — say "Let me look at the whole board." first. Not for factual lookups (use review_projects).',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'The judgment question, complete and self-contained.' }
+      },
+      required: ['question'],
+      additionalProperties: false
+    }
+  }
+] as const
+
 /**
  * Build the `session.update` payload the renderer sends over the data channel
  * once the connection opens: audio-only output, the configured voice,
@@ -398,8 +525,8 @@ export const ACTION_TOOLS = [
 export function buildRealtimeSessionConfig(options: RealtimeSessionConfigOptions = {}) {
   const cfg = resolveIdentity(options)
   const tools = cfg.reviewProjectsEnabled
-    ? [REVIEW_PROJECTS_TOOL, ...DISPLAY_TOOLS, ...ACTION_TOOLS, USE_JARVIS_TOOL]
-    : [...ACTION_TOOLS, USE_JARVIS_TOOL]
+    ? [REVIEW_PROJECTS_TOOL, ...DISPLAY_TOOLS, ...REASONING_TOOLS, ...ACTION_TOOLS, ...BUILD_TOOLS, ...SIGHT_TOOLS, USE_JARVIS_TOOL]
+    : [...ACTION_TOOLS, ...BUILD_TOOLS, ...SIGHT_TOOLS, USE_JARVIS_TOOL]
 
   return {
     type: 'realtime' as const,

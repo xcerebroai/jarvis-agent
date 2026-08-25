@@ -26,7 +26,21 @@ import { emitGatewayEvent, onGatewayEvent } from '@/contrib/events'
 import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/store/composer'
 import { atom } from 'nanostores'
 
-import { createRealtimeProject, getRealtimeProjectReview, getRealtimeVoiceConfig, mintRealtimeToken, openRealtimeSystemApp } from '@/hermes'
+import {
+  createRealtimeProject,
+  getRealtimeProjectContext,
+  getRealtimeProjectReview,
+  getRealtimeThumbnail,
+  getRealtimeVoiceConfig,
+  listRealtimeBuilds,
+  lookAtScreen,
+  mintRealtimeToken,
+  openRealtimeSystemApp,
+  type RealtimeBuildRecord,
+  setRealtimeProjectFields,
+  updateRealtimeBuild,
+  upsertRealtimeBuild
+} from '@/hermes'
 import { translateNow } from '@/i18n'
 import { $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
@@ -37,17 +51,24 @@ import { armWakeWord, resumeWakeAfterVoice } from '@/store/wake-word'
 
 import { type AgentDelegate, type AgentTurn, createForegroundDelegate } from './agent-delegate'
 import {
+  ASK_JUDGMENT_TOOL_NAME,
+  BUILD_MESSAGE_TOOL_NAME,
+  BUILD_STATUS_TOOL_NAME,
   CANCEL_TASK_TOOL_NAME,
   CLEAR_DISPLAY_TOOL_NAME,
   CREATE_PROJECT_TOOL_NAME,
   DELEGATE_TASK_TOOL_NAME,
+  LOOK_AT_SCREEN_TOOL_NAME,
   OPEN_APP_TOOL_NAME,
   OPEN_URL_TOOL_NAME,
+  PROJECT_EDITABLE_FIELDS,
   SHOW_DETAIL_TOOL_NAME,
   type RealtimeSessionConfigOptions,
   REVIEW_PROJECTS_TOOL_NAME,
+  SET_PROJECT_FIELD_TOOL_NAME,
   SHOW_PROJECT_TOOL_NAME,
-  SHOW_PROJECTS_TOOL_NAME
+  SHOW_PROJECTS_TOOL_NAME,
+  START_BUILD_TOOL_NAME
 } from './realtime-config'
 import { RealtimeSessionError, type RealtimeStatus, RealtimeVoiceSession } from './realtime-session'
 
@@ -448,8 +469,9 @@ function buildTaskPrompt(goal: string, kind: 'research' | 'task'): string {
     return [
       `Research task delegated from the voice assistant: ${goal}`,
       '',
-      'Use your browser and web tools to actually investigate — prefer opening pages so the work is visible, not just recalling from memory. Work step by step.',
-      'End your reply with a compact plain-text briefing of what you found: the 3-5 most important points, spoken-summary style, no markdown headers or tables.'
+      'SIGHT-FIRST BROWSING (required): actually open the key pages with browser_navigate, read them with browser_snapshot, and LOOK at each important page with browser_vision (a real screenshot you inspect) — the findings must come from what the rendered pages show, not from blind fetches or memory. Work step by step; for each page you rely on, say what you saw on it.',
+      'At the end, include one line per key screenshot as MEDIA:<screenshot_path> (from browser_vision) so the cockpit can show what you looked at.',
+      'Then end your reply with a compact plain-text briefing of what you found: the 3-5 most important points, spoken-summary style, no markdown headers or tables, naming the pages the findings came from.'
     ].join('\n')
   }
 
@@ -601,7 +623,9 @@ async function startDelegatedTask(session: RealtimeVoiceSession, callId: string,
 
     activeTask = null
     const summary = text.trim()
-    emitTaskEvent('voice.task.done', { goal, id, kind, summary })
+    emitTaskEvent('voice.task.done', { goal, id, kind, summary: stripMediaLines(summary) })
+    recordActivity(`${kind} finished: ${goal}`)
+    surfaceTaskMedia(id, summary)
     narrateTaskOutcome(
       summary
         ? `[TASK COMPLETE] The delegated ${kind} finished. Relay the outcome to the user conversationally — lead with the key findings, a few sentences at most. Result:\n${summary}`
@@ -703,6 +727,818 @@ function runActionTool(session: RealtimeVoiceSession, name: string, callId: stri
   cancelDelegatedTask(session, callId)
 }
 
+// ── P5.1: sight · build sessions · priority reasoning ────────────────────────
+
+const P51_TOOL_NAMES = new Set<string>([
+  LOOK_AT_SCREEN_TOOL_NAME,
+  START_BUILD_TOOL_NAME,
+  BUILD_STATUS_TOOL_NAME,
+  BUILD_MESSAGE_TOOL_NAME,
+  SET_PROJECT_FIELD_TOOL_NAME,
+  ASK_JUDGMENT_TOOL_NAME
+])
+
+/** Recent notable happenings (tasks, builds, looks, edits) — the judgment
+ *  bridge hands these to the full agent beside the board. Bounded. */
+const recentActivity: string[] = []
+const RECENT_ACTIVITY_LIMIT = 14
+
+function recordActivity(line: string): void {
+  const at = new Date()
+  const stamp = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+
+  recentActivity.push(`${stamp} ${line.replace(/\s+/g, ' ').trim().slice(0, 160)}`)
+
+  if (recentActivity.length > RECENT_ACTIVITY_LIMIT) {
+    recentActivity.splice(0, recentActivity.length - RECENT_ACTIVITY_LIMIT)
+  }
+}
+
+type GatewayRequest = (method: string, params?: Record<string, unknown>, timeoutMs?: number) => Promise<unknown>
+
+function gatewayRequest(): GatewayRequest | null {
+  const gateway = $gateway.get() as null | { request?: GatewayRequest }
+  const request = gateway?.request?.bind(gateway)
+
+  return request ?? null
+}
+
+const MEDIA_LINE = /^\s*MEDIA:\s*(\S.*?)\s*$/gim
+
+function stripMediaLines(text: string): string {
+  return text.replace(MEDIA_LINE, '').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+/** Research screenshots → cockpit thumbnails. The agent names the files it
+ *  looked at (MEDIA: lines); only images under the Hermes home are served. */
+function surfaceTaskMedia(id: number, text: string): void {
+  const paths = Array.from(text.matchAll(MEDIA_LINE), match => match[1]).slice(0, 3)
+
+  paths.forEach(path => {
+    void getRealtimeThumbnail(path)
+      .then(result => {
+        if (result.ok && result.thumbnail) {
+          emitTaskEvent('voice.task.media', { id, path: result.path ?? path, thumbnail: result.thumbnail })
+        }
+      })
+      .catch(() => undefined)
+  })
+}
+
+// ── SIGHT ────────────────────────────────────────────────────────────────────
+
+function formatLookCost(cost: null | number | undefined): string {
+  if (typeof cost !== 'number') {
+    return 'cost unknown for this model'
+  }
+
+  if (cost < 0.01) {
+    return `about ${(cost * 100).toFixed(2)} cents`
+  }
+
+  return `about $${cost.toFixed(2)}`
+}
+
+function runLookAtScreen(session: RealtimeVoiceSession, callId: string, args: Record<string, unknown>): void {
+  const question = typeof args.question === 'string' ? args.question.trim() : ''
+  const startedAt = Date.now()
+
+  emitGatewayEvent({ payload: { question, startedAt }, type: 'voice.sight.started' })
+
+  void lookAtScreen({ question })
+    .then(result => {
+      if (!result.ok) {
+        emitGatewayEvent({ payload: { error: result.error ?? 'look failed', permission: result.permission ?? null }, type: 'voice.sight.failed' })
+
+        if (result.permission === 'requested') {
+          recordActivity('look at screen: screen-recording permission missing')
+          session.sendToolOutput(
+            callId,
+            'Could not see the screen: macOS Screen Recording permission is not granted to JARVIS. The system prompt and the Privacy & Security › Screen Recording pane were just opened — tell the user to enable JARVIS there (macOS may ask to relaunch the app), then offer to look again.'
+          )
+
+          return
+        }
+
+        session.sendToolOutput(callId, `The look failed (${result.error ?? 'unknown error'}). Tell the user briefly and offer to retry.`)
+
+        return
+      }
+
+      const latency = result.latency_ms ?? Date.now() - startedAt
+      const seconds = (latency / 1000).toFixed(1)
+      const cost = formatLookCost(result.cost_usd)
+
+      recordActivity(`looked at the screen (${seconds}s, ${cost}): ${(result.answer ?? '').slice(0, 90)}`)
+      emitGatewayEvent({
+        payload: {
+          analyzeMs: result.analyze_ms ?? null,
+          answer: result.answer ?? '',
+          captureMs: result.capture_ms ?? null,
+          costBasis: result.cost_basis ?? null,
+          costUsd: result.cost_usd ?? null,
+          height: result.height ?? null,
+          latencyMs: latency,
+          model: result.model ?? null,
+          question,
+          thumbnail: result.thumbnail ?? '',
+          usage: result.usage ?? null,
+          width: result.width ?? null
+        },
+        type: 'voice.sight.done'
+      })
+      session.sendToolOutput(
+        callId,
+        `Screen analysis: ${result.answer}\n\n(Look took ${seconds} seconds; ${cost} at list price via ${result.model ?? 'the vision model'}.) Relay the answer conversationally, then add one short clause with that time and cost.`
+      )
+    })
+    .catch(error => {
+      emitGatewayEvent({ payload: { error: String(error) }, type: 'voice.sight.failed' })
+      notifyError(error, realtimeToolNoResult())
+      session.sendToolOutput(callId, 'The look did not complete (the backend did not answer). Tell the user briefly and offer to retry.')
+    })
+}
+
+// ── BUILD SESSIONS ───────────────────────────────────────────────────────────
+// A build is a real named agent session plus a durable registry record. The
+// renderer keeps a live map (with the in-flight turn, if any) and mirrors every
+// change to the cockpit as build.* events. On launch the registry is re-read
+// so pinned plates and "how's X going?" work across restarts.
+
+interface LiveBuild {
+  record: RealtimeBuildRecord
+  turn: AgentTurn | null
+  turnStartedAt: number
+}
+
+const builds = new Map<string, LiveBuild>()
+
+const BUILD_TURN_TIMEOUT_MS = 30 * 60 * 1000
+const BUILD_STATUS_TIMEOUT_MS = 60_000
+const BUILD_SESSION_TITLE_PREFIX = 'BUILD · '
+
+function emitBuildList(): void {
+  emitGatewayEvent({ payload: { builds: Array.from(builds.values(), live => ({ ...live.record, inFlight: live.turn !== null, turnStartedAt: live.turnStartedAt })) }, type: 'build.list' })
+}
+
+function emitBuildUpdate(live: LiveBuild, extra: Record<string, unknown> = {}): void {
+  emitGatewayEvent({ payload: { ...live.record, inFlight: live.turn !== null, turnStartedAt: live.turnStartedAt, ...extra }, type: 'build.update' })
+}
+
+async function loadBuilds(): Promise<void> {
+  try {
+    const result = await listRealtimeBuilds()
+
+    for (const record of Array.isArray(result.builds) ? result.builds : []) {
+      const existing = builds.get(record.id)
+
+      if (existing) {
+        existing.record = { ...existing.record, ...record, session_id: existing.record.session_id ?? record.session_id }
+      } else {
+        builds.set(record.id, { record, turn: null, turnStartedAt: 0 })
+      }
+    }
+  } catch {
+    // registry unavailable (gateway still booting) — the cockpit asks again
+  }
+
+  emitBuildList()
+}
+
+function persistBuild(live: LiveBuild, patch: Partial<RealtimeBuildRecord>): void {
+  live.record = { ...live.record, ...patch }
+  void updateRealtimeBuild(live.record.id, patch).catch(() => undefined)
+}
+
+function buildSlug(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'build'
+}
+
+function deriveBuildName(goal: string, explicit: string): string {
+  if (explicit) {
+    return explicit.slice(0, 60)
+  }
+
+  const words = goal.replace(/[^\w\s-]/g, ' ').split(/\s+/).filter(Boolean)
+
+  return words.slice(0, 5).join(' ').slice(0, 60) || 'Build'
+}
+
+function resolveBuild(reference: string): { ask?: string; live?: LiveBuild } {
+  const ref = reference.trim().toLowerCase()
+  const all = Array.from(builds.values())
+
+  if (!all.length) {
+    return { ask: 'There are no build sessions yet. Offer to start one with start_build.' }
+  }
+
+  if (!ref) {
+    if (all.length === 1) {
+      return { live: all[0] }
+    }
+
+    return { ask: `Which build? Active builds: ${all.map(live => live.record.name).join(', ')}. Ask the user, then call again with the name.` }
+  }
+
+  const exact = all.find(live => live.record.name.toLowerCase() === ref || live.record.id === ref)
+
+  if (exact) {
+    return { live: exact }
+  }
+
+  const tokens = ref.split(/\s+/).filter(token => token.length > 2)
+  const scored = all
+    .map(live => ({ live, score: tokens.filter(token => live.record.name.toLowerCase().includes(token) || live.record.goal.toLowerCase().includes(token)).length }))
+    .filter(entry => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+
+  if (scored.length === 1 || (scored.length > 1 && scored[0].score > scored[1].score)) {
+    return { live: scored[0].live }
+  }
+
+  return { ask: `No single build matches "${reference}". Builds: ${all.map(live => live.record.name).join(', ')}. Ask which one.` }
+}
+
+/** The runtime session id for a build, resuming the stored session when the
+ *  runtime one is gone (app restart). Null when the gateway cannot resume. */
+async function ensureBuildSession(live: LiveBuild): Promise<null | string> {
+  const request = gatewayRequest()
+
+  if (!request) {
+    return null
+  }
+
+  const runtimeId = live.record.session_id ?? null
+
+  if (runtimeId) {
+    try {
+      const status = (await request('session.status', { session_id: runtimeId })) as null | { ok?: boolean; error?: unknown }
+
+      if (status && status.error === undefined) {
+        return runtimeId
+      }
+    } catch {
+      // not live any more — resume below
+    }
+  }
+
+  const storedId = live.record.stored_session_id ?? runtimeId
+
+  if (!storedId) {
+    return null
+  }
+
+  try {
+    const resumed = (await request('session.resume', { omit_messages: true, session_id: storedId, source: 'desktop' })) as null | { session_id?: string }
+    const sid = resumed?.session_id ?? null
+
+    if (sid && sid !== live.record.session_id) {
+      persistBuild(live, { session_id: sid })
+      emitGatewayEvent({ payload: { id: live.record.id, sessionId: sid }, type: 'build.session' })
+    }
+
+    return sid
+  } catch {
+    return null
+  }
+}
+
+function buildKickoffPrompt(name: string, goal: string): string {
+  return [
+    `You are running a persistent BUILD SESSION named "${name}", opened from the voice assistant. This session is the build's home: it stays open, the owner returns to it by voice, and everything you do here is visible on the cockpit.`,
+    '',
+    `GOAL: ${goal}`,
+    '',
+    'How to work:',
+    '1. FIRST reply (now): a concise plan — 3 to 6 numbered steps — then an explicit list of what you need from the owner before proceeding (credentials, account access, decisions, files). Do not start irreversible work yet.',
+    '2. Secrets: ask the owner to paste keys directly into this session (or point you at a file / env var). Never ask for a secret to be spoken aloud and never echo one back.',
+    '3. Once you have what you need, do the work here, step by step, visibly — real tool calls, real verification. Ask when genuinely blocked.',
+    '4. Every reply MUST end with one line: "STATUS: <one or two plain sentences — what is done, what is next, what you need>". That line is read aloud.',
+    '5. When the goal is fully achieved and verified, end with "STATUS: BUILD COMPLETE — <one sentence>".'
+  ].join('\n')
+}
+
+function extractBuildStatus(text: string): { done: boolean; status: string } {
+  const lines = text.split('\n').map(line => line.trim()).filter(Boolean)
+  const statusLine = [...lines].reverse().find(line => /^\**STATUS:\**/i.test(line))
+  const status = (statusLine ? statusLine.replace(/^\**STATUS:\**\s*/i, '') : lines.slice(-3).join(' ')).slice(0, 600)
+
+  return { done: /BUILD COMPLETE/i.test(status), status }
+}
+
+/** Submit text to a build's session and observe the reply. Resolves the
+ *  build's new status line ('' on timeout/cancel). Updates the record and the
+ *  cockpit as it goes. */
+async function submitToBuild(live: LiveBuild, text: string, phase: 'planning' | 'working', timeoutMs: number): Promise<{ done: boolean; status: string; text: string } | null> {
+  const request = gatewayRequest()
+  const sessionId = await ensureBuildSession(live)
+
+  if (!request || !sessionId) {
+    return null
+  }
+
+  if (live.turn) {
+    return null
+  }
+
+  const target = sessionId
+  const delegate = createForegroundDelegate(
+    body => request('prompt.submit', { session_id: target, text: body }, GATEWAY_SUBMIT_TIMEOUT_MS),
+    { getActiveSessionId: () => target, getSelectedStoredSessionId: () => null }
+  )
+  const turn = delegate.runTurn(text, { timeoutMs })
+
+  if (!turn) {
+    return null
+  }
+
+  live.turn = turn
+  live.turnStartedAt = Date.now()
+  persistBuild(live, { state: phase })
+  emitBuildUpdate(live)
+  pendingTurnCancels.add(turn.cancel)
+
+  try {
+    const reply = (await turn.result).trim()
+
+    if (!reply) {
+      live.turn = null
+      persistBuild(live, { state: 'idle' })
+      emitBuildUpdate(live, { note: 'no reply (timed out or interrupted)' })
+
+      return { done: false, status: '', text: '' }
+    }
+
+    const parsed = extractBuildStatus(reply)
+
+    live.turn = null
+    persistBuild(live, { last_summary: parsed.status, state: parsed.done ? 'done' : 'waiting' })
+    emitBuildUpdate(live)
+    recordActivity(`build "${live.record.name}" ${parsed.done ? 'completed' : 'reported'}: ${parsed.status.slice(0, 100)}`)
+
+    return { ...parsed, text: reply }
+  } finally {
+    pendingTurnCancels.delete(turn.cancel)
+    live.turn = null
+  }
+}
+
+async function startBuild(session: RealtimeVoiceSession, callId: string, goal: string, explicitName: string): Promise<void> {
+  const request = gatewayRequest()
+
+  if (!request) {
+    session.sendToolOutput(callId, NO_ROUTABLE_SESSION_OUTPUT)
+
+    return
+  }
+
+  const name = deriveBuildName(goal, explicitName)
+  const id = `${buildSlug(name)}-${Date.now().toString(36)}`
+
+  type CreatedSession = null | { session_id?: string; stored_session_id?: string }
+  let created: CreatedSession = null
+
+  try {
+    created = (await request('session.create', { source: 'desktop', title: `${BUILD_SESSION_TITLE_PREFIX}${name}` })) as CreatedSession
+  } catch (error) {
+    notifyError(error, translateNow('notifications.voice.couldNotStartSession'))
+  }
+
+  if (!created?.session_id) {
+    session.sendToolOutput(callId, 'Could not open a session for the build (the gateway refused). Tell the user briefly and offer to retry.')
+
+    return
+  }
+
+  const record: RealtimeBuildRecord = {
+    goal,
+    id,
+    name,
+    session_id: created.session_id,
+    state: 'planning',
+    stored_session_id: created.stored_session_id ?? created.session_id
+  }
+  const live: LiveBuild = { record, turn: null, turnStartedAt: 0 }
+
+  builds.set(id, live)
+
+  try {
+    const stored = await upsertRealtimeBuild(record)
+
+    live.record = { ...record, ...stored.build }
+  } catch (error) {
+    notifyError(error, realtimeToolNoResult())
+  }
+
+  // Board entry linked to the working session — the build is a project too.
+  void createRealtimeProject({ build_id: id, goal, name: `Build: ${name}`, source: 'build-session', status: 'Build Mode' })
+    .then(result => {
+      const projectId = typeof result.project?.id === 'string' ? result.project.id : null
+
+      if (projectId) {
+        persistBuild(live, { project_id: projectId })
+      }
+
+      return getRealtimeProjectReview({ limit: 8 })
+    })
+    .then(result => emitGatewayEvent({ payload: { focus: false, result, silent: true }, type: 'display.projects' }))
+    .catch(() => undefined)
+
+  recordActivity(`build started: ${name}`)
+  emitGatewayEvent({ payload: { ...live.record, inFlight: false }, type: 'build.started' })
+  session.sendToolOutput(
+    callId,
+    `Build "${name}" is open in its own session and is planning now. Say so in one short line; its plan and what it needs will arrive here as an update — relay that and ask the user for the items.`
+  )
+
+  void submitToBuild(live, buildKickoffPrompt(name, goal), 'planning', BUILD_TURN_TIMEOUT_MS).then(result => {
+    if (result === null) {
+      narrateTaskOutcome(`[BUILD UPDATE — ${name}] The build session could not be reached to start planning. Tell the user briefly.`)
+
+      return
+    }
+
+    if (!result.status) {
+      narrateTaskOutcome(`[BUILD UPDATE — ${name}] The build's planning turn ended without a reply (timed out or interrupted). Tell the user briefly and offer to check its session.`)
+
+      return
+    }
+
+    narrateTaskOutcome(
+      `[BUILD UPDATE — ${name}] ${result.status}\n\nRelay this plan to the user in a few sentences. If it asks for anything (keys, access, decisions), ask the user for those items now — secrets should be pasted into the build session, not spoken.`
+    )
+  })
+}
+
+function buildAgeLabel(live: LiveBuild): string {
+  const since = live.turn ? live.turnStartedAt : Date.parse(live.record.updated_at ?? '') || 0
+
+  if (!since) {
+    return ''
+  }
+
+  const minutes = Math.max(0, Math.round((Date.now() - since) / 60_000))
+
+  return minutes < 1 ? 'just now' : minutes < 60 ? `${minutes} min ago` : `${Math.round(minutes / 60)} h ago`
+}
+
+async function buildStatus(session: RealtimeVoiceSession, callId: string, reference: string): Promise<void> {
+  if (!reference.trim()) {
+    if (!builds.size) {
+      session.sendToolOutput(callId, 'No build sessions exist yet. Offer to start one.')
+
+      return
+    }
+
+    const lines = Array.from(builds.values(), live => `${live.record.name}: ${live.turn ? 'working right now' : live.record.state} (${buildAgeLabel(live) || 'no activity yet'})${live.record.last_summary ? ` — ${live.record.last_summary.slice(0, 140)}` : ''}`)
+
+    session.sendToolOutput(callId, `Builds:\n${lines.join('\n')}\nSummarize aloud briefly.`)
+
+    return
+  }
+
+  const resolved = resolveBuild(reference)
+
+  if (!resolved.live) {
+    session.sendToolOutput(callId, resolved.ask ?? 'Which build?')
+
+    return
+  }
+
+  const live = resolved.live
+
+  if (live.turn) {
+    const minutes = Math.max(0, Math.round((Date.now() - live.turnStartedAt) / 60_000))
+
+    session.sendToolOutput(
+      callId,
+      `"${live.record.name}" is working right now (${minutes} min into the current step). Last reported: ${live.record.last_summary || 'no status yet'}. Tell the user that; a fresh update arrives when the step finishes.`
+    )
+
+    return
+  }
+
+  emitBuildUpdate(live, { probing: true })
+  const result = await submitToBuild(
+    live,
+    'Status check from the owner (by voice): in two plain sentences, what is done, what is next, and what you still need. End with the STATUS line.',
+    'working',
+    BUILD_STATUS_TIMEOUT_MS
+  )
+
+  if (result === null) {
+    session.sendToolOutput(callId, `Could not reach the "${live.record.name}" session right now. Last known: ${live.record.last_summary || 'no status yet'}. Tell the user.`)
+
+    return
+  }
+
+  session.sendToolOutput(callId, result.status ? `Status of "${live.record.name}": ${result.status}` : `"${live.record.name}" did not answer in time. Last known: ${live.record.last_summary || 'no status yet'}.`)
+}
+
+async function buildMessage(session: RealtimeVoiceSession, callId: string, reference: string, message: string): Promise<void> {
+  const resolved = resolveBuild(reference)
+
+  if (!resolved.live) {
+    session.sendToolOutput(callId, resolved.ask ?? 'Which build?')
+
+    return
+  }
+
+  const live = resolved.live
+
+  if (live.turn) {
+    session.sendToolOutput(callId, `"${live.record.name}" is mid-step right now; the message could not be delivered yet. Tell the user to try again in a moment.`)
+
+    return
+  }
+
+  recordActivity(`message to build "${live.record.name}": ${message.slice(0, 80)}`)
+  session.sendToolOutput(callId, `Passed to "${live.record.name}". Say so in a few words; its reply will arrive here as an update.`)
+
+  const result = await submitToBuild(live, `Message from the owner (by voice): ${message}\n\nContinue accordingly. End with the STATUS line.`, 'working', BUILD_TURN_TIMEOUT_MS)
+
+  if (result === null) {
+    narrateTaskOutcome(`[BUILD UPDATE — ${live.record.name}] The message could not be delivered (session unreachable). Tell the user briefly.`)
+  } else if (result.status) {
+    narrateTaskOutcome(`[BUILD UPDATE — ${live.record.name}] ${result.status}\n\nRelay this to the user in a few sentences${result.done ? ' — the build reports it is complete' : ''}.`)
+  }
+}
+
+// ── PRIORITY REASONING ───────────────────────────────────────────────────────
+// Facts come from the fast index path; JUDGMENT goes to the full agent with
+// the enriched board + recent activity as context, in a dedicated reasoning
+// session so it never contends with a running build.
+
+const REASONING_SESSION_KEY = 'voice:reasoning-session'
+const JUDGMENT_TIMEOUT_MS = 45_000
+let reasoningSession: null | { runtime: string; stored: string } = null
+
+async function ensureReasoningSession(): Promise<null | string> {
+  const request = gatewayRequest()
+
+  if (!request) {
+    return null
+  }
+
+  if (reasoningSession) {
+    return reasoningSession.runtime
+  }
+
+  let stored = ''
+
+  try {
+    stored = localStorage.getItem(REASONING_SESSION_KEY) ?? ''
+  } catch {
+    stored = ''
+  }
+
+  if (stored) {
+    try {
+      const resumed = (await request('session.resume', { omit_messages: true, session_id: stored, source: 'desktop' })) as null | { session_id?: string }
+
+      if (resumed?.session_id) {
+        reasoningSession = { runtime: resumed.session_id, stored }
+
+        return reasoningSession.runtime
+      }
+    } catch {
+      // fall through: create a fresh one
+    }
+  }
+
+  try {
+    const created = (await request('session.create', { source: 'desktop', title: 'JARVIS · reasoning' })) as null | { session_id?: string; stored_session_id?: string }
+
+    if (!created?.session_id) {
+      return null
+    }
+
+    reasoningSession = { runtime: created.session_id, stored: created.stored_session_id ?? created.session_id }
+
+    try {
+      localStorage.setItem(REASONING_SESSION_KEY, reasoningSession.stored)
+    } catch {
+      // storage optional
+    }
+
+    return reasoningSession.runtime
+  } catch {
+    return null
+  }
+}
+
+function buildJudgmentPrompt(question: string, board: string, boardMeta: string): string {
+  const buildLines = Array.from(builds.values(), live => `${live.record.name}: ${live.turn ? 'working' : live.record.state}${live.record.last_summary ? ` — ${live.record.last_summary.slice(0, 120)}` : ''}`)
+
+  return [
+    `Judgment question from the owner, spoken to the voice assistant: "${question}"`,
+    '',
+    'You are the reasoning core. Decide and rank — do not hedge, do not list everything. Use the enriched project board below (priority, deadline with days remaining, staleness = days since the project last changed, revenue relevance and outstanding money) and the recent activity.',
+    'Reply in plain spoken prose under 120 words: the decision first, then the two to four reasons that matter, then one concrete next action. No markdown, no bullet lists, no headers. Do not use tools.',
+    '',
+    `PROJECT BOARD (${boardMeta}):`,
+    board || '(board unavailable)',
+    '',
+    'ACTIVE BUILDS:',
+    buildLines.length ? buildLines.join('\n') : '(none)',
+    '',
+    'RECENT ACTIVITY (newest last):',
+    recentActivity.length ? recentActivity.join('\n') : '(nothing notable this session)'
+  ].join('\n')
+}
+
+async function runJudgment(session: RealtimeVoiceSession, callId: string, question: string): Promise<void> {
+  const startedAt = Date.now()
+
+  emitGatewayEvent({ payload: { question, startedAt }, type: 'voice.judgment.started' })
+
+  let board = ''
+  let boardMeta = 'unavailable'
+
+  try {
+    const context = await getRealtimeProjectContext()
+
+    board = context.text
+    boardMeta = `${context.total_projects} projects, index updated ${context.updated || 'unknown'}, today ${context.today}${context.truncated ? `, ${context.truncated} omitted` : ''}`
+  } catch {
+    board = ''
+  }
+
+  const prompt = buildJudgmentPrompt(question, board, boardMeta)
+  const request = gatewayRequest()
+  const reasoningId = await ensureReasoningSession()
+  let turn: AgentTurn | null = null
+
+  if (request && reasoningId) {
+    const target = reasoningId
+    const delegate = createForegroundDelegate(
+      body => request('prompt.submit', { session_id: target, text: body }, GATEWAY_SUBMIT_TIMEOUT_MS),
+      { getActiveSessionId: () => target, getSelectedStoredSessionId: () => null }
+    )
+
+    turn = delegate.runTurn(prompt, { timeoutMs: JUDGMENT_TIMEOUT_MS })
+    emitGatewayEvent({ payload: { question, sessionId: target }, type: 'voice.judgment.session' })
+  } else {
+    turn = await acquireDelegateTurn(prompt, JUDGMENT_TIMEOUT_MS)
+  }
+
+  if (!turn) {
+    emitGatewayEvent({ payload: { elapsedMs: Date.now() - startedAt, error: 'no session' }, type: 'voice.judgment.failed' })
+    session.sendToolOutput(callId, NO_ROUTABLE_SESSION_OUTPUT)
+
+    return
+  }
+
+  pendingTurnCancels.add(turn.cancel)
+
+  try {
+    const answer = (await turn.result).trim()
+    const elapsedMs = Date.now() - startedAt
+    const seconds = (elapsedMs / 1000).toFixed(1)
+
+    if (!answer) {
+      emitGatewayEvent({ payload: { elapsedMs, error: 'timeout' }, type: 'voice.judgment.failed' })
+      session.sendToolOutput(callId, `The full agent did not answer within ${seconds} seconds. Tell the user briefly and offer to try again or to answer from the board's facts instead.`)
+
+      return
+    }
+
+    recordActivity(`judgment asked: ${question.slice(0, 80)}`)
+    emitGatewayEvent({ payload: { answer, elapsedMs, question }, type: 'voice.judgment.done' })
+    session.sendToolOutput(callId, `Reasoned answer (took ${seconds}s, from the full agent with the whole board):\n${answer}\n\nRelay it in your own voice, decision first.`)
+  } catch (error) {
+    emitGatewayEvent({ payload: { elapsedMs: Date.now() - startedAt, error: String(error) }, type: 'voice.judgment.failed' })
+    notifyError(error, realtimeToolNoResult())
+    session.sendToolOutput(callId, realtimeToolNoResult())
+  } finally {
+    pendingTurnCancels.delete(turn.cancel)
+  }
+}
+
+function runSetProjectField(session: RealtimeVoiceSession, callId: string, args: Record<string, unknown>): void {
+  const field = typeof args.field === 'string' ? args.field.trim() : ''
+  const value = typeof args.value === 'string' ? args.value.trim() : String(args.value ?? '').trim()
+
+  if (!(PROJECT_EDITABLE_FIELDS as readonly string[]).includes(field)) {
+    session.sendToolOutput(callId, `"${field}" is not an editable field. Editable: ${PROJECT_EDITABLE_FIELDS.join(', ')}. Ask the user what to change.`)
+
+    return
+  }
+
+  if (!value) {
+    session.sendToolOutput(callId, `No value was given for ${field}. Ask the user for it.`)
+
+    return
+  }
+
+  const resolved = resolveProjectReference(typeof args.name === 'string' ? args.name : undefined)
+
+  if (resolved.ask || !resolved.name) {
+    session.sendToolOutput(callId, resolved.ask ?? 'Which project? Ask the user.')
+
+    return
+  }
+
+  const name = resolved.name
+
+  void setRealtimeProjectFields({ fields: { [field]: value }, name })
+    .then(result => {
+      if (!result.ok) {
+        // Ambiguous or unknown reference — ask aloud, never guess.
+        session.sendToolOutput(callId, `${result.error ?? 'No single project matched'}. Ask the user which project they mean (by exact name), then call again.`)
+
+        return undefined
+      }
+
+      const applied = Object.entries(result.fields ?? {}).map(([key, val]) => `${key} = ${val}`).join(', ')
+
+      recordActivity(`board edit: ${result.name} ${applied}`)
+      emitGatewayEvent({ payload: { fields: result.fields, name: result.name }, type: 'display.edited' })
+      session.sendToolOutput(callId, `Saved: ${result.name} — ${applied}. Confirm in a few words.`)
+
+      return getRealtimeProjectReview({ limit: 8 }).then(review => {
+        emitGatewayEvent({ payload: { focus: false, result: review, silent: true }, type: 'display.projects' })
+      })
+    })
+    .catch(error => {
+      const detail = error instanceof Error ? error.message : String(error)
+
+      if (/no single project|not voice-editable|no field/i.test(detail)) {
+        session.sendToolOutput(callId, `${detail}. Ask the user which project they mean (by exact name), then call again.`)
+
+        return
+      }
+
+      notifyError(error, realtimeToolNoResult())
+      session.sendToolOutput(callId, realtimeToolNoResult())
+    })
+}
+
+function runP51Tool(session: RealtimeVoiceSession, name: string, callId: string, args: Record<string, unknown>): void {
+  if (name === LOOK_AT_SCREEN_TOOL_NAME) {
+    runLookAtScreen(session, callId, args)
+
+    return
+  }
+
+  if (name === START_BUILD_TOOL_NAME) {
+    const goal = typeof args.goal === 'string' ? args.goal.trim() : ''
+
+    if (!goal) {
+      session.sendToolOutput(callId, 'No goal was given. Ask the user what the build must achieve, then call start_build with the complete goal.')
+
+      return
+    }
+
+    void startBuild(session, callId, goal, typeof args.name === 'string' ? args.name.trim() : '')
+
+    return
+  }
+
+  if (name === BUILD_STATUS_TOOL_NAME) {
+    void buildStatus(session, callId, typeof args.name === 'string' ? args.name : '')
+
+    return
+  }
+
+  if (name === BUILD_MESSAGE_TOOL_NAME) {
+    const message = typeof args.message === 'string' ? args.message.trim() : ''
+
+    if (!message) {
+      session.sendToolOutput(callId, 'The message was empty. Ask the user what to tell the build.')
+
+      return
+    }
+
+    void buildMessage(session, callId, typeof args.name === 'string' ? args.name : '', message)
+
+    return
+  }
+
+  if (name === SET_PROJECT_FIELD_TOOL_NAME) {
+    runSetProjectField(session, callId, args)
+
+    return
+  }
+
+  const question = typeof args.question === 'string' ? args.question.trim() : ''
+
+  if (!question) {
+    session.sendToolOutput(callId, 'No question was given. Ask the user what they want judged.')
+
+    return
+  }
+
+  void runJudgment(session, callId, question)
+}
+
+// Builds are re-read on launch so pinned plates + voice routing survive restarts.
+if (typeof window !== 'undefined') {
+  window.setTimeout(() => {
+    void loadBuilds()
+  }, 2500)
+}
+
 // ── Connection lifecycle ─────────────────────────────────────────────────────
 
 async function connect(renewal: boolean): Promise<void> {
@@ -770,6 +1606,12 @@ async function connect(renewal: boolean): Promise<void> {
 
         if (call.name === OPEN_APP_TOOL_NAME || call.name === OPEN_URL_TOOL_NAME || call.name === DELEGATE_TASK_TOOL_NAME || call.name === CANCEL_TASK_TOOL_NAME) {
           runActionTool(session, call.name, call.callId, call.arguments)
+
+          return
+        }
+
+        if (P51_TOOL_NAMES.has(call.name)) {
+          runP51Tool(session, call.name, call.callId, call.arguments)
 
           return
         }
@@ -962,6 +1804,10 @@ if (typeof window !== 'undefined') {
     }
   })
 
+  window.addEventListener('jarvis:builds-request', () => {
+    void loadBuilds()
+  })
+
   window.addEventListener('jarvis:display-request', () => {
     void getRealtimeProjectReview({ limit: 8 })
       .then(result => {
@@ -1102,6 +1948,9 @@ export const voiceSupervisor = {
     activeDelegate = null
     bridgeChain = Promise.resolve()
     config = {}
+    builds.clear()
+    reasoningSession = null
+    recentActivity.length = 0
     $voiceState.set(IDLE_STATE)
   },
   /** @internal test seam — drive the renderer-shutdown path directly. */

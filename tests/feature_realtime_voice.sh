@@ -226,6 +226,35 @@ grep -q "system-open" "$SRC/hermes_cli/web_server.py" && ok "system-open endpoin
 grep -qv "shell=True" "$SRC/hermes_cli/realtime_voice.py" && ok "no shell=True in launcher" || bad "shell launch detected"
 
 echo
+echo "== 5h. P5.1: sight + build sessions + priority reasoning =="
+grep -q "LOOK_AT_SCREEN_TOOL_NAME = 'look_at_screen'" "$V/realtime-config.ts" && ok "look_at_screen declared" || bad "look_at_screen missing"
+grep -q "START_BUILD_TOOL_NAME = 'start_build'" "$V/realtime-config.ts" && ok "start_build declared" || bad "start_build missing"
+grep -q "BUILD_STATUS_TOOL_NAME = 'build_status'" "$V/realtime-config.ts" && grep -q "BUILD_MESSAGE_TOOL_NAME = 'build_message'" "$V/realtime-config.ts" && ok "build_status + build_message declared" || bad "build voice verbs missing"
+grep -q "ASK_JUDGMENT_TOOL_NAME = 'ask_judgment'" "$V/realtime-config.ts" && grep -q "SET_PROJECT_FIELD_TOOL_NAME = 'set_project_field'" "$V/realtime-config.ts" && ok "judgment + board-edit tools declared" || bad "reasoning tools missing"
+grep -q "JUDGMENT versus FACTS" "$V/realtime-config.ts" && ok "facts-vs-judgment routing policy in instructions" || bad "judgment policy missing"
+grep -q "Let me look at the whole board" "$V/realtime-config.ts" && ok "judgment is narrated before the bridge" || bad "judgment narration missing"
+grep -q "look's time and estimated cost" "$V/realtime-config.ts" && ok "per-look latency/cost is spoken honestly" || bad "sight accounting instruction missing"
+grep -q "browser_vision" "$V/voice-supervisor.ts" && ok "delegated research is sight-first (browser_vision required)" || bad "research prompt is still blind"
+grep -q "MEDIA:" "$V/voice-supervisor.ts" && grep -q "voice.task.media" "$V/voice-supervisor.ts" && ok "research screenshots surface on the cockpit" || bad "research media seam missing"
+grep -q "voice.sight.done" "$V/voice-supervisor.ts" && grep -q "latencyMs" "$V/voice-supervisor.ts" && ok "sight events carry real latency + cost" || bad "sight events missing"
+grep -q "Screen Recording permission" "$V/voice-supervisor.ts" && ok "sight permission flow is explained, not faked" || bad "permission flow missing"
+grep -q "'session.create'" "$V/voice-supervisor.ts" && grep -q "BUILD_SESSION_TITLE_PREFIX" "$V/voice-supervisor.ts" && ok "start_build opens a real named agent session" || bad "build session creation missing"
+grep -q "upsertRealtimeBuild" "$V/voice-supervisor.ts" && grep -q "loadBuilds" "$V/voice-supervisor.ts" && ok "builds persist to the registry and reload on launch" || bad "build persistence missing"
+grep -q "build_id: id" "$V/voice-supervisor.ts" && ok "build gets a linked board entry" || bad "board link missing"
+grep -q "STATUS: BUILD COMPLETE" "$V/voice-supervisor.ts" && ok "build kickoff asks for a plan + needs, then a spoken STATUS line" || bad "kickoff contract missing"
+grep -q "JARVIS · reasoning" "$V/voice-supervisor.ts" && grep -q "JUDGMENT_TIMEOUT_MS" "$V/voice-supervisor.ts" && ok "judgment runs in its own bounded reasoning session" || bad "reasoning session missing"
+grep -q "def enrich_project" "$SRC/hermes_cli/realtime_voice.py" && grep -q "staleness_days" "$SRC/hermes_cli/realtime_voice.py" && grep -q "revenue_relevance" "$SRC/hermes_cli/realtime_voice.py" && ok "enriched index schema (priority/deadline/staleness/revenue)" || bad "enrichment missing"
+grep -q "def set_project_override" "$SRC/hermes_cli/realtime_voice.py" && grep -q "LOCAL_OVERRIDES_NAME" "$SRC/hermes_cli/realtime_voice.py" && ok "voice edits persist beside the index (sync-proof)" || bad "override write path missing"
+grep -q "def look_at_screen" "$SRC/hermes_cli/realtime_voice.py" && grep -q "CGPreflightScreenCaptureAccess" "$SRC/hermes_cli/realtime_voice.py" && ok "screen capture is permission-gated" || bad "capture gate missing"
+grep -q "SIGHT_LIST_PRICES_PER_M" "$SRC/hermes_cli/realtime_voice.py" && grep -q "list-price estimate" "$SRC/hermes_cli/realtime_voice.py" && ok "cost is an explicit list-price estimate" || bad "cost basis missing"
+grep -q "def list_builds" "$SRC/hermes_cli/realtime_voice.py" && grep -q "BUILDS_FILE" "$SRC/hermes_cli/realtime_voice.py" && ok "build registry in backend" || bad "build registry missing"
+for ep in project-context project-set look thumbnail builds; do
+  grep -q "/api/audio/realtime/$ep" "$SRC/hermes_cli/web_server.py" && ok "endpoint $ep in tracked patch" || bad "endpoint $ep missing"
+done
+grep -q "shell=True" "$SRC/hermes_cli/realtime_voice.py" && bad "shell=True crept into the backend" || ok "still no shell=True in the backend"
+grep -q "voice.sight.started" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && grep -q "build.list" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && grep -q "voice.judgment.started" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && ok "cockpit renders sight / build dock / judgment from real events" || bad "cockpit instruments missing"
+
+echo
 echo "== 6. revert restores an EXACT clean upstream =="
 bash "$APPLY" revert "$SRC" >/dev/null 2>&1
 AFTER="$(git -C "$SRCG" status --porcelain | sort)"

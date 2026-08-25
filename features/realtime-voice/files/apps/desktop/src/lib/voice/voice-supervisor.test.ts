@@ -87,12 +87,25 @@ const getRealtimeVoiceConfig = vi.fn(async () => ({
   review_projects_enabled: true
 }))
 
+const getRealtimeProjectContext = vi.fn(async () => ({ ok: true, projects: [], text: 'Alpha [Blocked, High priority]', today: '2026-08-24', total_projects: 1, truncated: 0, updated: '2026-08-24' }))
+const listRealtimeBuilds = vi.fn(async () => ({ builds: [], ok: true }))
+const lookAtScreen = vi.fn(async (_o: unknown) => ({ answer: 'A terminal with a failing test.', analyze_ms: 2100, capture_ms: 130, cost_basis: 'list-price estimate', cost_usd: 0.0009, height: 900, latency_ms: 2300, model: 'gpt-4.1-mini', ok: true, usage: { total_tokens: 1400 }, width: 1440 }))
+const setRealtimeProjectFields = vi.fn(async (_o: unknown) => ({ fields: { priority: 'High' }, key: 'P-1', name: 'Alpha', ok: true }))
+
 vi.mock('@/hermes', () => ({
   mintRealtimeToken: (o: unknown) => mintRealtimeToken(o),
   getRealtimeProjectReview: (o: unknown) => getRealtimeProjectReview(o),
   getRealtimeVoiceConfig: () => getRealtimeVoiceConfig(),
   createRealtimeProject: async () => ({ ok: true, project: {} }),
   openRealtimeSystemApp: async () => ({ ok: true }),
+  // P5.1 seams (sight, builds, reasoning). Each test overrides what it drives.
+  getRealtimeProjectContext: () => getRealtimeProjectContext(),
+  getRealtimeThumbnail: async () => ({ ok: false }),
+  listRealtimeBuilds: () => listRealtimeBuilds(),
+  lookAtScreen: (o: unknown) => lookAtScreen(o),
+  setRealtimeProjectFields: (o: unknown) => setRealtimeProjectFields(o),
+  updateRealtimeBuild: async () => ({ ok: true, build: null }),
+  upsertRealtimeBuild: async (b: unknown) => ({ ok: true, build: b }),
   // pulled in transitively via @/store/layout -> @/store/profile
   setApiRequestProfile: () => undefined
 }))
@@ -390,5 +403,78 @@ describe('voiceSupervisor', () => {
     await tick()
     expect(fakeSessions).toHaveLength(1)
     expect($voiceState.get().active).toBe(true)
+  })
+
+  // ── P5.1 ──────────────────────────────────────────────────────────────────
+
+  it('look_at_screen relays the answer with the look\'s real latency and estimated cost', async () => {
+    const session = await startAndConnect()
+
+    session.callbacks.onToolCall?.({ callId: 's1', name: 'look_at_screen', arguments: { question: 'what is on my screen' } })
+    await tick(8)
+
+    expect(lookAtScreen).toHaveBeenCalledWith({ question: 'what is on my screen' })
+    expect(session.sendToolOutput).toHaveBeenCalledWith('s1', expect.stringContaining('A terminal with a failing test.'))
+    expect(session.sendToolOutput).toHaveBeenCalledWith('s1', expect.stringMatching(/2\.3 seconds; about 0\.09 cents at list price via gpt-4\.1-mini/))
+  })
+
+  it('look_at_screen without the Screen Recording grant explains the permission flow instead of pretending to see', async () => {
+    const session = await startAndConnect()
+
+    lookAtScreen.mockResolvedValueOnce({ error: 'Screen Recording permission is not granted', ok: false, permission: 'requested' } as never)
+    session.callbacks.onToolCall?.({ callId: 's2', name: 'look_at_screen', arguments: {} })
+    await tick(8)
+
+    expect(session.sendToolOutput).toHaveBeenCalledWith('s2', expect.stringContaining('Screen Recording permission is not granted'))
+    expect(session.sendToolOutput).toHaveBeenCalledWith('s2', expect.stringContaining('Privacy & Security'))
+  })
+
+  it('set_project_field persists the voice edit through the backend and confirms compactly', async () => {
+    const session = await startAndConnect()
+
+    session.callbacks.onToolCall?.({ callId: 'e1', name: 'set_project_field', arguments: { name: 'Alpha', field: 'priority', value: 'high' } })
+    await tick(8)
+
+    expect(setRealtimeProjectFields).toHaveBeenCalledWith({ fields: { priority: 'high' }, name: 'Alpha' })
+    expect(session.sendToolOutput).toHaveBeenCalledWith('e1', expect.stringContaining('Saved: Alpha — priority = High'))
+  })
+
+  it('set_project_field refuses a non-editable field without touching the backend', async () => {
+    const session = await startAndConnect()
+
+    setRealtimeProjectFields.mockClear()
+    session.callbacks.onToolCall?.({ callId: 'e2', name: 'set_project_field', arguments: { name: 'Alpha', field: 'secret', value: 'x' } })
+    await tick(4)
+
+    expect(setRealtimeProjectFields).not.toHaveBeenCalled()
+    expect(session.sendToolOutput).toHaveBeenCalledWith('e2', expect.stringContaining('not an editable field'))
+  })
+
+  it('ask_judgment gathers the whole enriched board and, with no session to reason in, asks for one — never answers judgment from the fast path', async () => {
+    const session = await startAndConnect()
+
+    session.callbacks.onToolCall?.({ callId: 'j1', name: 'ask_judgment', arguments: { question: 'what should I focus on' } })
+    await tick(12)
+
+    expect(getRealtimeProjectContext).toHaveBeenCalled()
+    expect(session.sendToolOutput).toHaveBeenCalledWith('j1', expect.stringContaining('no open session'))
+  })
+
+  it('build_status with no builds offers to start one', async () => {
+    const session = await startAndConnect()
+
+    session.callbacks.onToolCall?.({ callId: 'b1', name: 'build_status', arguments: {} })
+    await tick(4)
+
+    expect(session.sendToolOutput).toHaveBeenCalledWith('b1', expect.stringContaining('No build sessions exist yet'))
+  })
+
+  it('start_build with no gateway reports that a session could not be routed (and never fakes a build)', async () => {
+    const session = await startAndConnect()
+
+    session.callbacks.onToolCall?.({ callId: 'b2', name: 'start_build', arguments: { goal: 'attach my Stripe account to the agent via API', name: 'Stripe integration' } })
+    await tick(8)
+
+    expect(session.sendToolOutput).toHaveBeenCalledWith('b2', expect.stringContaining('no open session'))
   })
 })

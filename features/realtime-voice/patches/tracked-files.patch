@@ -1,5 +1,5 @@
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 2046c1c..bc86325 100644
+index 2046c1c84c5..bc86325a817 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
 @@ -14542,6 +14542,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
@@ -19,7 +19,7 @@ index 2046c1c..bc86325 100644
    if (!payload || !isHexColor(payload.background) || !isHexColor(payload.foreground)) {
      return
 diff --git a/apps/desktop/electron/preload.ts b/apps/desktop/electron/preload.ts
-index c438221..c04c798 100644
+index c4382210327..c04c798ba35 100644
 --- a/apps/desktop/electron/preload.ts
 +++ b/apps/desktop/electron/preload.ts
 @@ -247,6 +247,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
@@ -31,7 +31,7 @@ index c438221..c04c798 100644
    setNativeTheme: mode => ipcRenderer.send('hermes:native-theme', mode),
    setTranslucency: payload => ipcRenderer.send('hermes:translucency', payload),
 diff --git a/apps/desktop/electron/stream-throttle.test.ts b/apps/desktop/electron/stream-throttle.test.ts
-index fc41bcf..57979c6 100644
+index fc41bcf1681..57979c6ab77 100644
 --- a/apps/desktop/electron/stream-throttle.test.ts
 +++ b/apps/desktop/electron/stream-throttle.test.ts
 @@ -132,6 +132,45 @@ test('repeated busy reports do not re-apply or stack timers', () => {
@@ -81,7 +81,7 @@ index fc41bcf..57979c6 100644
    const timers = makeTimers()
    const throttle = createStreamThrottle(timers)
 diff --git a/apps/desktop/electron/stream-throttle.ts b/apps/desktop/electron/stream-throttle.ts
-index 912b40b..9342e30 100644
+index 912b40b9167..9342e302278 100644
 --- a/apps/desktop/electron/stream-throttle.ts
 +++ b/apps/desktop/electron/stream-throttle.ts
 @@ -44,6 +44,11 @@ export interface StreamThrottle {
@@ -184,7 +184,7 @@ index 912b40b..9342e30 100644
    }
  }
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
-index ffe6c47..3b9130f 100644
+index ffe6c4707fe..3b9130fbd84 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
 @@ -1,10 +1,11 @@
@@ -453,7 +453,7 @@ index ffe6c47..3b9130f 100644
    const handleToggleAutoSpeak = useCallback(() => {
      void setAutoSpeakReplies(!$autoSpeakReplies.get()).catch(error =>
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts b/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts
-index 5389d9f..e5ec345 100644
+index 5389d9f4d57..e5ec3450733 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts
 @@ -1,3 +1,4 @@
@@ -470,7 +470,7 @@ index 5389d9f..e5ec345 100644
          const speechThreshold = options.silenceLevel ?? 0
          const silenceMs = options.silenceMs ?? 0
 diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
-index 52a7597..4d6b87c 100644
+index 52a7597ebf7..4d6b87c007a 100644
 --- a/apps/desktop/src/global.d.ts
 +++ b/apps/desktop/src/global.d.ts
 @@ -268,6 +268,10 @@ declare global {
@@ -485,7 +485,7 @@ index 52a7597..4d6b87c 100644
        setNativeTheme?: (mode: 'dark' | 'light' | 'system') => void
        /** Main-process fact: this OS can back glass with a native material. */
 diff --git a/apps/desktop/src/hermes.ts b/apps/desktop/src/hermes.ts
-index 6242ef5..901d24e 100644
+index 6242ef5998b..901d24e5406 100644
 --- a/apps/desktop/src/hermes.ts
 +++ b/apps/desktop/src/hermes.ts
 @@ -23,6 +23,7 @@ export * from './api/messaging'
@@ -497,7 +497,7 @@ index 6242ef5..901d24e 100644
  export * from './api/skills'
  export * from './api/system'
 diff --git a/apps/desktop/src/lib/voice-playback.ts b/apps/desktop/src/lib/voice-playback.ts
-index eb64c4f..8fdfaba 100644
+index eb64c4feb36..8fdfaba9953 100644
 --- a/apps/desktop/src/lib/voice-playback.ts
 +++ b/apps/desktop/src/lib/voice-playback.ts
 @@ -1,3 +1,4 @@
@@ -514,7 +514,7 @@ index eb64c4f..8fdfaba 100644
    setVoicePlaybackState(currentState('speaking', options, audio))
  
 diff --git a/apps/desktop/src/types/hermes.ts b/apps/desktop/src/types/hermes.ts
-index f00bdd0..bcda062 100644
+index f00bdd09cc8..bcda0621bff 100644
 --- a/apps/desktop/src/types/hermes.ts
 +++ b/apps/desktop/src/types/hermes.ts
 @@ -29,6 +29,58 @@ export interface AudioSpeakResponse {
@@ -577,10 +577,10 @@ index f00bdd0..bcda062 100644
    label: string
    name: string
 diff --git a/hermes_cli/web_models.py b/hermes_cli/web_models.py
-index 2a44cfe..2e66539 100644
+index 2a44cfef083..d73e5f03c05 100644
 --- a/hermes_cli/web_models.py
 +++ b/hermes_cli/web_models.py
-@@ -306,6 +306,39 @@ class TTSSpeakRequest(BaseModel):
+@@ -306,6 +306,71 @@ class TTSSpeakRequest(BaseModel):
      text: str
  
  
@@ -605,11 +605,43 @@ index 2a44cfe..2e66539 100644
 +    detail: bool = False
 +
 +class RealtimeProjectCreateRequest(BaseModel):
-+    """Voice-intake project creation (writes the local-additions overlay)."""
++    """Voice-intake project creation (writes the local-additions overlay).
++    ``build_id`` links the board entry to a persistent build session (P5.1)."""
 +
 +    name: str
 +    goal: str = ""
 +    tasks: list[str] = []
++    build_id: Optional[str] = None
++    source: str = "voice-intake"
++    status: str = "Planning"
++
++
++class RealtimeProjectSetRequest(BaseModel):
++    """P5.1 voice edit of one project's enriched fields (priority, deadline, …)."""
++
++    name: str
++    fields: dict = {}
++
++
++class RealtimeLookRequest(BaseModel):
++    """P5.1 sight: one on-demand look at the screen."""
++
++    question: str = ""
++
++
++class RealtimeThumbnailRequest(BaseModel):
++    """P5.1: cockpit thumbnail of an agent-produced screenshot (home-confined)."""
++
++    path: str
++
++
++class RealtimeBuildsRequest(BaseModel):
++    """P5.1 build-session registry: list | upsert | update."""
++
++    action: str = "list"
++    build: Optional[dict] = None
++    id: Optional[str] = None
++    patch: Optional[dict] = None
 +
 +class RealtimeSystemOpenRequest(BaseModel):
 +    """Voice `open_app` instant action (launch a desktop application by name)."""
@@ -621,10 +653,10 @@ index 2a44cfe..2e66539 100644
  
  class OAuthSubmitBody(BaseModel):
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 201d37f..5040407 100644
+index 201d37f1972..6308ee2823d 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
-@@ -1648,6 +1648,10 @@ from hermes_cli.web_models import (  # noqa: F401
+@@ -1648,6 +1648,14 @@ from hermes_cli.web_models import (  # noqa: F401
      LearningNodeEdit,
      DebugShareRequest,
      TTSSpeakRequest,
@@ -632,10 +664,14 @@ index 201d37f..5040407 100644
 +    RealtimeProjectCreateRequest,
 +    RealtimeProjectReviewRequest,
 +    RealtimeSystemOpenRequest,
++    RealtimeProjectSetRequest,
++    RealtimeLookRequest,
++    RealtimeThumbnailRequest,
++    RealtimeBuildsRequest,
      OAuthSubmitBody,
      BulkDeleteSessions,
      SessionImport,
-@@ -5493,6 +5497,277 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+@@ -5493,6 +5501,396 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
      }
  
  
@@ -859,6 +895,7 @@ index 201d37f..5040407 100644
 +        status_filter=request.status,
 +        limit=request.limit,
 +        detail=bool(getattr(request, "detail", False)),
++        index_path=source,
 +    )
 +
 +
@@ -885,7 +922,13 @@ index 201d37f..5040407 100644
 +
 +    try:
 +        row = realtime_voice.create_local_project(
-+            source, payload.name, goal=payload.goal, tasks=payload.tasks
++            source,
++            payload.name,
++            goal=payload.goal,
++            tasks=payload.tasks,
++            source=payload.source,
++            build_id=payload.build_id,
++            status=payload.status,
 +        )
 +    except ValueError as exc:
 +        raise HTTPException(status_code=400, detail=str(exc))
@@ -908,6 +951,118 @@ index 201d37f..5040407 100644
 +        return {"ok": False, "error": str(result.get("error") or "launch failed")}
 +
 +    return {"ok": True}
++
++
++# --- P5.1: priority reasoning, sight, build sessions --------------------------
++def _realtime_index_data(profile: Optional[str]):
++    """(index_path, merged data) for the configured project index, or 404."""
++    from hermes_cli import realtime_voice
++    from hermes_constants import get_hermes_home
++
++    with _config_profile_scope(profile):
++        config = load_config() or {}
++        source = realtime_voice.resolve_index_path(get_hermes_home(), config)
++
++    if source is None or not source.exists():
++        raise HTTPException(
++            status_code=404,
++            detail="No project index is configured (voice.realtime.review_projects.index_path).",
++        )
++    try:
++        data = json.loads(source.read_text(encoding="utf-8"))
++    except Exception:
++        raise HTTPException(status_code=502, detail="The configured project index could not be read.")
++    local_rows = realtime_voice.read_local_additions(source)
++    if local_rows:
++        merged = data.get("projects") if isinstance(data, dict) else data
++        if isinstance(merged, list):
++            data = {**data, "projects": [*merged, *local_rows]} if isinstance(data, dict) else [*merged, *local_rows]
++    return source, data
++
++
++@app.post("/api/audio/realtime/project-context")
++async def realtime_project_context(profile: Optional[str] = None):
++    """The whole enriched board, compact — the judgment bridge's context."""
++    from hermes_cli import realtime_voice
++
++    source, data = _realtime_index_data(profile)
++    return realtime_voice.build_reasoning_context(data, source)
++
++
++@app.post("/api/audio/realtime/project-set")
++async def realtime_project_set(payload: RealtimeProjectSetRequest, profile: Optional[str] = None):
++    """Voice edit of one project's enriched fields, persisted beside the index.
++    An ambiguous reference or a non-editable field is a 400 the voice layer
++    turns into a question — never a guess."""
++    from hermes_cli import realtime_voice
++
++    source, data = _realtime_index_data(profile)
++    try:
++        result = realtime_voice.set_project_override(
++            source, realtime_voice._project_rows(data), payload.name, payload.fields or {}
++        )
++    except ValueError as exc:
++        # Conversational outcome, not a transport error: the voice asks aloud.
++        return {"ok": False, "error": str(exc)}
++    except OSError:
++        raise HTTPException(status_code=502, detail="Could not write the local overrides file.")
++    return {"ok": True, **result}
++
++
++@app.post("/api/audio/realtime/look")
++async def realtime_look(payload: Optional[RealtimeLookRequest] = None, profile: Optional[str] = None):
++    """P5.1 sight: capture the screen (permission-gated) and analyze it with a
++    vision model. Reports real latency, token usage and a list-price cost
++    estimate. The standing key is used only as the outbound Bearer."""
++    from hermes_cli import realtime_voice
++    from hermes_constants import get_hermes_home
++
++    body = payload or RealtimeLookRequest()
++    with _config_profile_scope(profile):
++        from tools.tool_backend_helpers import resolve_openai_audio_api_key
++
++        config = load_config() or {}
++        home = Path(get_hermes_home())
++        api_key = (resolve_openai_audio_api_key() or "").strip()
++
++    loop = asyncio.get_running_loop()
++    return await loop.run_in_executor(
++        None, lambda: realtime_voice.look_at_screen(home, config, api_key, body.question)
++    )
++
++
++@app.post("/api/audio/realtime/thumbnail")
++async def realtime_thumbnail(payload: RealtimeThumbnailRequest, profile: Optional[str] = None):
++    """Cockpit thumbnail of an agent-produced screenshot, confined to the home."""
++    from hermes_cli import realtime_voice
++    from hermes_constants import get_hermes_home
++
++    with _config_profile_scope(profile):
++        home = Path(get_hermes_home())
++    loop = asyncio.get_running_loop()
++    return await loop.run_in_executor(None, lambda: realtime_voice.thumbnail_for_path(home, payload.path))
++
++
++@app.post("/api/audio/realtime/builds")
++async def realtime_builds(payload: Optional[RealtimeBuildsRequest] = None, profile: Optional[str] = None):
++    """P5.1 build sessions: the durable registry that survives app restarts."""
++    from hermes_cli import realtime_voice
++    from hermes_constants import get_hermes_home
++
++    body = payload or RealtimeBuildsRequest()
++    with _config_profile_scope(profile):
++        home = Path(get_hermes_home())
++
++    try:
++        if body.action == "upsert":
++            return {"ok": True, "build": realtime_voice.upsert_build(home, body.build or {})}
++        if body.action == "update":
++            return {"ok": True, "build": realtime_voice.update_build(home, str(body.id or ""), body.patch or {})}
++        return {"ok": True, "builds": realtime_voice.list_builds(home)}
++    except ValueError as exc:
++        raise HTTPException(status_code=400, detail=str(exc))
++    except OSError:
++        raise HTTPException(status_code=502, detail="Could not write the build registry.")
 +
 +
  def _split_text_for_speak_stream(text: str, cap: int) -> list:

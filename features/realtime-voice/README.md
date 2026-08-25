@@ -46,6 +46,35 @@ focused patch to a handful of tracked upstream files.
   configured (or the file is absent) the tool is **omitted entirely** and voice
   uses the full agent for project work.
 
+- **P5.1 SIGHT** — `look_at_screen`: on-demand macOS screen capture (Screen
+  Recording permission is preflighted; when missing, the grant is requested and
+  the Privacy pane opened — the voice explains instead of pretending to see)
+  → one downscaled JPEG to an OpenAI vision model (`voice.realtime.sight.model`,
+  default `gpt-4.1-mini`) with the same standing key. Every look reports its
+  real latency (capture + vision) and a **list-price cost estimate**, spoken
+  after the answer, shown on the cockpit plate, and appended to
+  `<home>/cache/sight/looks.jsonl`. Delegated *research* is sight-first: the
+  agent must `browser_navigate` → `browser_snapshot` → `browser_vision` the key
+  pages and name its screenshots (`MEDIA:` lines), which the cockpit shows.
+- **P5.1 BUILD SESSIONS** — `start_build(goal)`: a real named agent session
+  (`session.create`, title `BUILD · <name>`) plus a durable registry record at
+  `<home>/builds/sessions.json` and a linked board entry. The build plans
+  first and asks for what it needs (secrets are pasted into the session, never
+  spoken); every reply ends with a `STATUS:` line the voice relays. Voice
+  routes `build_status` / `build_message` to the right session by name,
+  resuming the stored session after an app restart. The cockpit pins one plate
+  per build (state, elapsed, live stream, last tool, last status).
+- **P5.1 PRIORITY REASONING** — every index row is enriched on read with a
+  normalized `priority`, `deadline` (+`days_to_deadline`), `staleness_days`
+  (from a content-fingerprint ledger beside the index) and `revenue_relevance`
+  (+ outstanding amount, derived from payment data). Voice edits
+  (`set_project_field`: "mark X high priority") persist in
+  `local-overrides.json` beside the index — sync-proof, merged on every read.
+  **Facts** stay on the fast index path; **judgment** ("what should I focus
+  on?") goes through `ask_judgment` to the full agent in a dedicated
+  `JARVIS · reasoning` session with the whole enriched board + recent activity
+  as context (45 s bound; elapsed is reported against the 5–10 s budget).
+
 ## Layout
 
 ```

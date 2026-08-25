@@ -1001,6 +1001,13 @@ function HudPage() {
   const [jobs, setJobs] = useState([])
   const [activity, setActivity] = useState([])
   const [isFull, setIsFull] = useState(false)
+  // P5.1 instruments: sight (one look at a time), judgment (one at a time),
+  // and the build dock (persistent, restart-surviving plates).
+  const [sight, setSight] = useState(null)
+  const [judgment, setJudgment] = useState(null)
+  const [builds, setBuilds] = useState([])
+  const buildsRef = useRef([])
+  const p51TimersRef = useRef({})
 
   useEffect(() => {
     // Scheduled jobs: a real gateway read (cron.manage list), refreshed slowly.
@@ -1032,7 +1039,27 @@ function HudPage() {
       'voice.task.cancelled': 'TASK CANCELLED',
       'voice.task.done': 'TASK COMPLETE',
       'voice.task.started': 'TASK DELEGATED',
+      'voice.task.media': 'RESEARCH \u00b7 SCREENSHOT',
+      'voice.sight.started': 'SIGHT \u00b7 CAPTURING',
+      'voice.sight.done': 'SIGHT \u00b7 ANALYZED',
+      'voice.sight.failed': 'SIGHT \u00b7 FAILED',
+      'voice.judgment.started': 'JUDGMENT \u00b7 FULL BOARD',
+      'voice.judgment.done': 'JUDGMENT \u00b7 ANSWERED',
+      'voice.judgment.failed': 'JUDGMENT \u00b7 NO ANSWER',
+      'build.started': 'BUILD SESSION OPENED',
+      'build.update': 'BUILD UPDATE',
+      'display.edited': 'BOARD EDITED',
       'wake.detected': 'WAKE DETECTED'
+    }
+    // Honest numbers ride along on the rail: a look's real time + cost, a
+    // judgment's elapsed, a build's state.
+    const DETAIL = {
+      'voice.sight.done': p => (p.latencyMs / 1000).toFixed(1) + 's \u00b7 ' + (typeof p.costUsd === 'number' ? '$' + p.costUsd.toFixed(4) : 'cost n/a'),
+      'voice.judgment.done': p => (p.elapsedMs / 1000).toFixed(1) + 's',
+      'voice.judgment.failed': p => (p.elapsedMs / 1000).toFixed(1) + 's',
+      'build.update': p => String(p.name || '').slice(0, 18) + ' \u00b7 ' + String(p.inFlight ? 'working' : p.state || '').toUpperCase(),
+      'build.started': p => String(p.name || '').slice(0, 24),
+      'display.edited': p => String(p.name || '').slice(0, 24)
     }
 
     return host.onEvent('*', event => {
@@ -1044,8 +1071,15 @@ function HudPage() {
 
       const at = new Date()
       const stamp = String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0') + ':' + String(at.getSeconds()).padStart(2, '0')
+      let detail = ''
 
-      setActivity(prev => [{ at: stamp, key: at.getTime() + label, label }, ...prev].slice(0, 7))
+      try {
+        detail = DETAIL[event.type] ? DETAIL[event.type](event.payload ?? {}) : ''
+      } catch {
+        detail = ''
+      }
+
+      setActivity(prev => [{ at: stamp, detail, key: at.getTime() + label, label }, ...prev].slice(0, 7))
     })
   }, [])
 
@@ -1059,6 +1093,10 @@ function HudPage() {
       window.setTimeout(() => {
         if (!boardArmedRef.current) {
           window.dispatchEvent(new CustomEvent('jarvis:display-request'))
+        }
+
+        if (!buildsRef.current.length) {
+          window.dispatchEvent(new CustomEvent('jarvis:builds-request'))
         }
       }, ms)
     )
@@ -1226,10 +1264,12 @@ function HudPage() {
           id: payload.id,
           kind: payload.kind === 'research' ? 'research' : 'task',
           sessionId: payload.sessionId || null,
+          media: [],
           startedAt: Date.now(),
           status: 'running',
           summary: '',
-          tail: ''
+          tail: '',
+          tools: []
         }
 
         taskRef.current = next
@@ -1309,6 +1349,154 @@ function HudPage() {
             }
           }, 5000)
         )
+      }),
+      // Research: which tools the agent is really using (browser_vision = it
+      // LOOKED), and the screenshots it named — truthful theater.
+      host.onEvent('tool.start', event => {
+        const sid = event.session_id ?? event.sessionId
+        const payload = event.payload ?? {}
+        const name = String(payload.name ?? payload.tool ?? payload.tool_name ?? payload.function ?? '').trim()
+
+        if (!sid || !name) {
+          return
+        }
+
+        const current = taskRef.current
+
+        if (current && current.status === 'running' && current.sessionId === sid) {
+          const next = { ...current, tools: [...current.tools.filter(t => t !== name), name].slice(-4) }
+
+          taskRef.current = next
+          setTask(next)
+        }
+
+        if (buildsRef.current.some(b => b.session_id === sid)) {
+          const rows = buildsRef.current.map(b => (b.session_id === sid ? { ...b, lastTool: name } : b))
+
+          buildsRef.current = rows
+          setBuilds(rows)
+        }
+      }),
+      host.onEvent('voice.task.media', event => {
+        const current = taskRef.current
+
+        if (!current || event.payload?.id !== current.id || !event.payload?.thumbnail) {
+          return
+        }
+
+        const next = { ...current, media: [...current.media, { path: event.payload.path, thumbnail: event.payload.thumbnail }].slice(-3) }
+
+        taskRef.current = next
+        setTask(next)
+      }),
+      // SIGHT
+      host.onEvent('voice.sight.started', event => {
+        window.clearTimeout(p51TimersRef.current.sight)
+        tracker.gesture = { at: performance.now(), kind: 'gather' }
+        uiSound('tick')
+        setSight({ at: Date.now(), question: String(event.payload?.question || ''), status: 'capturing' })
+      }),
+      host.onEvent('voice.sight.done', event => {
+        const p = event.payload ?? {}
+
+        tracker.gesture = { at: performance.now(), kind: 'project' }
+        uiSound('materialize')
+        setSight({ ...p, at: Date.now(), status: 'done' })
+        p51TimersRef.current.sight = window.setTimeout(() => setSight(null), 45_000)
+      }),
+      host.onEvent('voice.sight.failed', event => {
+        setSight({ at: Date.now(), error: String(event.payload?.error || 'failed'), permission: event.payload?.permission || null, status: 'failed' })
+        p51TimersRef.current.sight = window.setTimeout(() => setSight(null), 9000)
+      }),
+      // JUDGMENT — the full agent reasoning over the whole board
+      host.onEvent('voice.judgment.started', event => {
+        window.clearTimeout(p51TimersRef.current.judgment)
+        tracker.gesture = { at: performance.now(), kind: 'gather' }
+        tracker.thinkUntil = performance.now() + THINK_HOLD_MS
+        setJudgment({ at: Date.now(), question: String(event.payload?.question || ''), status: 'reasoning' })
+      }),
+      host.onEvent('voice.judgment.done', event => {
+        const p = event.payload ?? {}
+
+        tracker.gesture = { at: performance.now(), kind: 'project' }
+        tracker.thinkUntil = 0
+        uiSound('tick')
+        setJudgment({ answer: String(p.answer || ''), at: Date.now(), elapsedMs: p.elapsedMs, question: String(p.question || ''), status: 'done' })
+        p51TimersRef.current.judgment = window.setTimeout(() => setJudgment(null), 40_000)
+      }),
+      host.onEvent('voice.judgment.failed', event => {
+        tracker.thinkUntil = 0
+        setJudgment(prev => ({ ...(prev || {}), elapsedMs: event.payload?.elapsedMs, error: String(event.payload?.error || 'no answer'), status: 'failed' }))
+        p51TimersRef.current.judgment = window.setTimeout(() => setJudgment(null), 9000)
+      }),
+      // BUILD SESSIONS — the persistent dock
+      host.onEvent('build.list', event => {
+        const rows = Array.isArray(event.payload?.builds) ? event.payload.builds : []
+        const prior = buildsRef.current
+        const merged = rows.map(row => ({ ...(prior.find(b => b.id === row.id) || {}), ...row }))
+
+        buildsRef.current = merged
+        setBuilds(merged)
+      }),
+      host.onEvent('build.started', event => {
+        const row = event.payload ?? {}
+
+        if (!row.id) {
+          return
+        }
+
+        tracker.gesture = { at: performance.now(), kind: 'project' }
+        uiSound('materialize')
+        const rows = [...buildsRef.current.filter(b => b.id !== row.id), { ...row, tail: '' }]
+
+        buildsRef.current = rows
+        setBuilds(rows)
+      }),
+      host.onEvent('build.update', event => {
+        const row = event.payload ?? {}
+
+        if (!row.id) {
+          return
+        }
+
+        const known = buildsRef.current.some(b => b.id === row.id)
+        const rows = known
+          ? buildsRef.current.map(b => (b.id === row.id ? { ...b, ...row, tail: row.inFlight ? b.tail : '' } : b))
+          : [...buildsRef.current, { ...row, tail: '' }]
+
+        if (row.state === 'done') {
+          uiSound('tick')
+        }
+
+        buildsRef.current = rows
+        setBuilds(rows)
+      }),
+      host.onEvent('build.session', event => {
+        const { id, sessionId } = event.payload ?? {}
+        const rows = buildsRef.current.map(b => (b.id === id ? { ...b, session_id: sessionId } : b))
+
+        buildsRef.current = rows
+        setBuilds(rows)
+      }),
+      host.onEvent('message.delta', event => {
+        // Stream each build session's REAL output into its plate.
+        const sid = event.session_id ?? event.sessionId
+
+        if (!sid || !buildsRef.current.some(b => b.session_id === sid && b.inFlight)) {
+          return
+        }
+
+        const payload = event.payload ?? {}
+        const chunk = typeof payload.text === 'string' ? payload.text : typeof payload.delta === 'string' ? payload.delta : ''
+
+        if (!chunk) {
+          return
+        }
+
+        const rows = buildsRef.current.map(b => (b.session_id === sid ? { ...b, tail: ((b.tail || '') + chunk).slice(-360) } : b))
+
+        buildsRef.current = rows
+        setBuilds(rows)
       }),
       host.onEvent('voice.amplitude', event => {
         const { level = 0, source = 'out' } = event.payload ?? {}
@@ -1521,6 +1709,19 @@ function HudPage() {
               task.status === 'running'
                 ? jsx('div', { className: 'jv-task-sweep', style: { background: 'rgba(59,130,246,0.16)', height: '2px', marginTop: '8px' } })
                 : null,
+              task.tools.length
+                ? jsx('div', {
+                    style: { color: task.tools.includes('browser_vision') ? '#93C5FD' : 'rgba(122,150,183,0.9)', fontFamily: T.label, fontSize: '7.5px', letterSpacing: '0.2em', marginTop: '6px', textTransform: 'uppercase' },
+                    children: 'TOOLS \u00b7 ' + task.tools.map(t => t.replace(/_/g, ' ')).join(' \u00b7 ')
+                  })
+                : null,
+              task.media.length
+                ? jsx('div', {
+                    style: { display: 'flex', gap: '6px', marginTop: '7px' },
+                    children: task.media.map((m, i) =>
+                      jsx('img', { alt: '', src: m.thumbnail, style: { animation: 'jvFadeUp 400ms both', border: '1px solid rgba(96,165,250,0.4)', height: '58px', objectFit: 'cover', width: task.media.length > 1 ? '84px' : '100%' } }, m.path || i))
+                  })
+                : null,
               task.status === 'done' && task.summary
                 ? jsx('div', {
                     style: { animation: 'jvFadeUp 400ms both', borderLeft: '2px solid rgba(52,211,153,0.6)', color: 'rgba(217,230,242,0.95)', fontSize: '10px', lineHeight: 1.5, marginTop: '9px', maxHeight: '150px', overflow: 'hidden', paddingLeft: '9px', whiteSpace: 'pre-wrap' },
@@ -1533,6 +1734,100 @@ function HudPage() {
                     })
                   : null
             ]
+          })
+        : null,
+      // P5.1 center column: SIGHT plate + JUDGMENT plate (one of each at a time)
+      sight || judgment
+        ? jsxs('div', {
+            style: { display: 'flex', flexDirection: 'column', gap: '8px', left: '50%', pointerEvents: 'none', position: 'absolute', top: '82px', transform: 'translateX(-50%)', width: '440px', zIndex: 5 },
+            children: [
+              sight
+                ? jsxs('div', {
+                    style: { animation: 'jvFadeUp 400ms both', background: 'rgba(4,9,17,0.78)', border: '1px solid ' + (sight.status === 'failed' ? 'rgba(248,113,113,0.45)' : 'rgba(96,165,250,0.4)'), clipPath: 'polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px)', padding: '9px 12px 10px', position: 'relative' },
+                    children: [
+                      jsx('div', { className: 'jv-scan', style: { inset: 0, pointerEvents: 'none', position: 'absolute' } }),
+                      jsxs('div', { style: { alignItems: 'baseline', display: 'flex', justifyContent: 'space-between' }, children: [
+                        jsx('div', { style: { ...LABEL, fontSize: '8.5px' }, children: 'SIGHT \u00b7 SCREEN CAPTURE' }),
+                        jsx('div', { className: sight.status === 'capturing' ? 'jv-chip' : '', style: { color: sight.status === 'failed' ? '#F87171' : sight.status === 'done' ? '#34D399' : '#93C5FD', fontFamily: T.label, fontSize: '8px', letterSpacing: '0.26em', textTransform: 'uppercase' }, children: sight.status === 'capturing' ? 'CAPTURING \u00b7 ANALYZING' : sight.status === 'done' ? 'ANALYZED' : 'FAILED' })
+                      ] }),
+                      sight.question ? jsx('div', { style: { color: 'rgba(139,161,188,0.95)', fontFamily: T.label, fontSize: '10px', letterSpacing: '0.08em', marginTop: '4px', textTransform: 'uppercase' }, children: String(sight.question).slice(0, 90) }) : null,
+                      sight.status === 'capturing' ? jsx('div', { className: 'jv-task-sweep', style: { background: 'rgba(59,130,246,0.16)', height: '2px', marginTop: '8px' } }) : null,
+                      sight.thumbnail ? jsx('img', { alt: '', src: sight.thumbnail, style: { animation: 'jvFadeUp 400ms both', border: '1px solid rgba(96,165,250,0.4)', display: 'block', marginTop: '8px', maxHeight: '150px', objectFit: 'cover', objectPosition: 'top', width: '100%' } }) : null,
+                      sight.status === 'done' && sight.answer ? jsx('div', { style: { animation: 'jvFadeUp 400ms 120ms both', borderLeft: '2px solid rgba(52,211,153,0.6)', color: 'rgba(217,230,242,0.95)', fontSize: '10.5px', lineHeight: 1.5, marginTop: '8px', paddingLeft: '9px' }, children: String(sight.answer).slice(0, 360) }) : null,
+                      sight.status === 'failed' ? jsx('div', { style: { color: '#F87171', fontSize: '10px', marginTop: '6px' }, children: sight.permission ? 'Screen Recording permission needed \u2014 enable JARVIS in System Settings \u203a Privacy & Security' : String(sight.error).slice(0, 160) }) : null,
+                      sight.status === 'done'
+                        ? jsx('div', {
+                            style: { color: 'rgba(96,165,250,0.85)', fontFamily: T.data, fontSize: '8px', fontVariantNumeric: 'tabular-nums', marginTop: '7px' },
+                            children: 'T ' + (sight.latencyMs / 1000).toFixed(1) + 's (capture ' + (sight.captureMs ?? '?') + 'ms \u00b7 vision ' + (sight.analyzeMs ?? '?') + 'ms) \u00b7 ' + (sight.width || '?') + '\u00d7' + (sight.height || '?') + ' \u00b7 ' + String(sight.model || '') + ' \u00b7 ' + (typeof sight.costUsd === 'number' ? '$' + sight.costUsd.toFixed(4) + ' est' : 'cost n/a') + (sight.usage?.total_tokens ? ' \u00b7 ' + sight.usage.total_tokens + ' tok' : '')
+                          })
+                        : null
+                    ]
+                  })
+                : null,
+              judgment
+                ? jsxs('div', {
+                    style: { animation: 'jvFadeUp 400ms both', background: 'rgba(4,9,17,0.78)', border: '1px solid ' + (judgment.status === 'failed' ? 'rgba(248,113,113,0.45)' : 'rgba(96,165,250,0.4)'), clipPath: 'polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px)', padding: '9px 12px 10px', position: 'relative' },
+                    children: [
+                      jsx('div', { className: 'jv-scan', style: { inset: 0, pointerEvents: 'none', position: 'absolute' } }),
+                      jsxs('div', { style: { alignItems: 'baseline', display: 'flex', justifyContent: 'space-between' }, children: [
+                        jsx('div', { style: { ...LABEL, fontSize: '8.5px' }, children: 'JUDGMENT \u00b7 FULL AGENT \u00b7 WHOLE BOARD' }),
+                        jsx('div', { className: judgment.status === 'reasoning' ? 'jv-chip' : '', style: { color: judgment.status === 'failed' ? '#F87171' : judgment.status === 'done' ? '#34D399' : '#93C5FD', fontFamily: T.label, fontSize: '8px', letterSpacing: '0.26em', textTransform: 'uppercase' }, children: judgment.status === 'reasoning' ? 'REASONING' : judgment.status === 'done' ? 'ANSWERED' : 'NO ANSWER' })
+                      ] }),
+                      judgment.question ? jsx('div', { style: { color: 'rgba(139,161,188,0.95)', fontFamily: T.label, fontSize: '10px', letterSpacing: '0.08em', marginTop: '4px', textTransform: 'uppercase' }, children: String(judgment.question).slice(0, 96) }) : null,
+                      judgment.status === 'reasoning'
+                        ? jsxs('div', { children: [
+                            jsx('div', { className: 'jv-task-sweep', style: { background: 'rgba(59,130,246,0.16)', height: '2px', marginTop: '8px' } }),
+                            jsx('div', { style: { color: 'rgba(96,165,250,0.85)', fontFamily: T.data, fontSize: '8px', marginTop: '6px' }, children: 'T+' + Math.max(0, Math.floor((Date.now() - judgment.at) / 1000)) + 's \u00b7 budget 5\u201310s' }, clock)
+                          ] })
+                        : null,
+                      judgment.status === 'done' ? jsx('div', { style: { animation: 'jvFadeUp 400ms 120ms both', borderLeft: '2px solid rgba(52,211,153,0.6)', color: 'rgba(217,230,242,0.95)', fontSize: '10.5px', lineHeight: 1.5, marginTop: '8px', paddingLeft: '9px' }, children: String(judgment.answer).slice(0, 460) }) : null,
+                      judgment.status === 'failed' ? jsx('div', { style: { color: '#F87171', fontSize: '10px', marginTop: '6px' }, children: String(judgment.error).slice(0, 120) }) : null,
+                      judgment.status !== 'reasoning' && typeof judgment.elapsedMs === 'number'
+                        ? jsx('div', { style: { color: 'rgba(96,165,250,0.85)', fontFamily: T.data, fontSize: '8px', fontVariantNumeric: 'tabular-nums', marginTop: '7px' }, children: 'T ' + (judgment.elapsedMs / 1000).toFixed(1) + 's' + (judgment.elapsedMs > 10_000 ? ' \u00b7 OVER BUDGET' : ' \u00b7 within budget') })
+                        : null
+                    ]
+                  })
+                : null
+            ]
+          })
+        : null,
+      // P5.1 build dock: pinned, persistent plates — one per build session
+      builds.length
+        ? jsx('div', {
+            style: { display: 'flex', flexDirection: 'column', gap: '10px', pointerEvents: 'none', position: 'absolute', right: '2.8%', top: display.detail ? '58%' : '15%', width: '292px', zIndex: 3 },
+            children: builds.slice(0, 4).map(build => {
+              const stateColor = { done: '#34D399', failed: '#F87171', idle: '#7A8CA3', planning: '#60A5FA', waiting: '#FBBF24', working: '#93C5FD' }
+              const state = build.inFlight ? (build.state === 'planning' ? 'planning' : 'working') : build.state || 'idle'
+              const color = stateColor[state] || '#60A5FA'
+              const since = build.inFlight && build.turnStartedAt ? build.turnStartedAt : Date.parse(build.created_at || '') || Date.now()
+              const seconds = Math.max(0, Math.floor((Date.now() - since) / 1000))
+              const elapsed = seconds < 3600 ? Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0') : Math.floor(seconds / 3600) + 'h' + String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')
+
+              return jsxs('div', {
+                style: { animation: 'jvFadeUp 400ms both', background: 'rgba(4,9,17,0.74)', border: '1px solid ' + color.replace(')', ', 0.45)').replace('#', 'rgba(').replace(/^rgba\(([0-9A-Fa-f]{6})/, (_m, hex) => 'rgba(' + parseInt(hex.slice(0, 2), 16) + ',' + parseInt(hex.slice(2, 4), 16) + ',' + parseInt(hex.slice(4, 6), 16)), clipPath: 'polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px))', opacity: state === 'done' ? 0.8 : 1, padding: '10px 13px', position: 'relative' },
+                children: [
+                  jsx('div', { className: 'jv-scan', style: { inset: 0, pointerEvents: 'none', position: 'absolute' } }),
+                  jsx('div', { style: { borderRight: '1px solid ' + color, borderTop: '1px solid ' + color, height: '7px', position: 'absolute', right: '3px', top: '3px', width: '7px' } }),
+                  jsxs('div', { style: { alignItems: 'baseline', display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }, children: [
+                    jsx('div', { style: { ...LABEL, fontSize: '8.5px' }, children: 'BUILD SESSION' }),
+                    jsx('div', { className: build.inFlight ? 'jv-chip' : '', style: { color, fontFamily: T.label, fontSize: '8px', letterSpacing: '0.26em', textTransform: 'uppercase' }, children: state === 'waiting' ? 'WAITING FOR YOU' : state.toUpperCase() })
+                  ] }),
+                  jsx(Decipher, { delay: 60, style: { color: '#D9E6F2', fontFamily: T.label, fontSize: '12px', fontWeight: 600, letterSpacing: '0.08em', lineHeight: 1.3, textTransform: 'uppercase' }, text: String(build.name || '').slice(0, 60) }),
+                  jsxs('div', { style: { color: 'rgba(96,165,250,0.85)', display: 'flex', fontFamily: T.data, fontSize: '8.5px', fontVariantNumeric: 'tabular-nums', gap: '10px', marginTop: '4px' }, children: [
+                    jsx('span', { children: (build.inFlight ? 'STEP T+' : 'AGE ') + elapsed }, clock),
+                    jsx('span', { style: { opacity: build.session_id ? 0.7 : 0.45 }, children: build.session_id ? 'SESSION LINKED' : 'SESSION PENDING' }),
+                    build.project_id ? jsx('span', { style: { opacity: 0.7 }, children: 'ON BOARD' }) : null
+                  ] }),
+                  build.inFlight ? jsx('div', { className: 'jv-task-sweep', style: { background: 'rgba(59,130,246,0.16)', height: '2px', marginTop: '7px' } }) : null,
+                  build.lastTool ? jsx('div', { style: { color: 'rgba(122,150,183,0.9)', fontFamily: T.label, fontSize: '7.5px', letterSpacing: '0.2em', marginTop: '5px', textTransform: 'uppercase' }, children: 'TOOL \u00b7 ' + String(build.lastTool).replace(/_/g, ' ') }) : null,
+                  build.inFlight && build.tail
+                    ? jsx('div', { style: { color: 'rgba(139,161,188,0.85)', fontFamily: T.data, fontSize: '8.5px', lineHeight: 1.5, marginTop: '7px', maxHeight: '92px', overflow: 'hidden', whiteSpace: 'pre-wrap' }, children: build.tail })
+                    : build.last_summary
+                      ? jsx('div', { style: { borderLeft: '2px solid ' + color, color: 'rgba(217,230,242,0.92)', fontSize: '10px', lineHeight: 1.5, marginTop: '7px', maxHeight: '96px', overflow: 'hidden', paddingLeft: '8px' }, children: String(build.last_summary).slice(0, 260) })
+                      : jsx('div', { style: { color: 'rgba(139,161,188,0.7)', fontSize: '9.5px', marginTop: '6px' }, children: String(build.goal || '').slice(0, 120) })
+                ]
+              }, build.id)
+            })
           })
         : null,
       // instrument zones: dense by default — jobs, activity, metrics
@@ -1557,7 +1852,8 @@ function HudPage() {
               ...activity.map(item =>
                 jsxs('div', { style: { alignItems: 'baseline', animation: 'jvFadeUp 320ms both', display: 'flex', fontSize: '9px', gap: '8px', padding: '1.5px 0' }, children: [
                   jsx('span', { style: { color: 'rgba(96,165,250,0.75)', fontFamily: T.data, fontSize: '8px' }, children: item.at }),
-                  jsx('span', { style: { color: 'rgba(217,230,242,0.9)', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.14em' }, children: item.label })
+                  jsx('span', { style: { color: 'rgba(217,230,242,0.9)', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.14em' }, children: item.label }),
+                  item.detail ? jsx('span', { style: { color: 'rgba(96,165,250,0.8)', fontFamily: T.data, fontSize: '7.5px', marginLeft: 'auto', whiteSpace: 'nowrap' }, children: item.detail }) : null
                 ] }, item.key))
             ]
           })

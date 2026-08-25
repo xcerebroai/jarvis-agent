@@ -18,8 +18,14 @@ import {
   nextRealtimeGreeting,
   REALTIME_MODEL,
   type RealtimeSessionConfigOptions,
+  ASK_JUDGMENT_TOOL_NAME,
+  BUILD_MESSAGE_TOOL_NAME,
+  BUILD_STATUS_TOOL_NAME,
   CANCEL_TASK_TOOL_NAME,
   CLEAR_DISPLAY_TOOL_NAME,
+  LOOK_AT_SCREEN_TOOL_NAME,
+  SET_PROJECT_FIELD_TOOL_NAME,
+  START_BUILD_TOOL_NAME,
   CREATE_PROJECT_TOOL_NAME,
   DELEGATE_TASK_TOOL_NAME,
   OPEN_APP_TOOL_NAME,
@@ -120,6 +126,8 @@ function parseToolArguments(raw: unknown): Record<string, unknown> {
 const DISPLAY_TOOL_NAMES = new Set<string>([SHOW_PROJECTS_TOOL_NAME, SHOW_PROJECT_TOOL_NAME, SHOW_DETAIL_TOOL_NAME, CREATE_PROJECT_TOOL_NAME, CLEAR_DISPLAY_TOOL_NAME])
 
 const ACTION_TOOL_NAMES = new Set<string>([OPEN_APP_TOOL_NAME, OPEN_URL_TOOL_NAME, DELEGATE_TASK_TOOL_NAME, CANCEL_TASK_TOOL_NAME])
+// P5.1: sight, build sessions, priority reasoning.
+const P51_TOOL_NAMES = new Set<string>([LOOK_AT_SCREEN_TOOL_NAME, START_BUILD_TOOL_NAME, BUILD_STATUS_TOOL_NAME, BUILD_MESSAGE_TOOL_NAME, SET_PROJECT_FIELD_TOOL_NAME, ASK_JUDGMENT_TOOL_NAME])
 
 export class RealtimeVoiceSession {
   private readonly deps: RealtimeSessionDeps
@@ -448,7 +456,8 @@ export class RealtimeVoiceSession {
         (record.name !== USE_JARVIS_TOOL_NAME &&
           record.name !== REVIEW_PROJECTS_TOOL_NAME &&
           !DISPLAY_TOOL_NAMES.has(String(record.name)) &&
-          !ACTION_TOOL_NAMES.has(String(record.name)))
+          !ACTION_TOOL_NAMES.has(String(record.name)) &&
+          !P51_TOOL_NAMES.has(String(record.name)))
       ) {
         continue
       }

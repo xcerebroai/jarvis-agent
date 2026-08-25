@@ -15,6 +15,9 @@ import {
   REVIEW_PROJECTS_TOOL,
   REVIEW_PROJECTS_TOOL_NAME,
   ACTION_TOOLS,
+  BUILD_TOOLS,
+  REASONING_TOOLS,
+  SIGHT_TOOLS,
   DISPLAY_TOOLS,
   USE_JARVIS_TOOL,
   USE_JARVIS_TOOL_NAME
@@ -75,10 +78,10 @@ describe('realtime-config', () => {
 
   it('omits review_projects by default and includes it only when configured', () => {
     const off = buildRealtimeSessionConfig()
-    expect(off.tools).toEqual([...ACTION_TOOLS, USE_JARVIS_TOOL])
+    expect(off.tools).toEqual([...ACTION_TOOLS, ...BUILD_TOOLS, ...SIGHT_TOOLS, USE_JARVIS_TOOL])
 
     const on = buildRealtimeSessionConfig({ reviewProjectsEnabled: true })
-    expect(on.tools).toEqual([REVIEW_PROJECTS_TOOL, ...DISPLAY_TOOLS, ...ACTION_TOOLS, USE_JARVIS_TOOL])
+    expect(on.tools).toEqual([REVIEW_PROJECTS_TOOL, ...DISPLAY_TOOLS, ...REASONING_TOOLS, ...ACTION_TOOLS, ...BUILD_TOOLS, ...SIGHT_TOOLS, USE_JARVIS_TOOL])
 
     expect(REVIEW_PROJECTS_TOOL_NAME).toBe('review_projects')
     expect(REVIEW_PROJECTS_TOOL.parameters.properties.limit.maximum).toBe(8)

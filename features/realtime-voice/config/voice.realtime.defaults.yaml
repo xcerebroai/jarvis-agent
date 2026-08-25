@@ -52,6 +52,17 @@ voice:
     review_projects:
       index_path: ""
 
+    # P5.1 SIGHT — on-demand "look at my screen". Captures the display (macOS
+    # Screen Recording permission is requested on first use) and sends ONE
+    # downscaled JPEG to an OpenAI vision model with the same standing key.
+    # Each look reports its real latency and a list-price cost estimate.
+    sight:
+      enabled: true
+      # Vision model. Default: gpt-4.1-mini (~$0.001 per look at list price).
+      model: gpt-4.1-mini
+      # Longest edge of the capture sent to the model (640-3200). Default 1600.
+      max_edge: 1600
+
 # The product summon phrase. Seeded PER-KEY (each key only when absent), so an
 # operator's explicit choice — a different model, a disabled listener — is
 # never overwritten. hey_jarvis is one of openWakeWord's built-in pretrained

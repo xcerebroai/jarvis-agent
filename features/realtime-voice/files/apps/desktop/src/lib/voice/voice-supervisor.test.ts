@@ -139,6 +139,7 @@ vi.mock('./agent-delegate', () => ({
   })
 }))
 
+import { onGatewayEvent } from '@/contrib/events'
 import { $voiceState, voiceSupervisor } from './voice-supervisor'
 
 const tick = async (n = 4) => {
@@ -515,5 +516,45 @@ describe('voiceSupervisor', () => {
     await tick(8)
 
     expect(session.sendToolOutput).toHaveBeenCalledWith('b2', expect.stringContaining('no open session'))
+  })
+
+  it('P6: a pointer click on a card drives the same stage state as the voice verb ("expand it" then resolves to it)', async () => {
+    const session = await startAndConnect()
+    const seen: string[] = []
+    const off = onGatewayEvent('*', event => { seen.push(event.type) })
+
+    getRealtimeProjectReview.mockResolvedValueOnce({ ok: true, projects: [{ name: 'Alpha', status: 'Blocked' }], source: 'project index' } as never)
+    window.dispatchEvent(new CustomEvent('jarvis:detail-request', { detail: { name: 'Alpha' } }))
+    await tick(8)
+
+    expect(getRealtimeProjectReview).toHaveBeenCalledWith({ detail: true, limit: 1, query: 'Alpha' })
+    expect(seen).toContain('display.detail')
+
+    // The voice's bare "expand it" now resolves to the clicked card.
+    getRealtimeProjectReview.mockResolvedValueOnce({ ok: true, projects: [{ name: 'Alpha', status: 'Blocked' }], source: 'project index' } as never)
+    session.callbacks.onToolCall?.({ callId: 'x1', name: 'show_project_detail', arguments: { name: 'it' } })
+    await tick(8)
+    expect(getRealtimeProjectReview).toHaveBeenLastCalledWith(expect.objectContaining({ detail: true, query: 'Alpha' }))
+
+    window.dispatchEvent(new CustomEvent('jarvis:stage-collapse'))
+    await tick(2)
+    expect(seen).toContain('display.stage.clear')
+    off()
+  })
+
+  it('P6: a metric-tile click filters the board through the same review pipeline', async () => {
+    await startAndConnect()
+    const seen: Array<{ type: string; payload?: unknown }> = []
+    const off = onGatewayEvent('*', event => { seen.push({ payload: event.payload, type: event.type }) })
+
+    getRealtimeProjectReview.mockResolvedValueOnce({ ok: true, projects: [{ name: 'Alpha', status: 'Blocked' }], source: 'project index' } as never)
+    window.dispatchEvent(new CustomEvent('jarvis:board-filter', { detail: { status: 'Blocked' } }))
+    await tick(8)
+
+    expect(getRealtimeProjectReview).toHaveBeenCalledWith({ limit: 8, status: 'Blocked' })
+    const projected = seen.find(e => e.type === 'display.projects')
+    expect(projected).toBeTruthy()
+    expect((projected!.payload as { status: string }).status).toBe('Blocked')
+    off()
   })
 })

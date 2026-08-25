@@ -890,6 +890,17 @@ function Decipher({ delay = 0, style, text }) {
   return jsx('span', { style, children: shown || ' ' })
 }
 
+function stampNow() {
+  const at = new Date()
+
+  return String(at.getHours()).padStart(2, '0') + ':' + String(at.getMinutes()).padStart(2, '0') + ':' + String(at.getSeconds()).padStart(2, '0')
+}
+
+/** Status timeline entries (bounded) for the operation detail views. */
+function pushTimeline(timeline, text) {
+  return [...(Array.isArray(timeline) ? timeline : []), { at: stampNow(), text }].slice(-24)
+}
+
 /** shown flips false→true ~80ms after every key change so transitions re-run. */
 function useMaterialize(key) {
   const [shown, setShown] = useState(false)
@@ -953,14 +964,17 @@ function slotStyle(pos, width) {
  * 'left' for right-column plates, 'right' for left-column plates, 'down' for
  * the center column, false for the rails. `phase` desyncs the drift.
  */
-function Plate({ children, color = '#60A5FA', delay = 0, drift = true, phase = 0, shown, style, thread = 'left', width }) {
+function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = false, onClick, onHover, phase = 0, shown, style, thread = 'left', width }) {
   const at = ms => delay + ms + 'ms'
+  const interactive = Boolean(onClick)
+  // Hover in the frame-and-light language: the lines brighten, the nodes glow.
+  const lineGlow = hot ? '0 0 10px rgba(191,219,254,0.9)' : GLOW
   const line = (pos, axis, ms, key, dim) =>
     jsx('div', {
       style: {
-        background: dim ? LINE_DIM : LINE, boxShadow: GLOW, position: 'absolute', ...pos,
+        background: hot ? '#BFDBFE' : dim ? LINE_DIM : LINE, boxShadow: lineGlow, position: 'absolute', ...pos,
         transform: shown ? 'scale(1)' : axis === 'x' ? 'scaleX(0)' : 'scaleY(0)',
-        transition: 'transform 640ms ' + EASE + ' ' + at(ms)
+        transition: 'transform 640ms ' + EASE + ' ' + at(ms) + ', background 220ms, box-shadow 220ms'
       }
     }, key)
   const arc = (pos, d, stroke, ms, key, size) =>
@@ -969,7 +983,7 @@ function Plate({ children, color = '#60A5FA', delay = 0, drift = true, phase = 0
       children: jsx('path', { d, fill: 'none', pathLength: 1, stroke, strokeWidth: 1.2, style: { filter: 'drop-shadow(0 0 3px ' + stroke + ')', strokeDasharray: 1, strokeDashoffset: shown ? 0 : 1, transition: 'stroke-dashoffset 700ms ' + EASE + ' ' + at(ms) } })
     }, key)
   const node = (pos, ms, key, tint) =>
-    jsx('div', { className: 'jv-chip', style: { background: tint, borderRadius: '50%', boxShadow: '0 0 5px ' + tint, height: '3px', position: 'absolute', width: '3px', ...pos, opacity: shown ? 1 : 0, transition: 'opacity 400ms ' + at(ms) } }, key)
+    jsx('div', { className: hot ? '' : 'jv-chip', style: { background: hot ? '#FFFFFF' : tint, borderRadius: '50%', boxShadow: hot ? '0 0 12px 2px ' + tint : '0 0 5px ' + tint, height: '3px', position: 'absolute', width: '3px', ...pos, opacity: shown ? 1 : 0, transition: 'opacity 400ms ' + at(ms) + ', box-shadow 220ms, background 220ms' } }, key)
   const threadStyle = thread === 'left'
     ? { background: 'linear-gradient(90deg, transparent, rgba(96,165,250,0.75))', height: '1px', left: '-46px', top: '52%', transform: shown ? 'scaleX(1)' : 'scaleX(0)', transformOrigin: 'right', width: '46px' }
     : thread === 'right'
@@ -980,7 +994,11 @@ function Plate({ children, color = '#60A5FA', delay = 0, drift = true, phase = 0
 
   return jsx('div', {
     className: drift && shown ? 'jv-drift' : '',
-    style: { animationDelay: -phase + 's', color: INK, pointerEvents: 'none', ...(width ? { width: width + 'px' } : {}), ...style },
+    'data-jv-interactive': interactive ? '1' : undefined,
+    onClick: interactive ? event => { event.stopPropagation(); onClick(event) } : undefined,
+    onMouseEnter: onHover ? () => onHover(true) : undefined,
+    onMouseLeave: onHover ? () => onHover(false) : undefined,
+    style: { animationDelay: -phase + 's', color: INK, cursor: interactive ? 'pointer' : undefined, pointerEvents: interactive ? 'auto' : 'none', ...(width ? { width: width + 'px' } : {}), ...style },
     children: jsxs('div', {
       style: { opacity: shown ? 1 : 0, position: 'relative', transition: 'opacity 380ms ' + at(0), height: '100%', maxHeight: 'inherit' },
       children: [
@@ -1132,6 +1150,12 @@ function projectFacts(row) {
 function ProjectPlate({ delay, dissolving, focus, index, pos, row, shown, updated }) {
   const f = projectFacts(row)
   const visible = shown && !dissolving
+  const [hot, setHot] = useState(false)
+  // Click = the "expand" voice verb: same stage, same displayContext.
+  const expand = () => {
+    uiSound('tick')
+    window.dispatchEvent(new CustomEvent('jarvis:detail-request', { detail: { name: String(row.name || '') } }))
+  }
   const width = focus ? 350 : GRID.cardWidth
   const style = focus
     ? { left: '56%', position: 'absolute', top: '17%', zIndex: 3 }
@@ -1139,9 +1163,9 @@ function ProjectPlate({ delay, dissolving, focus, index, pos, row, shown, update
   const d = dissolving ? Math.max(0, 3 - index) * 40 : delay
 
   return jsx(Plate, {
-    color: f.color, delay: d, phase: index * 1.3, shown: visible, style, thread: focus ? 'left' : pos.side === 'left' ? 'right' : 'left', width,
+    color: f.color, delay: d, hot, onClick: expand, onHover: setHot, phase: index * 1.3, shown: visible, style, thread: focus ? 'left' : pos.side === 'left' ? 'right' : 'left', width,
     children: jsxs('div', { children: [
-      jsx(Rail, { left: 'PROJECT · ' + String(row.priority || 'NORMAL').toUpperCase(), right: updated ? 'IDX ' + updated : '' }),
+      jsx(Rail, { left: 'PROJECT · ' + String(row.priority || 'NORMAL').toUpperCase(), right: hot ? 'CLICK · EXPAND' : updated ? 'IDX ' + updated : '' }),
       jsxs('div', { style: { alignItems: 'flex-end', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
         jsx('div', { style: { minWidth: 0 }, children: jsx(Title, { delay: d + 120, shown: visible, size: focus ? 15 : 12, text: String(row.name || '') }) }),
         jsx(Chip, { blink: row.status === 'Blocked' || row.status === 'Build Mode', color: f.color, delay: d + 420, shown: visible, text: String(row.status || '') })
@@ -1186,16 +1210,17 @@ function Body({ color, delay = 0, mono, shown, text }) {
 
 // The task pop: the plate draws on voice.task.started (its own key), the
 // orb gathers, and the stream tail is the agent's real output.
-function TaskPlate({ clock, pos, task }) {
+function TaskPlate({ clock, onExpand, pos, task }) {
   const shown = useMaterialize(task.id)
+  const [hot, setHot] = useState(false)
   const color = STATE_COLOR[task.status] || '#93C5FD'
   const kindLabel = task.kind === 'research' ? 'RESEARCH OPERATION' : task.kind === 'browser' ? 'BROWSER OPERATION · WATCH THE SCREEN' : 'TASK OPERATION'
 
   return jsx(Plate, {
-    color, delay: 0, phase: 2.1, shown, style: { opacity: task.status === 'cancelled' ? 0.65 : 1, position: 'absolute', zIndex: 3, ...slotStyle(pos, GRID.opWidth) }, thread: pos.side === 'left' ? 'right' : 'left', width: GRID.opWidth,
+    color, delay: 0, hot, onClick: () => { uiSound('tick'); onExpand() }, onHover: setHot, phase: 2.1, shown, style: { opacity: task.status === 'cancelled' ? 0.65 : 1, position: 'absolute', zIndex: 3, ...slotStyle(pos, GRID.opWidth) }, thread: pos.side === 'left' ? 'right' : 'left', width: GRID.opWidth,
     children: jsxs('div', { children: [
       jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
-        jsx(Rail, { left: kindLabel }),
+        jsx(Rail, { left: hot ? 'CLICK · FULL DETAIL' : kindLabel }),
         jsx(Chip, { blink: task.status === 'running', color, delay: 300, shown, text: task.status === 'running' ? 'RUNNING' : task.status === 'done' ? 'COMPLETE' : 'CANCELLED' })
       ] }),
       jsx(Title, { delay: 120, shown, size: 11.5, text: task.goal.slice(0, 90) }),
@@ -1215,17 +1240,30 @@ function TaskPlate({ clock, pos, task }) {
   })
 }
 
-function BuildPlate({ build, clock, pos }) {
+function openBuildSession(build) {
+  const id = build.stored_session_id || build.session_id
+
+  if (id && typeof host.openSession === 'function') {
+    uiSound('tick')
+    void host.openSession(String(id), { tabTitle: 'BUILD · ' + String(build.name || '') }).catch(() => undefined)
+  }
+}
+
+function BuildPlate({ build, clock, onExpand, pos }) {
   const state = build.inFlight ? (build.state === 'planning' ? 'planning' : 'working') : build.state || 'idle'
   const color = STATE_COLOR[state] || '#60A5FA'
   const shown = useMaterialize(build.id)
+  const [hot, setHot] = useState(false)
   const since = build.inFlight && build.turnStartedAt ? build.turnStartedAt : Date.parse(build.created_at || '') || Date.now()
+  // WAITING FOR YOU click-opens the session so the question can be answered
+  // right there; any other state expands to the full detail.
+  const waiting = state === 'waiting' && (build.stored_session_id || build.session_id)
 
   return jsx(Plate, {
-    color, phase: 3.4 + pos.slot, shown, style: { opacity: state === 'done' ? 0.8 : 1, position: 'absolute', zIndex: 3, ...slotStyle(pos, GRID.opWidth) }, thread: pos.side === 'left' ? 'right' : 'left', width: GRID.opWidth,
+    color, hot, onClick: () => (waiting ? openBuildSession(build) : (uiSound('tick'), onExpand())), onHover: setHot, phase: 3.4 + pos.slot, shown, style: { opacity: state === 'done' ? 0.8 : 1, position: 'absolute', zIndex: 3, ...slotStyle(pos, GRID.opWidth) }, thread: pos.side === 'left' ? 'right' : 'left', width: GRID.opWidth,
     children: jsxs('div', { children: [
       jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
-        jsx(Rail, { left: 'BUILD SESSION' }),
+        jsx(Rail, { left: hot ? (waiting ? 'CLICK · ANSWER IN SESSION' : 'CLICK · FULL DETAIL') : 'BUILD SESSION' }),
         jsx(Chip, { blink: Boolean(build.inFlight), color, delay: 300, shown, text: state === 'waiting' ? 'WAITING FOR YOU' : state.toUpperCase() })
       ] }),
       jsx(Title, { delay: 120, shown, text: String(build.name || '').slice(0, 60) }),
@@ -1237,6 +1275,47 @@ function BuildPlate({ build, clock, pos }) {
         : build.last_summary
           ? jsx(Body, { color, delay: 200, shown, text: String(build.last_summary).slice(0, 200) })
           : jsx(NextLine, { delay: 300, label: 'GOAL ▸', shown, text: String(build.goal || '') })
+    ] })
+  })
+}
+
+function OperationDetail({ kind, onOpenSession, record }) {
+  const shown = useMaterialize(record.id)
+  const timeline = Array.isArray(record.timeline) ? record.timeline : []
+  const history = String(record.history || record.tail || '')
+  const color = STATE_COLOR[record.inFlight ? 'working' : record.status || record.state] || '#93C5FD'
+  const title = kind === 'build' ? String(record.name || '') : String(record.goal || '')
+
+  return jsx(Plate, {
+    color, drift: false, onClick: () => undefined, shown, style: { left: '50%', maxHeight: '74%', position: 'absolute', top: '11%', transform: 'translateX(-50%)', zIndex: 7 }, thread: false, width: 560,
+    children: jsxs('div', { children: [
+      jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
+        jsx(Rail, { left: (kind === 'build' ? 'BUILD SESSION' : (record.kind === 'research' ? 'RESEARCH' : record.kind === 'browser' ? 'BROWSER' : 'TASK') + ' OPERATION') + ' · FULL DETAIL', right: 'ESC · COLLAPSE' }),
+        jsx(Chip, { blink: Boolean(record.inFlight || record.status === 'running'), color, delay: 200, shown, text: String(record.inFlight ? 'WORKING' : record.status || record.state || '').toUpperCase() })
+      ] }),
+      jsx(Title, { delay: 100, shown, size: 13, text: title.slice(0, 90) }),
+      kind === 'build' && record.goal ? jsx(NextLine, { delay: 250, label: 'GOAL ▸', shown, text: String(record.goal) }) : null,
+      jsxs('div', { style: { display: 'grid', gap: '0 18px', gridTemplateColumns: '190px 1fr', marginTop: '8px' }, children: [
+        jsxs('div', { children: [
+          jsx('div', { style: { ...LABEL, fontSize: '7px' }, children: 'STATUS TIMELINE' }),
+          ...(timeline.length ? timeline.slice(-12) : [{ at: '—', text: 'no events yet' }]).map((entry, i) =>
+            jsxs('div', { style: { color: INK, display: 'flex', fontFamily: T.data, fontSize: '8.5px', gap: '8px', opacity: shown ? 1 : 0, padding: '2px 0', transition: 'opacity 250ms ' + (300 + i * 50) + 'ms' }, children: [
+              jsx('span', { style: { color: 'rgba(96,165,250,0.8)', flexShrink: 0 }, children: entry.at }),
+              jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry.text })
+            ] }, i))
+        ] }),
+        jsxs('div', { style: { minWidth: 0 }, children: [
+          jsx('div', { style: { ...LABEL, fontSize: '7px' }, children: 'STREAM · LIVE OUTPUT' }),
+          jsx('div', { style: { color: INK_DIM, fontFamily: T.data, fontSize: '8.5px', lineHeight: 1.5, maxHeight: '220px', opacity: shown ? 1 : 0, overflowY: 'auto', paddingRight: '4px', transition: 'opacity 300ms 400ms', whiteSpace: 'pre-wrap' }, children: history ? history.slice(-3000) : '(nothing streamed yet)' })
+        ] })
+      ] }),
+      record.summary || record.last_summary ? jsx(Body, { color, delay: 300, shown, text: String(record.summary || record.last_summary).slice(0, 600) }) : null,
+      record.media && record.media.length
+        ? jsx('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' }, children: record.media.map((m, i) => jsx('img', { alt: '', src: m.thumbnail, style: { border: '1px solid rgba(96,165,250,0.4)', height: '64px', objectFit: 'cover', objectPosition: 'top' } }, m.path || i)) })
+        : null,
+      onOpenSession
+        ? jsx('div', { onClick: event => { event.stopPropagation(); onOpenSession() }, style: { color: '#93C5FD', cursor: 'pointer', display: 'inline-block', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.28em', marginTop: '10px', textShadow: '0 0 8px rgba(96,165,250,0.6)' }, children: 'OPEN SESSION ▸' })
+        : null
     ] })
   })
 }
@@ -1291,16 +1370,32 @@ function JudgmentPlate({ judgment }) {
 }
 
 // The expand verb's instrument: the full record in the same language.
+/** "{'total': 527, 'paid': 527, 'status': 'Paid', …}" → "PAID · $527/527". */
+function paymentLabel(raw) {
+  const text = String(raw || '')
+
+  if (!text.startsWith('{')) {
+    return text
+  }
+
+  const grab = key => (text.match(new RegExp("'" + key + "':\\s*'?([^,'}]+)")) || [])[1]
+  const status = grab('status')
+  const total = grab('total')
+  const paid = grab('paid')
+
+  return [status ? status.toUpperCase() : '', total ? '$' + (paid || '0') + '/' + total : ''].filter(Boolean).join(' · ') || text
+}
+
 function DetailStage({ detail }) {
   const shown = useMaterialize(detail.name)
   const f = projectFacts(detail)
   const tasks = Array.isArray(detail.task_list) ? detail.task_list : []
-  const facts = [['CLIENT', detail.client], ['COMPANY', detail.company], ['PAYMENT', detail.payment], ['OWNER', detail.owner], ['START', detail.start], ['TARGET', detail.target_end], ['BUILD', detail.build_type], ['DEADLINE', detail.deadline || detail.target_end], ['COUNTDOWN', f.countdown], ['STALE', f.stale], ['REVENUE', f.revenue]].filter(([, v]) => v && v !== '—').map(([k, v]) => [k, String(v).slice(0, 34)])
+  const facts = [['CLIENT', detail.client], ['COMPANY', detail.company], ['PAYMENT', paymentLabel(detail.payment)], ['OWNER', detail.owner], ['START', detail.start], ['TARGET', detail.target_end], ['BUILD', detail.build_type], ['DEADLINE', detail.deadline || detail.target_end], ['COUNTDOWN', f.countdown], ['STALE', f.stale], ['REVENUE', f.revenue]].filter(([, v]) => v && v !== '—').map(([k, v]) => [k, String(v).slice(0, 34)])
 
   return jsx(Plate, {
-    color: f.color, phase: 1.7, shown, style: { maxHeight: '78%', position: 'absolute', right: '3%', top: '10%', zIndex: 4 }, thread: 'left', width: 390,
+    color: f.color, onClick: () => undefined, phase: 1.7, shown, style: { maxHeight: '78%', position: 'absolute', right: '3%', top: '10%', zIndex: 4 }, thread: 'left', width: 390,
     children: jsxs('div', { children: [
-      jsx(Rail, { left: 'PROJECT DETAIL · ' + String(detail.priority || 'NORMAL').toUpperCase(), right: detail.id ? String(detail.id) : '' }),
+      jsx(Rail, { left: 'PROJECT DETAIL · ' + String(detail.priority || 'NORMAL').toUpperCase(), right: (detail.id ? String(detail.id) + ' · ' : '') + 'ESC · COLLAPSE' }),
       jsxs('div', { style: { alignItems: 'flex-end', display: 'flex', gap: '10px', justifyContent: 'space-between' }, children: [
         jsx('div', { style: { minWidth: 0 }, children: jsx(Title, { delay: 120, shown, size: 16, text: String(detail.name || '') }) }),
         jsx(Chip, { blink: detail.status === 'Blocked', color: f.color, delay: 400, shown, text: String(detail.status || '') })
@@ -1321,8 +1416,9 @@ function DetailStage({ detail }) {
 }
 
 // Metric tiles: number, label, a filament underline that draws in. No box.
-function MetricTiles({ rows, shown }) {
+function MetricTiles({ active, onToggle, rows, shown }) {
   const counts = {}
+  const [hotTile, setHotTile] = useState(null)
 
   rows.forEach(row => { counts[row.status] = (counts[row.status] || 0) + 1 })
   const done = rows.reduce((total, row) => total + (row.tasks_done || 0), 0)
@@ -1334,14 +1430,39 @@ function MetricTiles({ rows, shown }) {
 
   return jsx('div', {
     style: { display: 'flex', gap: '18px', justifyContent: 'center', left: '50%', pointerEvents: 'none', position: 'absolute', top: '42px', transform: 'translateX(-50%)', zIndex: 5 },
-    children: tiles.map((tile, i) =>
-      jsxs('div', { style: { display: 'flex', flexDirection: 'column', gap: '3px', minWidth: '52px', opacity: shown ? 1 : 0, transition: 'opacity 400ms ' + (200 + i * 70) + 'ms' }, children: [
-        jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '6px' }, children: [
-          jsx('span', { style: { color: tile.color, fontFamily: T.data, fontSize: '12px', fontVariantNumeric: 'tabular-nums', fontWeight: 600, textShadow: '0 0 8px ' + tile.color }, children: String(tile.value) }),
-          jsx('span', { style: { ...LABEL, fontSize: '7px', letterSpacing: '0.22em' }, children: tile.label })
-        ] }),
-        jsx('div', { style: { background: tile.color, boxShadow: '0 0 5px ' + tile.color, height: '1px', opacity: 0.8, transform: shown ? 'scaleX(1)' : 'scaleX(0)', transformOrigin: 'left', transition: 'transform 600ms ' + EASE + ' ' + (300 + i * 70) + 'ms' } })
-      ] }, tile.label))
+    children: tiles.map((tile, i) => {
+      const filterable = tile.label !== 'TASKS'
+      const isActive = active === tile.label
+      const hot = hotTile === tile.label
+
+      return jsxs('div', {
+        'data-jv-interactive': filterable ? '1' : undefined,
+        onClick: filterable ? event => { event.stopPropagation(); uiSound('tick'); onToggle(isActive ? null : tile.label) } : undefined,
+        onMouseEnter: filterable ? () => setHotTile(tile.label) : undefined,
+        onMouseLeave: filterable ? () => setHotTile(null) : undefined,
+        style: { cursor: filterable ? 'pointer' : 'default', display: 'flex', flexDirection: 'column', gap: '3px', minWidth: '52px', opacity: shown ? (active && !isActive && filterable ? 0.55 : 1) : 0, pointerEvents: filterable ? 'auto' : 'none', transition: 'opacity 300ms ' + (shown ? 200 + i * 70 : 0) + 'ms' },
+        children: [
+          jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '6px' }, children: [
+            jsx('span', { style: { color: isActive || hot ? '#FFFFFF' : tile.color, fontFamily: T.data, fontSize: '12px', fontVariantNumeric: 'tabular-nums', fontWeight: 600, textShadow: '0 0 ' + (isActive || hot ? '14px ' : '8px ') + tile.color, transition: 'color 200ms, text-shadow 200ms' }, children: String(tile.value) }),
+            jsx('span', { style: { ...LABEL, color: isActive ? tile.color : LABEL.color, fontSize: '7px', letterSpacing: '0.22em' }, children: tile.label + (isActive ? ' ·ONLY' : '') })
+          ] }),
+          jsx('div', { style: { background: tile.color, boxShadow: '0 0 ' + (isActive || hot ? '10px ' : '5px ') + tile.color, height: isActive ? '2px' : '1px', opacity: isActive || hot ? 1 : 0.8, transform: shown ? 'scaleX(1)' : 'scaleX(0)', transformOrigin: 'left', transition: 'transform 600ms ' + EASE + ' ' + (300 + i * 70) + 'ms, box-shadow 200ms, height 200ms' } })
+        ]
+      }, tile.label)
+    })
+  })
+}
+
+function RailRow({ children, delay, onClick, shown, style }) {
+  const [hot, setHot] = useState(false)
+
+  return jsx('div', {
+    'data-jv-interactive': onClick ? '1' : undefined,
+    onClick: onClick ? event => { event.stopPropagation(); uiSound('tick'); onClick() } : undefined,
+    onMouseEnter: onClick ? () => setHot(true) : undefined,
+    onMouseLeave: onClick ? () => setHot(false) : undefined,
+    style: { alignItems: 'baseline', borderLeft: '1px solid ' + (hot ? '#BFDBFE' : 'transparent'), cursor: onClick ? 'pointer' : 'default', display: 'flex', gap: '8px', marginLeft: '-6px', opacity: shown ? 1 : 0, paddingLeft: '5px', pointerEvents: onClick ? 'auto' : 'none', transition: 'opacity 300ms ' + delay + 'ms, border-color 200ms', ...style },
+    children
   })
 }
 
@@ -1353,7 +1474,7 @@ function JobsRail({ jobs }) {
     children: jsxs('div', { children: [
       jsx(Rail, { left: 'SCHEDULED OPERATIONS', right: jobs.length + ' JOB' + (jobs.length === 1 ? '' : 'S') }),
       ...jobs.map((job, i) =>
-        jsxs('div', { style: { alignItems: 'baseline', display: 'flex', fontSize: '9.5px', gap: '8px', justifyContent: 'space-between', opacity: shown ? 1 : 0, padding: '3px 0 0', transition: 'opacity 300ms ' + (200 + i * 90) + 'ms' }, children: [
+        jsxs(RailRow, { delay: 200 + i * 90, onClick: () => host.navigate('/cron'), shown, style: { fontSize: '9.5px', justifyContent: 'space-between', padding: '3px 0 0 5px' }, children: [
           jsx('span', { style: { color: INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: String(job.name || job.id || '').slice(0, 30) }),
           jsx('span', { style: { color: 'rgba(96,165,250,0.85)', fontFamily: T.data, fontSize: '8.5px', whiteSpace: 'nowrap' }, children: String(job.schedule_display || job.schedule?.display || '').slice(0, 12) })
         ] }, job.id || i))
@@ -1369,7 +1490,7 @@ function ActivityRail({ activity }) {
     children: jsxs('div', { children: [
       jsx(Rail, { left: 'LIVE ACTIVITY' }),
       ...activity.map(item =>
-        jsxs('div', { style: { alignItems: 'baseline', animation: 'jvFadeUp 320ms both', display: 'flex', fontSize: '9px', gap: '8px', padding: '2px 0 0' }, children: [
+        jsxs(RailRow, { delay: 0, onClick: item.sessionId && typeof host.openSession === 'function' ? () => void host.openSession(String(item.sessionId)).catch(() => undefined) : undefined, shown: true, style: { animation: 'jvFadeUp 320ms both', fontSize: '9px', padding: '2px 0 0 5px' }, children: [
           jsx('span', { style: { color: 'rgba(96,165,250,0.75)', fontFamily: T.data, fontSize: '8px' }, children: item.at }),
           jsx('span', { style: { color: 'rgba(217,230,242,0.9)', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.14em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: item.label }),
           item.detail ? jsx('span', { style: { color: 'rgba(96,165,250,0.8)', fontFamily: T.data, fontSize: '7.5px', marginLeft: 'auto', whiteSpace: 'nowrap' }, children: item.detail }) : null
@@ -1416,6 +1537,10 @@ function HudPage() {
   const [judgment, setJudgment] = useState(null)
   const [builds, setBuilds] = useState([])
   const buildsRef = useRef([])
+  // Pointer interaction: one expanded operation at a time; refs mirror the
+  // stage so the keyboard/click-off handlers (installed once) see live state.
+  const [expanded, setExpanded] = useState(null)
+  const stageRef = useRef({ expanded: null, open: false })
   const p51TimersRef = useRef({})
 
   useEffect(() => {
@@ -1488,7 +1613,9 @@ function HudPage() {
         detail = ''
       }
 
-      setActivity(prev => [{ at: stamp, detail, key: at.getTime() + label, label }, ...prev].slice(0, 7))
+      const sessionId = event.session_id ?? event.sessionId ?? event.payload?.sessionId ?? event.payload?.session_id ?? null
+
+      setActivity(prev => [{ at: stamp, detail, key: at.getTime() + label, label, sessionId }, ...prev].slice(0, 7))
     })
   }, [])
 
@@ -1581,8 +1708,20 @@ function HudPage() {
       tracker.listenUntil = 0
     }
 
+    const collapseStage = () => {
+      setExpanded(null)
+      window.dispatchEvent(new CustomEvent('jarvis:stage-collapse'))
+    }
+
     const onKey = event => {
-      if (event.key === 'Escape') {
+      if (event.key !== 'Escape') {
+        return
+      }
+
+      // Esc universally collapses; with nothing open it is the voice kill.
+      if (stageRef.current.open) {
+        collapseStage()
+      } else {
         killVoice()
       }
     }
@@ -1591,12 +1730,14 @@ function HudPage() {
     canvas.style.pointerEvents = 'auto'
     canvas.style.cursor = 'pointer'
     canvas.title = 'Click to stop JARVIS'
-    canvas.addEventListener('click', killVoice)
+    const onCanvasClick = () => (stageRef.current.open ? collapseStage() : killVoice())
+
+    canvas.addEventListener('click', onCanvasClick)
 
     const disposers = [
       () => {
         window.removeEventListener('keydown', onKey)
-        canvas.removeEventListener('click', killVoice)
+        canvas.removeEventListener('click', onCanvasClick)
         taskTimersRef.current.forEach(t => window.clearTimeout(t))
         taskTimersRef.current = []
         pulseTimersRef.current.forEach(t => window.clearTimeout(t))
@@ -1637,7 +1778,7 @@ function HudPage() {
           uiSound('materialize')
         }
 
-        setDisplay(prev => ({ ...prev, detail: null, dissolving: false, focus: null, rows: rows.slice(0, 8), shown: false, updated: String(event.payload?.result?.updated || '') }))
+        setDisplay(prev => ({ ...prev, detail: null, dissolving: false, focus: null, rows: rows.slice(0, 8), shown: false, status: event.payload?.status ?? null, updated: String(event.payload?.result?.updated || '') }))
         window.setTimeout(() => setDisplay(prev => ({ ...prev, shown: true })), 80)
         // Board projection: each card draws in on its own orb pulse (staggered
         // with the cards' draw delays) — the orb is the projector.
@@ -1655,6 +1796,10 @@ function HudPage() {
           uiSound('materialize')
           setDisplay(prev => ({ ...prev, detail: row, dissolving: false, focus: null, shown: true }))
         }
+      }),
+      host.onEvent('display.stage.clear', () => {
+        setExpanded(null)
+        setDisplay(prev => ({ ...prev, detail: null, focus: null }))
       }),
       host.onEvent('display.focus', event => {
         const row = event.payload?.result?.projects?.[0]
@@ -1682,11 +1827,13 @@ function HudPage() {
           id: payload.id,
           kind: payload.kind === 'research' ? 'research' : payload.kind === 'browser' ? 'browser' : 'task',
           sessionId: payload.sessionId || null,
+          history: '',
           media: [],
           startedAt: Date.now(),
           status: 'running',
           summary: '',
           tail: '',
+          timeline: [{ at: stampNow(), text: 'DELEGATED · ' + (payload.kind || 'task') }],
           tools: []
         }
 
@@ -1697,7 +1844,7 @@ function HudPage() {
         const current = taskRef.current
 
         if (current && event.payload?.id === current.id) {
-          const next = { ...current, sessionId: event.payload.sessionId || null }
+          const next = { ...current, sessionId: event.payload.sessionId || null, timeline: pushTimeline(current.timeline, 'SESSION LINKED') }
 
           taskRef.current = next
           setTask(next)
@@ -1719,7 +1866,7 @@ function HudPage() {
           return
         }
 
-        const next = { ...current, tail: (current.tail + chunk).slice(-420) }
+        const next = { ...current, history: (current.history + chunk).slice(-4000), tail: (current.tail + chunk).slice(-420) }
 
         taskRef.current = next
         setTask(next)
@@ -1733,7 +1880,7 @@ function HudPage() {
 
         tracker.gesture = { at: performance.now(), kind: 'project' }
         uiSound('tick')
-        const next = { ...current, status: 'done', summary: String(event.payload?.summary || '') }
+        const next = { ...current, status: 'done', summary: String(event.payload?.summary || ''), timeline: pushTimeline(current.timeline, 'COMPLETE') }
 
         taskRef.current = next
         setTask(next)
@@ -1755,7 +1902,7 @@ function HudPage() {
 
         tracker.gesture = { at: performance.now(), kind: 'sweep' }
         uiSound('dissolve')
-        const next = { ...current, status: 'cancelled' }
+        const next = { ...current, status: 'cancelled', timeline: pushTimeline(current.timeline, 'CANCELLED') }
 
         taskRef.current = next
         setTask(next)
@@ -1782,14 +1929,14 @@ function HudPage() {
         const current = taskRef.current
 
         if (current && current.status === 'running' && current.sessionId === sid) {
-          const next = { ...current, tools: [...current.tools.filter(t => t !== name), name].slice(-4) }
+          const next = { ...current, timeline: pushTimeline(current.timeline, 'TOOL · ' + name.replace(/_/g, ' ')), tools: [...current.tools.filter(t => t !== name), name].slice(-4) }
 
           taskRef.current = next
           setTask(next)
         }
 
         if (buildsRef.current.some(b => b.session_id === sid)) {
-          const rows = buildsRef.current.map(b => (b.session_id === sid ? { ...b, lastTool: name } : b))
+          const rows = buildsRef.current.map(b => (b.session_id === sid ? { ...b, lastTool: name, timeline: pushTimeline(b.timeline, 'TOOL · ' + name.replace(/_/g, ' ')) } : b))
 
           buildsRef.current = rows
           setBuilds(rows)
@@ -1802,7 +1949,7 @@ function HudPage() {
           return
         }
 
-        const next = { ...current, media: [...current.media, { path: event.payload.path, thumbnail: event.payload.thumbnail }].slice(-3) }
+        const next = { ...current, media: [...current.media, { path: event.payload.path, thumbnail: event.payload.thumbnail }].slice(-3), timeline: pushTimeline(current.timeline, 'SCREENSHOT') }
 
         taskRef.current = next
         setTask(next)
@@ -1865,7 +2012,7 @@ function HudPage() {
 
         tracker.gesture = { at: performance.now(), kind: 'project' }
         uiSound('materialize')
-        const rows = [...buildsRef.current.filter(b => b.id !== row.id), { ...row, tail: '' }]
+        const rows = [...buildsRef.current.filter(b => b.id !== row.id), { ...row, history: '', tail: '', timeline: [{ at: stampNow(), text: 'SESSION OPENED' }] }]
 
         buildsRef.current = rows
         setBuilds(rows)
@@ -1879,8 +2026,8 @@ function HudPage() {
 
         const known = buildsRef.current.some(b => b.id === row.id)
         const rows = known
-          ? buildsRef.current.map(b => (b.id === row.id ? { ...b, ...row, tail: row.inFlight ? b.tail : '' } : b))
-          : [...buildsRef.current, { ...row, tail: '' }]
+          ? buildsRef.current.map(b => (b.id === row.id ? { ...b, ...row, tail: row.inFlight ? b.tail : '', timeline: (b.state !== row.state || Boolean(b.inFlight) !== Boolean(row.inFlight)) ? pushTimeline(b.timeline, (row.inFlight ? 'WORKING' : String(row.state || '').toUpperCase()) + (row.note ? ' · ' + row.note : '')) : b.timeline } : b))
+          : [...buildsRef.current, { ...row, history: '', tail: '', timeline: [{ at: stampNow(), text: String(row.state || 'known').toUpperCase() }] }]
 
         if (row.state === 'done') {
           uiSound('tick')
@@ -1911,7 +2058,7 @@ function HudPage() {
           return
         }
 
-        const rows = buildsRef.current.map(b => (b.session_id === sid ? { ...b, tail: ((b.tail || '') + chunk).slice(-360) } : b))
+        const rows = buildsRef.current.map(b => (b.session_id === sid ? { ...b, history: ((b.history || '') + chunk).slice(-4000), tail: ((b.tail || '') + chunk).slice(-360) } : b))
 
         buildsRef.current = rows
         setBuilds(rows)
@@ -1942,7 +2089,24 @@ function HudPage() {
   const taskPos = task ? layout.ops[opsList.length - 1] : null
   const boardShown = display.shown && !display.dissolving
 
+  // Mirror the stage for the once-installed keyboard / click-off handlers
+  // (every hook above has run by this point — never before a declaration).
+  stageRef.current = { expanded, open: Boolean(display.detail || display.focus || expanded) }
+
+  const expandedBuild = expanded && expanded.build ? dockBuilds.find(b => b.id === expanded.build) : null
+  const collapse = () => {
+    setExpanded(null)
+    window.dispatchEvent(new CustomEvent('jarvis:stage-collapse'))
+  }
+
   return jsxs('div', {
+    // Click-off anywhere on the void collapses whatever is open (stage,
+    // expanded operation); plates stop propagation so clicks inside stay.
+    onClick: event => {
+      if (stageRef.current.open && !(event.target instanceof Element && event.target.closest('[data-jv-interactive]'))) {
+        collapse()
+      }
+    },
     style: {
       background: '#02040A',
       backgroundImage: 'radial-gradient(ellipse at 50% 42%, #060B14 0%, #02040A 68%, #010208 100%)',
@@ -2008,11 +2172,19 @@ function HudPage() {
       // detail stage: the expand verb's instrument
       display.detail ? jsx(DetailStage, { detail: display.detail }, 'detail') : null,
       // metric tiles: real aggregates from the live board
-      display.rows.length ? jsx(MetricTiles, { rows: display.rows, shown: boardShown }) : null,
+      display.rows.length || display.status
+        ? jsx(MetricTiles, { active: display.status ?? null, onToggle: status => window.dispatchEvent(new CustomEvent('jarvis:board-filter', { detail: { status } })), rows: display.rows, shown: boardShown })
+        : null,
       // delegated work: the task plate — the task pop
-      task && taskPos ? jsx(TaskPlate, { clock, pos: taskPos, task }, 'task-' + task.id) : null,
+      task && taskPos ? jsx(TaskPlate, { clock, onExpand: () => setExpanded('task'), pos: taskPos, task }, 'task-' + task.id) : null,
       // build sessions: pinned plates in their slots
-      ...dockBuilds.map((build, i) => (layout.ops[i] ? jsx(BuildPlate, { build, clock, pos: layout.ops[i] }, build.id) : null)),
+      ...dockBuilds.map((build, i) => (layout.ops[i] ? jsx(BuildPlate, { build, clock, onExpand: () => setExpanded({ build: build.id }), pos: layout.ops[i] }, build.id) : null)),
+      // expanded operation: full detail — stream history, status timeline, open session
+      expanded === 'task' && task
+        ? jsx(OperationDetail, { kind: 'task', onOpenSession: task.sessionId && typeof host.openSession === 'function' ? () => void host.openSession(String(task.sessionId)).catch(() => undefined) : null, record: task }, 'task-detail')
+        : expandedBuild
+          ? jsx(OperationDetail, { kind: 'build', onOpenSession: () => openBuildSession(expandedBuild), record: expandedBuild }, 'build-detail')
+          : null,
       // center column: SIGHT + JUDGMENT (one of each at a time)
       sight || judgment
         ? jsxs('div', {
@@ -2063,7 +2235,7 @@ function HudPage() {
         children: [
           ...display.rows.map((row, index) =>
             layout.cards[index]
-              ? jsx(ProjectPlate, { delay: 140 + index * 110, dissolving: display.dissolving, focus: false, index, pos: layout.cards[index], row, shown: display.shown, updated: display.updated }, row.name || String(index))
+              ? jsx(ProjectPlate, { delay: 140 + index * 110, dissolving: display.dissolving, focus: false, index, pos: layout.cards[index], row, shown: display.shown, updated: display.updated }, String(row.name || '') + '#' + index)
               : null),
           display.focus
             ? jsx(ProjectPlate, { delay: 0, dissolving: display.dissolving, focus: true, index: 0, pos: { side: 'right', slot: 0 }, row: display.focus, shown: true, updated: display.updated }, 'focus')

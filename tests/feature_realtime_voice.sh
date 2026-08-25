@@ -270,6 +270,10 @@ grep -q "P5.2: a \"do X in a website\" delegation" "$V/voice-supervisor.test.ts"
 grep -q "test_sight_excludes_our_own_window_when_we_are_frontmost" "$OVERLAY_DIR/tests/test_realtime_voice_unit.py" && ok "sight self-exclusion regression test shipped" || bad "sight regression test missing"
 
 echo
+echo "== 5j. P6: pointer and voice drive one stage =="
+grep -q "jarvis:detail-request" "$V/voice-supervisor.ts" && grep -q "jarvis:board-filter" "$V/voice-supervisor.ts" && grep -q "display.stage.clear" "$V/voice-supervisor.ts" && ok "pointer seams route through displayContext (expand it → clicked card)" || bad "pointer seams missing"
+grep -q "P6: a pointer click on a card drives the same stage state" "$V/voice-supervisor.test.ts" && ok "shared-stage regression test shipped" || bad "shared-stage test missing"
+
 echo "== 6. revert restores an EXACT clean upstream =="
 bash "$APPLY" revert "$SRC" >/dev/null 2>&1
 AFTER="$(git -C "$SRCG" status --porcelain | sort)"

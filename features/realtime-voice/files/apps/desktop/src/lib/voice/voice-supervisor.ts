@@ -1843,6 +1843,50 @@ if (typeof window !== 'undefined') {
     void loadBuilds()
   })
 
+  // Pointer interaction (P6): the cockpit's clicks drive the SAME stage state
+  // the voice verbs use — one displayContext, one event pipeline — so "expand
+  // it" after clicking a card resolves to that card, and a click-off is the
+  // stage's "clear".
+  window.addEventListener('jarvis:detail-request', event => {
+    const name = String((event as CustomEvent).detail?.name ?? '').trim()
+
+    if (!name) {
+      return
+    }
+
+    emitGatewayEvent({ payload: { focus: true, source: 'pointer' }, type: 'display.retrieving' })
+    void getRealtimeProjectReview({ detail: true, limit: 1, query: name })
+      .then(result => {
+        const rows = Array.isArray(result.projects) ? result.projects : []
+
+        if (rows[0]?.name) {
+          displayContext.focused = String(rows[0].name)
+          emitGatewayEvent({ payload: { focus: true, query: name, result, source: 'pointer' }, type: 'display.detail' })
+        }
+      })
+      .catch(() => undefined)
+  })
+
+  window.addEventListener('jarvis:stage-collapse', () => {
+    displayContext.focused = null
+    emitGatewayEvent({ payload: { source: 'pointer' }, type: 'display.stage.clear' })
+  })
+
+  window.addEventListener('jarvis:board-filter', event => {
+    const status = String((event as CustomEvent).detail?.status ?? '').trim() || undefined
+
+    emitGatewayEvent({ payload: { focus: false, source: 'pointer' }, type: 'display.retrieving' })
+    void getRealtimeProjectReview({ limit: 8, status })
+      .then(result => {
+        const rows = Array.isArray(result.projects) ? result.projects : []
+
+        displayContext.focused = null
+        displayContext.lastRows = rows.map(row => ({ name: String(row.name ?? ''), status: String(row.status ?? '') }))
+        emitGatewayEvent({ payload: { focus: false, result, source: 'pointer', status: status ?? null }, type: 'display.projects' })
+      })
+      .catch(() => undefined)
+  })
+
   window.addEventListener('jarvis:display-request', () => {
     void getRealtimeProjectReview({ limit: 8 })
       .then(result => {

@@ -76,6 +76,9 @@ jobs:
           done
           echo "banner OK (all modes)"
 
+      - name: HUD cockpit slot grid — plates and cards never overlap (node, no deps)
+        run: node tests/hud_layout.test.mjs
+
       - name: Realtime voice — backend logic unit tests (pure, no upstream deps)
         run: |
           python3 -m pip install --quiet pytest pyyaml

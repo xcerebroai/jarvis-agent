@@ -870,17 +870,56 @@ function Decipher({ delay = 0, style, text }) {
   return jsx('span', { style, children: shown || '\u00a0' })
 }
 
-function ProjectCard({ dissolving, focus, index, row, shown }) {
-  const side = index % 2 === 0 ? 'left' : 'right'
-  const slot = Math.floor(index / 2)
+// --- layout:begin
+// The cockpit grid: two columns of four slots flanking the orb. Every panel —
+// project card, task plate, build plate — CLAIMS a slot; nothing is ever
+// positioned over another panel. Operations (builds, then the task) claim
+// the right column top-down first, then the left; cards reflow into whatever
+// is left (left column first). The detail stage owns the whole right column
+// while it is open. Cards that no longer fit are hidden and counted.
+const GRID = { cardWidth: 256, opWidth: 292, pitch: 20.5, side: 2.8, slots: 4, top: 9 }
+
+function computeCockpitLayout({ cards, detailOpen, ops }) {
+  const column = side => Array.from({ length: GRID.slots }, (_, slot) => ({ side, slot }))
+  const rightSlots = detailOpen ? [] : column('right')
+  const leftSlots = column('left')
+  const opOrder = [...rightSlots, ...leftSlots]
+  const taken = new Set()
+  const opPos = []
+
+  for (let i = 0; i < ops; i++) {
+    const pos = opOrder[i] || null
+
+    opPos.push(pos)
+
+    if (pos) {
+      taken.add(pos.side + pos.slot)
+    }
+  }
+
+  const cardOrder = [...leftSlots, ...rightSlots].filter(pos => !taken.has(pos.side + pos.slot))
+  const cardPos = Array.from({ length: cards }, (_, j) => cardOrder[j] || null)
+
+  return { cards: cardPos, hidden: Math.max(0, cards - cardOrder.length), ops: opPos }
+}
+
+function slotStyle(pos, width) {
+  return {
+    [pos.side]: GRID.side + '%',
+    maxHeight: 'calc(' + GRID.pitch + '% - 12px)',
+    top: GRID.top + pos.slot * GRID.pitch + '%',
+    width: width + 'px'
+  }
+}
+// --- layout:end
+
+function ProjectCard({ dissolving, focus, index, pos: slotPos, row, shown }) {
   const done = row.tasks_done ?? 0
   const total = row.tasks_total ?? 0
   const statusColor = STATUS_COLOR[row.status] || '#60A5FA'
   const pos = focus
     ? { left: '56%', top: '17%', width: '350px' }
-    : side === 'left'
-      ? { left: '2.8%', top: 9 + slot * 20.5 + '%', width: '256px' }
-      : { right: '2.8%', top: 9 + slot * 20.5 + '%', width: '256px' }
+    : slotStyle(slotPos || { side: 'left', slot: 0 }, GRID.cardWidth)
   const visible = shown && !dissolving
 
   return jsxs('div', {
@@ -1516,6 +1555,13 @@ function HudPage() {
     return () => disposers.forEach(dispose => dispose?.())
   }, [tracker])
 
+  // Slot grid: operations first (builds keep stable slots, the task follows),
+  // cards reflow into the remainder. Nothing overlaps.
+  const dockBuilds = builds.slice(0, 4)
+  const opsList = [...dockBuilds.map(build => ({ build, kind: 'build' })), ...(task ? [{ kind: 'task' }] : [])]
+  const layout = computeCockpitLayout({ cards: display.rows.length, detailOpen: Boolean(display.detail), ops: opsList.length })
+  const taskPos = task ? layout.ops[opsList.length - 1] : null
+
   return jsxs('div', {
     style: {
       background: '#02040A',
@@ -1573,7 +1619,7 @@ function HudPage() {
           jsx('div', { style: { ...LABEL }, children: 'JARVIS OS \u00b7 COMMAND' }),
           jsxs('div', { style: { display: 'flex', gap: '22px' }, children: [
             display.rows.length
-              ? jsx('div', { style: { ...LABEL, color: 'rgba(96,165,250,0.9)' }, children: display.rows.length + ' ON BOARD' })
+              ? jsx('div', { style: { ...LABEL, color: 'rgba(96,165,250,0.9)' }, children: display.rows.length + ' ON BOARD' + (layout.hidden ? ' \u00b7 ' + (display.rows.length - layout.hidden) + ' SHOWN' : '') })
               : null,
             jsx('div', { style: { ...LABEL, fontFamily: T.data, fontVariantNumeric: 'tabular-nums', letterSpacing: '0.18em' }, children: clock })
           ] })
@@ -1657,21 +1703,20 @@ function HudPage() {
           })
         : null,
       // delegated work: the task/research operation plate — real streamed output
-      task
+      task && taskPos
         ? jsxs('div', {
             style: {
               animation: 'jvFadeUp 400ms both',
               background: 'rgba(4,9,17,0.72)',
               border: '1px solid ' + (task.status === 'cancelled' ? 'rgba(248,113,113,0.4)' : task.status === 'done' ? 'rgba(52,211,153,0.4)' : 'rgba(59,130,246,0.34)'),
               clipPath: 'polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px)',
-              left: '2.8%',
               opacity: task.status === 'cancelled' ? 0.65 : 1,
+              overflow: 'hidden',
               padding: '10px 13px',
               pointerEvents: 'none',
               position: 'absolute',
-              top: '15%',
-              width: '292px',
-              zIndex: 3
+              zIndex: 3,
+              ...slotStyle(taskPos, GRID.opWidth)
             },
             children: [
               jsx('div', { className: 'jv-scan', style: { inset: 0, pointerEvents: 'none', position: 'absolute' } }),
@@ -1719,17 +1764,17 @@ function HudPage() {
                 ? jsx('div', {
                     style: { display: 'flex', gap: '6px', marginTop: '7px' },
                     children: task.media.map((m, i) =>
-                      jsx('img', { alt: '', src: m.thumbnail, style: { animation: 'jvFadeUp 400ms both', border: '1px solid rgba(96,165,250,0.4)', height: '58px', objectFit: 'cover', width: task.media.length > 1 ? '84px' : '100%' } }, m.path || i))
+                      jsx('img', { alt: '', src: m.thumbnail, style: { animation: 'jvFadeUp 400ms both', border: '1px solid rgba(96,165,250,0.4)', height: '42px', objectFit: 'cover', objectPosition: 'top', width: task.media.length > 1 ? '84px' : '100%' } }, m.path || i))
                   })
                 : null,
               task.status === 'done' && task.summary
                 ? jsx('div', {
-                    style: { animation: 'jvFadeUp 400ms both', borderLeft: '2px solid rgba(52,211,153,0.6)', color: 'rgba(217,230,242,0.95)', fontSize: '10px', lineHeight: 1.5, marginTop: '9px', maxHeight: '150px', overflow: 'hidden', paddingLeft: '9px', whiteSpace: 'pre-wrap' },
+                    style: { animation: 'jvFadeUp 400ms both', borderLeft: '2px solid rgba(52,211,153,0.6)', color: 'rgba(217,230,242,0.95)', fontSize: '10px', lineHeight: 1.5, marginTop: '9px', maxHeight: '64px', overflow: 'hidden', paddingLeft: '9px', whiteSpace: 'pre-wrap' },
                     children: task.summary.slice(0, 520)
                   })
                 : task.tail
                   ? jsx('div', {
-                      style: { color: 'rgba(139,161,188,0.85)', fontFamily: T.data, fontSize: '8.5px', lineHeight: 1.5, marginTop: '9px', maxHeight: '110px', overflow: 'hidden', whiteSpace: 'pre-wrap' },
+                      style: { color: 'rgba(139,161,188,0.85)', fontFamily: T.data, fontSize: '8.5px', lineHeight: 1.5, marginTop: '9px', maxHeight: '56px', overflow: 'hidden', whiteSpace: 'pre-wrap' },
                       children: task.tail
                     })
                   : null
@@ -1795,10 +1840,16 @@ function HudPage() {
           })
         : null,
       // P5.1 build dock: pinned, persistent plates — one per build session
-      builds.length
+      dockBuilds.length
         ? jsx('div', {
-            style: { display: 'flex', flexDirection: 'column', gap: '10px', pointerEvents: 'none', position: 'absolute', right: '2.8%', top: display.detail ? '58%' : '15%', width: '292px', zIndex: 3 },
-            children: builds.slice(0, 4).map(build => {
+            style: { inset: 0, pointerEvents: 'none', position: 'absolute', zIndex: 3 },
+            children: dockBuilds.map((build, buildIndex) => {
+              const pos = layout.ops[buildIndex]
+
+              if (!pos) {
+                return null
+              }
+
               const stateColor = { done: '#34D399', failed: '#F87171', idle: '#7A8CA3', planning: '#60A5FA', waiting: '#FBBF24', working: '#93C5FD' }
               const state = build.inFlight ? (build.state === 'planning' ? 'planning' : 'working') : build.state || 'idle'
               const color = stateColor[state] || '#60A5FA'
@@ -1807,7 +1858,7 @@ function HudPage() {
               const elapsed = seconds < 3600 ? Math.floor(seconds / 60) + ':' + String(seconds % 60).padStart(2, '0') : Math.floor(seconds / 3600) + 'h' + String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')
 
               return jsxs('div', {
-                style: { animation: 'jvFadeUp 400ms both', background: 'rgba(4,9,17,0.74)', border: '1px solid ' + color.replace(')', ', 0.45)').replace('#', 'rgba(').replace(/^rgba\(([0-9A-Fa-f]{6})/, (_m, hex) => 'rgba(' + parseInt(hex.slice(0, 2), 16) + ',' + parseInt(hex.slice(2, 4), 16) + ',' + parseInt(hex.slice(4, 6), 16)), clipPath: 'polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px))', opacity: state === 'done' ? 0.8 : 1, padding: '10px 13px', position: 'relative' },
+                style: { animation: 'jvFadeUp 400ms both', background: 'rgba(4,9,17,0.74)', border: '1px solid ' + color.replace(')', ', 0.45)').replace('#', 'rgba(').replace(/^rgba\(([0-9A-Fa-f]{6})/, (_m, hex) => 'rgba(' + parseInt(hex.slice(0, 2), 16) + ',' + parseInt(hex.slice(2, 4), 16) + ',' + parseInt(hex.slice(4, 6), 16)), clipPath: 'polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 10px 100%, 0 calc(100% - 10px))', opacity: state === 'done' ? 0.8 : 1, overflow: 'hidden', padding: '10px 13px', position: 'absolute', ...slotStyle(pos, GRID.opWidth) },
                 children: [
                   jsx('div', { className: 'jv-scan', style: { inset: 0, pointerEvents: 'none', position: 'absolute' } }),
                   jsx('div', { style: { borderRight: '1px solid ' + color, borderTop: '1px solid ' + color, height: '7px', position: 'absolute', right: '3px', top: '3px', width: '7px' } }),
@@ -1824,9 +1875,9 @@ function HudPage() {
                   build.inFlight ? jsx('div', { className: 'jv-task-sweep', style: { background: 'rgba(59,130,246,0.16)', height: '2px', marginTop: '7px' } }) : null,
                   build.lastTool ? jsx('div', { style: { color: 'rgba(122,150,183,0.9)', fontFamily: T.label, fontSize: '7.5px', letterSpacing: '0.2em', marginTop: '5px', textTransform: 'uppercase' }, children: 'TOOL \u00b7 ' + String(build.lastTool).replace(/_/g, ' ') }) : null,
                   build.inFlight && build.tail
-                    ? jsx('div', { style: { color: 'rgba(139,161,188,0.85)', fontFamily: T.data, fontSize: '8.5px', lineHeight: 1.5, marginTop: '7px', maxHeight: '92px', overflow: 'hidden', whiteSpace: 'pre-wrap' }, children: build.tail })
+                    ? jsx('div', { style: { color: 'rgba(139,161,188,0.85)', fontFamily: T.data, fontSize: '8.5px', lineHeight: 1.5, marginTop: '7px', maxHeight: '54px', overflow: 'hidden', whiteSpace: 'pre-wrap' }, children: build.tail })
                     : build.last_summary
-                      ? jsx('div', { style: { borderLeft: '2px solid ' + color, color: 'rgba(217,230,242,0.92)', fontSize: '10px', lineHeight: 1.5, marginTop: '7px', maxHeight: '96px', overflow: 'hidden', paddingLeft: '8px' }, children: String(build.last_summary).slice(0, 260) })
+                      ? jsx('div', { style: { borderLeft: '2px solid ' + color, color: 'rgba(217,230,242,0.92)', fontSize: '10px', lineHeight: 1.5, marginTop: '7px', maxHeight: '58px', overflow: 'hidden', paddingLeft: '8px' }, children: String(build.last_summary).slice(0, 200) })
                       : jsx('div', { style: { color: 'rgba(139,161,188,0.7)', fontSize: '9.5px', marginTop: '6px' }, children: String(build.goal || '').slice(0, 120) })
                 ]
               }, build.id)
@@ -1899,7 +1950,9 @@ function HudPage() {
         style: { inset: 0, pointerEvents: 'none', position: 'absolute' },
         children: [
           ...display.rows.map((row, index) =>
-            jsx(ProjectCard, { dissolving: display.dissolving, focus: false, index, row, shown: display.shown }, row.name || String(index))),
+            layout.cards[index]
+              ? jsx(ProjectCard, { dissolving: display.dissolving, focus: false, index, pos: layout.cards[index], row, shown: display.shown }, row.name || String(index))
+              : null),
           display.focus
             ? jsx(ProjectCard, { dissolving: display.dissolving, focus: true, index: 0, row: display.focus, shown: true }, 'focus')
             : null

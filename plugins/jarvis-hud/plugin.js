@@ -832,6 +832,9 @@ const COCKPIT_CSS = `
 .jv-scan { background: repeating-linear-gradient(0deg, rgba(147,197,253,0.028) 0 1px, transparent 1px 3px); }
 .jv-chip { animation: jvBreathe 2.4s ease-in-out infinite; }
 .jv-bar-charge { background-image: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.55) 50%, transparent 100%); background-size: 45% 100%; background-repeat: no-repeat; animation: jvSweep 1.1s ease-out 1; }
+@keyframes jvDrift { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes jvBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
+@keyframes jvOrbit { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .jv-task-sweep { background-image: linear-gradient(90deg, transparent 0%, rgba(147,197,253,0.5) 50%, transparent 100%); background-size: 38% 100%; background-repeat: no-repeat; animation: jvSweep 1.7s linear infinite; }
 `
 
@@ -2002,6 +2005,294 @@ function HudPage() {
   })
 }
 
+// =============================================================================
+// CARD LAB — art direction, owner in the loop. The SAME real project row is
+// rendered three ways, side by side, at true cockpit size. Each direction is
+// pushed to its extreme so they read as different films. Replay re-runs the
+// materialization (user-triggered — truthful theater). Route: /hud-lab.
+// =============================================================================
+
+/** shown flips false→true ~80ms after every replay so CSS transitions re-run. */
+function useMaterialize(key) {
+  const [shown, setShown] = useState(false)
+
+  useEffect(() => {
+    setShown(false)
+    const t = window.setTimeout(() => setShown(true), 80)
+
+    return () => window.clearTimeout(t)
+  }, [key])
+
+  return shown
+}
+
+const EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
+
+function cardFacts(row) {
+  const done = row.tasks_done ?? 0
+  const total = row.tasks_total ?? 0
+  const days = typeof row.days_to_deadline === 'number' ? row.days_to_deadline : null
+
+  return {
+    color: STATUS_COLOR[row.status] || '#60A5FA',
+    days,
+    daysLabel: days === null ? '—' : (days < 0 ? 'T+' + Math.abs(days) + 'D' : 'T−' + days + 'D'),
+    done,
+    frac: total ? done / total : 0,
+    note: String(row.note || row.next_action || ''),
+    pct: total ? Math.round((done / total) * 100) : 0,
+    total
+  }
+}
+
+// (A) FILAMENT-HOLOGRAPHIC — the card IS light: an open frame that draws
+// itself, traced arcs, a projection thread from the orb side, a ring gauge
+// that traces to the real progress, glow everywhere, a slow drift.
+function FilamentCard({ row, shown, width = 256 }) {
+  const f = cardFacts(row)
+  const H = 158
+  const R = 15
+  const C = 2 * Math.PI * R
+  const draw = delay => ({ strokeDasharray: 1, strokeDashoffset: shown ? 0 : 1, transition: 'stroke-dashoffset 900ms ' + EASE + ' ' + delay + 'ms' })
+
+  return jsxs('div', {
+    style: { animation: shown ? 'jvDrift 7s ease-in-out infinite' : 'none', color: '#D9E6F2', minHeight: H + 'px', opacity: shown ? 1 : 0, padding: '16px 18px 14px', position: 'relative', transition: 'opacity 500ms', width: width + 'px' },
+    children: [
+      jsx('div', { style: { background: 'linear-gradient(90deg, transparent, rgba(96,165,250,0.75))', height: '1px', left: '-48px', position: 'absolute', top: '52%', transform: shown ? 'scaleX(1)' : 'scaleX(0)', transformOrigin: 'right', transition: 'transform 600ms ' + EASE + ' 60ms', width: '48px' } }),
+      jsxs('svg', {
+        preserveAspectRatio: 'none', viewBox: '0 0 ' + width + ' ' + H,
+        style: { filter: 'drop-shadow(0 0 5px rgba(96,165,250,0.6))', height: '100%', inset: 0, overflow: 'visible', position: 'absolute', width: '100%' },
+        children: [
+          jsx('path', { d: 'M 14 1 H ' + (width - 1) + ' V 44', fill: 'none', pathLength: 1, stroke: 'rgba(147,197,253,0.9)', strokeWidth: 1, style: { ...draw(80), vectorEffect: 'non-scaling-stroke' } }),
+          jsx('path', { d: 'M 1 14 V ' + (H - 1) + ' H ' + (width - 34), fill: 'none', pathLength: 1, stroke: 'rgba(96,165,250,0.75)', strokeWidth: 1, style: { ...draw(260), vectorEffect: 'non-scaling-stroke' } }),
+          jsx('path', { d: 'M 40 ' + (H - 16) + ' H ' + (width - 60), fill: 'none', pathLength: 1, stroke: 'rgba(59,130,246,0.35)', strokeWidth: 1, style: { ...draw(900), vectorEffect: 'non-scaling-stroke' } }),
+          ...[[1, 14], [14, 1], [width - 1, 44], [width - 34, H - 1]].map(([x, y], i) =>
+            jsx('circle', { className: 'jv-chip', cx: x, cy: y, fill: i === 0 ? f.color : '#93C5FD', r: 1.7, style: { opacity: shown ? 1 : 0, transition: 'opacity 400ms ' + (700 + i * 120) + 'ms' } }, 'n' + i)),
+          ...[0, 1, 2, 3, 4].map(i =>
+            jsx('line', { stroke: 'rgba(147,197,253,0.7)', strokeWidth: 1, style: { opacity: shown ? 1 : 0, transition: 'opacity 300ms ' + (1000 + i * 70) + 'ms' }, x1: 52 + i * 22, x2: 52 + i * 22, y1: H - 1, y2: H - 6 }, 't' + i))
+        ]
+      }),
+      jsx('svg', { height: 16, width: 16, style: { filter: 'drop-shadow(0 0 4px ' + f.color + ')', left: 0, overflow: 'visible', position: 'absolute', top: 0 }, viewBox: '0 0 16 16', children:
+        jsx('path', { d: 'M 1 14 A 13 13 0 0 1 14 1', fill: 'none', pathLength: 1, stroke: f.color, strokeWidth: 1.2, style: draw(520) }) }),
+      jsx('svg', { height: 36, width: 36, style: { bottom: 0, overflow: 'visible', position: 'absolute', right: 0 }, viewBox: '0 0 36 36', children:
+        jsx('path', { d: 'M 1 35 A 34 34 0 0 0 35 1', fill: 'none', pathLength: 1, stroke: 'rgba(96,165,250,0.55)', strokeWidth: 1, style: draw(640) }) }),
+      jsxs('svg', {
+        height: 42, width: 42,
+        style: { filter: 'drop-shadow(0 0 4px ' + f.color + ')', position: 'absolute', right: '10px', top: '12px' },
+        children: [
+          jsx('circle', { cx: 21, cy: 21, fill: 'none', r: R, stroke: 'rgba(59,130,246,0.22)', strokeWidth: 1.5 }),
+          jsx('circle', { cx: 21, cy: 21, fill: 'none', r: R, stroke: f.color, strokeDasharray: C, strokeDashoffset: shown ? C * (1 - f.frac) : C, strokeLinecap: 'round', strokeWidth: 2, style: { transition: 'stroke-dashoffset 1000ms ' + EASE + ' 450ms' }, transform: 'rotate(-90 21 21)' }),
+          jsx('g', { className: 'jv-orbit', style: { animation: shown ? 'jvOrbit 9s linear infinite' : 'none', transformOrigin: '21px 21px' }, children: jsx('circle', { cx: 21, cy: 21 - R - 4, fill: '#93C5FD', r: 1.2 }) }),
+          jsx('text', { fill: '#D9E6F2', fontFamily: T.data, fontSize: 9, style: { opacity: shown ? 1 : 0, transition: 'opacity 500ms 900ms' }, textAnchor: 'middle', x: 21, y: 24.5, children: f.pct + '%' })
+        ]
+      }),
+      jsx('div', {
+        style: { fontFamily: T.label, fontSize: '13px', fontWeight: 600, letterSpacing: shown ? '0.09em' : '0.38em', lineHeight: 1.2, opacity: shown ? 1 : 0, paddingRight: '56px', textShadow: '0 0 14px rgba(96,165,250,0.6)', textTransform: 'uppercase', transition: 'letter-spacing 1000ms ' + EASE + ' 180ms, opacity 600ms 180ms' },
+        children: String(row.name || '')
+      }),
+      jsxs('div', {
+        style: { display: 'inline-flex', flexDirection: 'column', marginTop: '7px' },
+        children: [
+          jsx('span', { style: { color: f.color, fontFamily: T.label, fontSize: '9px', letterSpacing: '0.32em', textShadow: '0 0 8px ' + f.color, textTransform: 'uppercase', opacity: shown ? 1 : 0, transition: 'opacity 500ms 500ms' }, children: row.status }),
+          jsx('div', { style: { background: f.color, boxShadow: '0 0 6px ' + f.color, height: '1px', marginTop: '2px', transform: shown ? 'scaleX(1)' : 'scaleX(0)', transformOrigin: 'left', transition: 'transform 700ms ' + EASE + ' 560ms' } })
+        ]
+      }),
+      f.note
+        ? jsx('div', { style: { color: 'rgba(166,190,218,0.95)', filter: shown ? 'blur(0)' : 'blur(6px)', fontSize: '10.5px', lineHeight: 1.5, marginTop: '10px', maxWidth: width - 64 + 'px', opacity: shown ? 1 : 0, transition: 'opacity 700ms 720ms, filter 700ms 720ms' }, children: f.note.slice(0, 110) })
+        : null,
+      jsx('div', {
+        style: { color: 'rgba(147,197,253,0.85)', fontFamily: T.data, fontSize: '8.5px', letterSpacing: '0.14em', marginTop: '10px', opacity: shown ? 1 : 0, transition: 'opacity 600ms 950ms' },
+        children: f.daysLabel + ' · ' + f.done + '/' + f.total + ' · ' + String(row.priority || '').toUpperCase() + (typeof row.staleness_days === 'number' ? ' · STALE ' + row.staleness_days + 'D' : '')
+      })
+    ]
+  })
+}
+
+// (B) DENSE-INSTRUMENT — a machine readout: brackets, scanlines, an alert
+// strip with hazard stripes, deciphering fields, tabular data, a segmented
+// charging bar, task ticks. Every pixel carries data.
+function InstrumentCard({ row, shown, updated, width = 256 }) {
+  const f = cardFacts(row)
+  const SEG = 12
+  const filled = Math.round(f.frac * SEG)
+  const bracket = (pos, i) => jsx('div', { style: { height: '9px', pointerEvents: 'none', position: 'absolute', width: '9px', ...pos, borderColor: f.color, borderStyle: 'solid', borderWidth: (pos.top !== undefined ? '1px ' : '0 ') + (pos.right !== undefined ? '1px ' : '0 ') + (pos.bottom !== undefined ? '1px ' : '0 ') + (pos.left !== undefined ? '1px' : '0'), opacity: shown ? 1 : 0, transition: 'opacity 250ms ' + i * 60 + 'ms' } }, 'b' + i)
+  const field = (label, value, delay) => jsxs('div', { style: { display: 'flex', flexDirection: 'column', gap: '1px' }, children: [
+    jsx('span', { style: { ...LABEL, fontSize: '7px', letterSpacing: '0.26em' }, children: label }),
+    shown ? jsx(Decipher, { delay, style: { color: '#D9E6F2', fontFamily: T.data, fontSize: '9.5px', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }, text: value }) : jsx('span', { children: ' ' })
+  ] }, label)
+
+  return jsxs('div', {
+    style: { background: 'rgba(4,9,17,0.93)', border: '1px solid rgba(59,130,246,0.45)', color: '#D9E6F2', opacity: shown ? 1 : 0, overflow: 'hidden', padding: '8px 11px 9px', position: 'relative', transform: shown ? 'scale(1)' : 'scale(0.97)', transition: 'opacity 260ms, transform 320ms ' + EASE, width: width + 'px' },
+    children: [
+      jsx('div', { className: 'jv-scan', style: { inset: 0, pointerEvents: 'none', position: 'absolute' } }),
+      bracket({ left: '2px', top: '2px' }, 0), bracket({ right: '2px', top: '2px' }, 1), bracket({ bottom: '2px', right: '2px' }, 2), bracket({ bottom: '2px', left: '2px' }, 3),
+      jsxs('div', { style: { color: 'rgba(122,150,183,0.9)', display: 'flex', fontFamily: T.data, fontSize: '7.5px', justifyContent: 'space-between', letterSpacing: '0.18em', marginBottom: '4px' }, children: [
+        jsx('span', { children: 'PROJECT · ' + String(row.priority || '').toUpperCase() }),
+        jsx('span', { children: updated ? 'IDX ' + updated : '' })
+      ] }),
+      shown ? jsx(Decipher, { delay: 90, style: { fontFamily: T.label, fontSize: '12px', fontWeight: 600, letterSpacing: '0.08em', textTransform: 'uppercase', whiteSpace: 'nowrap', overflow: 'hidden', display: 'block' }, text: String(row.name || '') }) : jsx('div', { children: ' ' }),
+      row.status === 'Blocked' && f.note
+        ? jsxs('div', { style: { alignItems: 'baseline', background: 'repeating-linear-gradient(135deg, rgba(248,113,113,0.16) 0 5px, transparent 5px 11px)', borderLeft: '2px solid #F87171', display: 'flex', fontSize: '8.5px', gap: '6px', lineHeight: 1.35, marginTop: '6px', opacity: shown ? 1 : 0, padding: '3px 6px', transition: 'opacity 300ms 380ms' }, children: [
+            jsx('span', { style: { animation: 'jvBlink 1.1s steps(2) infinite', color: '#F87171', fontFamily: T.data, fontSize: '8px' }, children: '■' }),
+            jsx('span', { style: { color: '#FCA5A5', fontFamily: T.label, fontSize: '8px', letterSpacing: '0.22em' }, children: 'BLOCKED' }),
+            shown ? jsx(Decipher, { delay: 420, style: { color: 'rgba(217,230,242,0.9)', flex: 1 }, text: f.note.slice(0, 64) }) : null
+          ] })
+        : null,
+      jsx('div', { style: { display: 'grid', gap: '4px 10px', gridTemplateColumns: '1fr 1fr 1fr 1fr', marginTop: '7px' }, children: [
+        field('DEADLINE', String(row.deadline || '—'), 520),
+        field('COUNTDOWN', f.daysLabel, 600),
+        field('STALE', typeof row.staleness_days === 'number' ? row.staleness_days + 'D' : '—', 680),
+        field('REVENUE', String(row.revenue_relevance || '—').toUpperCase() + (row.revenue_outstanding ? ' $' + Math.round(row.revenue_outstanding) : ''), 760)
+      ] }),
+      jsxs('div', { style: { alignItems: 'center', display: 'flex', gap: '8px', marginTop: '8px' }, children: [
+        jsx('div', { style: { display: 'flex', flex: 1, gap: '2px' }, children: Array.from({ length: SEG }, (_, i) =>
+          jsx('div', { style: { background: i < filled ? f.color : 'rgba(59,130,246,0.16)', boxShadow: i < filled ? '0 0 4px ' + f.color : 'none', flex: 1, height: '5px', opacity: shown ? 1 : 0, transform: shown ? 'scaleY(1)' : 'scaleY(0)', transition: 'opacity 120ms ' + (500 + i * 45) + 'ms, transform 180ms ' + EASE + ' ' + (500 + i * 45) + 'ms' } }, i)) }),
+        jsx('span', { style: { color: 'rgba(147,197,253,0.9)', fontFamily: T.data, fontSize: '8.5px', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }, children: f.done + '/' + f.total + ' · ' + f.pct + '%' })
+      ] }),
+      jsxs('div', { style: { alignItems: 'center', display: 'flex', gap: '6px', marginTop: '6px' }, children: [
+        jsx('span', { style: { ...LABEL, fontSize: '7px' }, children: 'TASKS' }),
+        jsx('div', { style: { display: 'flex', gap: '3px' }, children: Array.from({ length: f.total }, (_, i) =>
+          jsx('div', { style: { background: i < f.done ? f.color : 'transparent', border: '1px solid ' + (i < f.done ? f.color : 'rgba(96,165,250,0.5)'), height: '5px', opacity: shown ? 1 : 0, transition: 'opacity 150ms ' + (1000 + i * 40) + 'ms', width: '5px' } }, i)) })
+      ] }),
+      row.next_action
+        ? jsxs('div', { style: { color: 'rgba(139,161,188,0.95)', fontSize: '8.5px', lineHeight: 1.4, marginTop: '6px', opacity: shown ? 1 : 0, transition: 'opacity 400ms 1150ms', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }, children: [
+            jsx('span', { style: { color: '#93C5FD', fontFamily: T.label, fontSize: '7.5px', letterSpacing: '0.22em', marginRight: '6px' }, children: 'NEXT ▸' }),
+            String(row.next_action).slice(0, 80)
+          ] })
+        : null
+    ]
+  })
+}
+
+// (C) CINEMATIC-MINIMAL — depth and restraint: a bloom behind the plate,
+// a single accent, large light type, one line, one hairline. Focus in.
+function CinematicCard({ row, shown, width = 256 }) {
+  const f = cardFacts(row)
+
+  return jsxs('div', {
+    style: { position: 'relative', width: width + 'px' },
+    children: [
+      jsx('div', { style: { background: 'radial-gradient(ellipse at 28% 30%, rgba(59,130,246,0.32), transparent 62%)', filter: 'blur(20px)', inset: '-34px', opacity: shown ? 1 : 0, pointerEvents: 'none', position: 'absolute', transition: 'opacity 1300ms 200ms' } }),
+      jsxs('div', {
+        style: { backdropFilter: 'blur(10px)', background: 'linear-gradient(160deg, rgba(12,19,33,0.78), rgba(4,8,16,0.66))', border: '1px solid rgba(255,255,255,0.07)', borderRadius: '3px', borderTop: '1px solid rgba(255,255,255,0.16)', boxShadow: '0 28px 50px rgba(0,0,0,0.6)', color: '#EAF1F9', filter: shown ? 'blur(0)' : 'blur(12px)', opacity: shown ? 1 : 0, padding: '20px 20px 16px 24px', position: 'relative', transform: shown ? 'translateY(0) scale(1)' : 'translateY(16px) scale(0.965)', transition: 'opacity 900ms ' + EASE + ', transform 1100ms ' + EASE + ', filter 900ms ' + EASE },
+        children: [
+          jsx('div', { style: { background: f.color, bottom: '22px', boxShadow: '0 0 14px ' + f.color, left: 0, position: 'absolute', top: '22px', transform: shown ? 'scaleY(1)' : 'scaleY(0)', transformOrigin: 'top', transition: 'transform 900ms ' + EASE + ' 300ms', width: '2px' } }),
+          jsx('div', { style: { color: f.color, fontFamily: T.label, fontSize: '9px', fontWeight: 600, letterSpacing: '0.46em', opacity: shown ? 1 : 0, textTransform: 'uppercase', transition: 'opacity 700ms 350ms' }, children: row.status }),
+          jsx('div', { style: { fontFamily: "'Avenir Next', 'Helvetica Neue', 'Inter', sans-serif", fontSize: '21px', fontWeight: 300, letterSpacing: '0.015em', lineHeight: 1.15, marginTop: '7px', opacity: shown ? 1 : 0, transform: shown ? 'translateY(0)' : 'translateY(6px)', transition: 'opacity 900ms 250ms, transform 900ms ' + EASE + ' 250ms' }, children: String(row.name || '') }),
+          f.note
+            ? jsx('div', { style: { color: 'rgba(160,176,196,0.82)', display: '-webkit-box', fontSize: '11px', lineHeight: 1.5, marginTop: '12px', opacity: shown ? 1 : 0, overflow: 'hidden', transition: 'opacity 900ms 600ms', WebkitBoxOrient: 'vertical', WebkitLineClamp: 2 }, children: f.note })
+            : null,
+          jsxs('div', { style: { alignItems: 'center', display: 'flex', gap: '12px', marginTop: '18px' }, children: [
+            jsx('div', { style: { background: 'rgba(255,255,255,0.08)', flex: 1, height: '1px' }, children: jsx('div', { style: { background: f.color, boxShadow: '0 0 8px ' + f.color, height: '1px', transition: 'width 1300ms ' + EASE + ' 650ms', width: shown ? f.pct + '%' : '0%' } }) }),
+            jsx('span', { style: { color: 'rgba(200,214,232,0.7)', fontFamily: T.data, fontSize: '9px', fontVariantNumeric: 'tabular-nums', fontWeight: 300, opacity: shown ? 1 : 0, transition: 'opacity 700ms 900ms' }, children: f.done + ' / ' + f.total })
+          ] })
+        ]
+      })
+    ]
+  })
+}
+
+const LAB_DIRECTIONS = [
+  { key: 'a', title: 'FILAMENT · HOLOGRAPHIC', blurb: 'The card is light. An open frame draws itself, arcs trace, a thread projects from the orb, the ring gauge traces real progress. Glow, drift.' },
+  { key: 'b', title: 'DENSE · INSTRUMENT', blurb: 'A machine readout. Brackets, scanlines, hazard-striped alert, deciphering fields, tabular data, a charging bar, task ticks. Every pixel is data.' },
+  { key: 'c', title: 'CINEMATIC · MINIMAL', blurb: 'Depth and restraint. Bloom behind glass, one accent, large light type, one line, one hairline. Focus in from blur.' }
+]
+
+function LabPage() {
+  const [row, setRow] = useState(null)
+  const [updated, setUpdated] = useState('')
+  const [replay, setReplay] = useState({ a: 0, b: 0, c: 0 })
+  const [zoom, setZoom] = useState(true)
+  const gotRef = useRef(false)
+
+  useEffect(() => {
+    const off = host.onEvent('display.projects', event => {
+      const rows = event.payload?.result?.projects ?? []
+      const pick = rows.find(r => r.status === 'Blocked') || rows[0]
+
+      if (pick) {
+        gotRef.current = true
+        setRow(pick)
+        setUpdated(String(event.payload?.result?.updated || ''))
+      }
+    })
+    const timers = [300, 2000, 5000, 10_000, 20_000].map(ms => window.setTimeout(() => {
+      if (!gotRef.current) {
+        window.dispatchEvent(new CustomEvent('jarvis:display-request'))
+      }
+    }, ms))
+
+    return () => {
+      off?.()
+      timers.forEach(t => window.clearTimeout(t))
+    }
+  }, [])
+
+  const bump = keys => {
+    uiSound('materialize')
+    setReplay(prev => Object.fromEntries(Object.entries(prev).map(([k, v]) => [k, keys.includes(k) ? v + 1 : v])))
+  }
+  const button = (label, onClick, active) => jsx('div', {
+    onClick,
+    style: { border: '1px solid rgba(96,165,250,' + (active ? '0.9' : '0.4') + ')', color: active ? '#93C5FD' : 'rgba(147,197,253,0.8)', cursor: 'pointer', fontFamily: T.label, fontSize: '9px', letterSpacing: '0.3em', padding: '6px 14px', textTransform: 'uppercase', userSelect: 'none' },
+    children: label
+  })
+  const scale = zoom ? 1.55 : 1
+
+  return jsxs('div', {
+    style: { background: '#02040A', backgroundImage: 'radial-gradient(ellipse at 50% 30%, #060B14 0%, #02040A 60%, #010208 100%)', color: '#D9E6F2', height: '100%', inset: 0, overflow: 'auto', position: 'absolute', width: '100%' },
+    children: [
+      jsx('style', { children: COCKPIT_CSS }),
+      jsxs('div', { style: { alignItems: 'center', display: 'flex', gap: '18px', justifyContent: 'space-between', padding: '18px 40px 0' }, children: [
+        jsxs('div', { children: [
+          jsx('div', { style: { ...LABEL, color: 'rgba(96,165,250,0.95)' }, children: 'JARVIS OS · CARD LAB · ART DIRECTION' }),
+          jsx('div', { style: { color: 'rgba(122,150,183,0.85)', fontFamily: T.data, fontSize: '9px', letterSpacing: '0.12em', marginTop: '5px' }, children: row ? 'SAME DATA IN ALL THREE · ' + String(row.name).toUpperCase() + ' · ' + String(row.status).toUpperCase() + ' · ' + (row.tasks_done ?? 0) + '/' + (row.tasks_total ?? 0) + ' · TRUE COCKPIT WIDTH 256PX' : 'WAITING FOR THE BOARD…' })
+        ] }),
+        jsxs('div', { style: { display: 'flex', gap: '10px' }, children: [
+          button(zoom ? 'ZOOM 1.55×' : 'ZOOM 1×', () => setZoom(z => !z), zoom),
+          button('REPLAY ALL', () => bump(['a', 'b', 'c']), false),
+          button('BACK TO COCKPIT', () => host.navigate('/hud'), false)
+        ] })
+      ] }),
+      row
+        ? jsx('div', {
+            style: { alignItems: 'flex-start', display: 'flex', gap: '48px', justifyContent: 'center', padding: '54px 40px 60px' },
+            children: LAB_DIRECTIONS.map((d, i) =>
+              jsxs('div', { style: { display: 'flex', flexDirection: 'column', gap: '18px', width: Math.round(256 * scale) + 'px' }, children: [
+                jsxs('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' }, children: [
+                  jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '10px' }, children: [
+                    jsx('span', { style: { color: '#93C5FD', fontFamily: T.label, fontSize: '22px', fontWeight: 600, letterSpacing: '0.2em', textShadow: '0 0 16px rgba(59,130,246,0.6)' }, children: d.key.toUpperCase() }),
+                    jsx('span', { style: { ...LABEL, color: '#D9E6F2', fontSize: '10px' }, children: d.title })
+                  ] }),
+                  jsx('div', { style: { color: 'rgba(139,161,188,0.9)', fontSize: '10.5px', lineHeight: 1.5, maxWidth: '360px' }, children: d.blurb })
+                ] }),
+                jsx('div', { style: { height: Math.round(200 * scale) + 'px', position: 'relative' }, children:
+                  jsx('div', { style: { position: 'absolute', left: 0, top: 0, transform: 'scale(' + scale + ')', transformOrigin: 'top left', width: '256px' }, children:
+                    jsx(LabVariant, { direction: d.key, replayKey: replay[d.key], row, updated })
+                  })
+                }),
+                jsx('div', { style: { display: 'flex' }, children: button('REPLAY ' + d.key.toUpperCase(), () => bump([d.key]), false) })
+              ] }, d.key))
+          })
+        : null
+    ]
+  })
+}
+
+function LabVariant({ direction, replayKey, row, updated }) {
+  const shown = useMaterialize(replayKey)
+
+  if (direction === 'a') {
+    return jsx(FilamentCard, { row, shown })
+  }
+
+  if (direction === 'b') {
+    return jsx(InstrumentCard, { row, shown, updated })
+  }
+
+  return jsx(CinematicCard, { row, shown })
+}
+
 // The route must never sit on the host's crash card: any render throw lands
 // on a minimal recovering plate with a remount control, and the voice stack
 // (feature-side) keeps running underneath untouched.
@@ -2055,6 +2346,28 @@ export default {
         area: SIDEBAR_NAV_AREA,
         order: 48,
         data: { codicon: 'circle-large-outline', label: 'HUD', path: '/hud' }
+      },
+      {
+        id: 'lab-page',
+        area: ROUTES_AREA,
+        data: { path: '/hud-lab' },
+        render: () => jsx(HudBoundary, { children: jsx(LabPage, {}) })
+      },
+      {
+        id: 'lab-nav',
+        area: SIDEBAR_NAV_AREA,
+        order: 49,
+        data: { codicon: 'beaker', label: 'LAB', path: '/hud-lab' }
+      },
+      {
+        id: 'lab-open',
+        area: PALETTE_AREA,
+        data: {
+          id: 'jarvisHud.lab',
+          label: 'JARVIS: Card Lab (A / B / C)',
+          keywords: ['lab', 'card', 'design', 'art direction', 'jarvis'],
+          run: () => host.navigate('/hud-lab')
+        }
       },
       {
         id: 'open',

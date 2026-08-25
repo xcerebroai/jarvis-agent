@@ -354,6 +354,7 @@ _PRIORITY_CANON = {
     "normal": "Normal", "medium": "Normal", "default": "Normal", "p2": "Normal",
     "low": "Low", "p3": "Low", "later": "Low", "someday": "Low",
 }
+_REFERENCE_STOPWORDS = {"project", "projects", "the", "one", "that", "this", "build", "client", "for", "and", "with"}
 _REVENUE_CANON = {"high": "High", "medium": "Medium", "med": "Medium", "low": "Low", "none": "Low", "unknown": "Unknown"}
 
 
@@ -427,18 +428,14 @@ def resolve_project(rows: List[Dict[str, Any]], reference: str) -> Optional[Dict
         ]
         if len(by_client) == 1:
             return by_client[0]
-    tokens = [t for t in ref.replace("-", " ").split() if len(t) > 2]
+    # Token match, strict: every meaningful token of the reference must appear
+    # in the name (generic words like "project" never count), and the match
+    # must be unique. A spoken "zzz project" must NOT land on some real project.
+    tokens = [t for t in ref.replace("-", " ").split() if len(t) > 2 and t not in _REFERENCE_STOPWORDS]
     if tokens:
-        scored = []
-        for project, name in names:
-            lowered = name.lower()
-            hits = sum(1 for t in tokens if t in lowered)
-            if hits:
-                scored.append((hits, project))
-        if scored:
-            scored.sort(key=lambda item: -item[0])
-            if len(scored) == 1 or scored[0][0] > scored[1][0]:
-                return scored[0][1]
+        full = [project for project, name in names if all(t in name.lower() for t in tokens)]
+        if len(full) == 1:
+            return full[0]
     return None
 
 

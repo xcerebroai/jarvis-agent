@@ -203,6 +203,15 @@ def test_staleness_counts_from_last_content_change(tmp_path):
     assert review2["projects"][0]["staleness_days"] == 0
 
 
+def test_reference_resolution_never_lands_on_a_wrong_project():
+    rows = rv._project_rows(_P51_INDEX)
+    assert rv.resolve_project(rows, "zzz-no-such-project") is None      # generic token must not match
+    assert rv.resolve_project(rows, "harris") is None                    # two Harris projects → ambiguous
+    assert rv.resolve_project(rows, "harris ads")["id"] == "P-3"         # all meaningful tokens present
+    assert rv.resolve_project(rows, "the coastal project")["id"] == "P-2"  # stopwords ignored
+    assert rv.resolve_project(rows, "coastal nonsense") is None          # every token must hit
+
+
 def test_voice_override_resolves_reference_and_persists(tmp_path):
     index = _write_index(tmp_path)
     rows = rv._project_rows(_P51_INDEX)

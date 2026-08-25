@@ -890,6 +890,73 @@ function Decipher({ delay = 0, style, text }) {
   return jsx('span', { style, children: shown || ' ' })
 }
 
+// --- The managed Stage: every lens lives here -------------------------------
+// Expanding is a LENS, never a navigation. One Stage owns the three dismiss
+// paths for every expandable — Esc (bound at window in the CAPTURE phase and
+// tracked in module state, so it works whatever has keyboard focus), the ×
+// corner node in the frame language, and click-outside on the dimmed
+// backdrop. The board underneath is untouched, so collapse returns to the
+// exact prior state. Navigation out of the cockpit happens only through an
+// explicit labeled control inside a lens, and only with a STORED session id
+// (runtime ids cannot hydrate — that was the trap).
+const stageState = { collapse: null, open: false }
+
+if (typeof window !== 'undefined' && !window.__jvStageKeys) {
+  window.__jvStageKeys = true
+  window.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && stageState.open && stageState.collapse) {
+      event.preventDefault()
+      event.stopPropagation()
+      stageState.collapse()
+    }
+  }, true)
+}
+
+function CloseNode({ color, onClose }) {
+  const [hot, setHot] = useState(false)
+
+  return jsx('div', {
+    'data-jv-close': '1',
+    onClick: event => { event.stopPropagation(); onClose() },
+    onMouseEnter: () => setHot(true),
+    onMouseLeave: () => setHot(false),
+    style: { alignItems: 'center', background: hot ? '#FFFFFF' : '#02040A', border: '1px solid ' + (hot ? '#FFFFFF' : color), borderRadius: '50%', boxShadow: '0 0 ' + (hot ? '12px 2px ' : '6px ') + color, color: hot ? '#02040A' : color, cursor: 'pointer', display: 'flex', fontFamily: T.data, fontSize: '11px', height: '16px', justifyContent: 'center', lineHeight: 1, pointerEvents: 'auto', position: 'absolute', right: '-8px', top: '-8px', transition: 'background 180ms, box-shadow 180ms, color 180ms', width: '16px', zIndex: 2 },
+    children: '×'
+  })
+}
+
+function Stage({ children, color = '#93C5FD', onClose, width = 560 }) {
+  const shown = useMaterialize(true)
+
+  useEffect(() => {
+    stageState.open = true
+    stageState.collapse = onClose
+
+    return () => {
+      if (stageState.collapse === onClose) {
+        stageState.open = false
+        stageState.collapse = null
+      }
+    }
+  }, [onClose])
+
+  return jsx('div', {
+    'data-jv-stage': '1',
+    onClick: event => { event.stopPropagation(); onClose() },
+    style: { backdropFilter: 'blur(2px)', background: 'rgba(1,2,6,0.58)', cursor: 'default', inset: 0, opacity: shown ? 1 : 0, pointerEvents: 'auto', position: 'absolute', transition: 'opacity 260ms', zIndex: 8 },
+    children: jsx('div', {
+      'data-jv-interactive': '1',
+      'data-jv-lens': '1',
+      onClick: event => event.stopPropagation(),
+      style: { left: '50%', maxHeight: '78%', position: 'absolute', top: '10%', transform: 'translateX(-50%)', width: width + 'px' },
+      children: jsxs('div', { style: { position: 'relative' }, children: [
+        jsx(Plate, { color, drift: false, shown, thread: false, width, children }),
+        jsx(CloseNode, { color, onClose })
+      ] })
+    })
+  })
+}
+
 function stampNow() {
   const at = new Date()
 
@@ -1240,12 +1307,17 @@ function TaskPlate({ clock, onExpand, pos, task }) {
   })
 }
 
+function buildSessionId(build) {
+  return build ? String(build.stored_session_id || build.session_id || '') : ''
+}
+
+/** Explicit, labeled navigation out of the cockpit — stored ids only. */
 function openBuildSession(build) {
-  const id = build.stored_session_id || build.session_id
+  const id = buildSessionId(build)
 
   if (id && typeof host.openSession === 'function') {
     uiSound('tick')
-    void host.openSession(String(id), { tabTitle: 'BUILD · ' + String(build.name || '') }).catch(() => undefined)
+    void host.openSession(id, { tabTitle: 'BUILD · ' + String(build.name || '') }).catch(() => undefined)
   }
 }
 
@@ -1255,12 +1327,11 @@ function BuildPlate({ build, clock, onExpand, pos }) {
   const shown = useMaterialize(build.id)
   const [hot, setHot] = useState(false)
   const since = build.inFlight && build.turnStartedAt ? build.turnStartedAt : Date.parse(build.created_at || '') || Date.now()
-  // WAITING FOR YOU click-opens the session so the question can be answered
-  // right there; any other state expands to the full detail.
-  const waiting = state === 'waiting' && (build.stored_session_id || build.session_id)
+  // Every click is a lens; WAITING FOR YOU's lens leads with ANSWER IN SESSION.
+  const waiting = state === 'waiting' && buildSessionId(build)
 
   return jsx(Plate, {
-    color, hot, onClick: () => (waiting ? openBuildSession(build) : (uiSound('tick'), onExpand())), onHover: setHot, phase: 3.4 + pos.slot, shown, style: { opacity: state === 'done' ? 0.8 : 1, position: 'absolute', zIndex: 3, ...slotStyle(pos, GRID.opWidth) }, thread: pos.side === 'left' ? 'right' : 'left', width: GRID.opWidth,
+    color, hot, onClick: () => { uiSound('tick'); onExpand() }, onHover: setHot, phase: 3.4 + pos.slot, shown, style: { opacity: state === 'done' ? 0.8 : 1, position: 'absolute', zIndex: 3, ...slotStyle(pos, GRID.opWidth) }, thread: pos.side === 'left' ? 'right' : 'left', width: GRID.opWidth,
     children: jsxs('div', { children: [
       jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
         jsx(Rail, { left: hot ? (waiting ? 'CLICK · ANSWER IN SESSION' : 'CLICK · FULL DETAIL') : 'BUILD SESSION' }),
@@ -1279,54 +1350,71 @@ function BuildPlate({ build, clock, onExpand, pos }) {
   })
 }
 
-function OperationDetail({ kind, onOpenSession, record }) {
-  const shown = useMaterialize(record.id)
+function NavControl({ label, onClick }) {
+  const [hot, setHot] = useState(false)
+
+  return jsx('div', {
+    'data-jv-nav': '1',
+    onClick: event => { event.stopPropagation(); onClick() },
+    onMouseEnter: () => setHot(true),
+    onMouseLeave: () => setHot(false),
+    style: { borderBottom: '1px solid ' + (hot ? '#FFFFFF' : 'rgba(147,197,253,0.6)'), color: hot ? '#FFFFFF' : '#93C5FD', cursor: 'pointer', display: 'inline-block', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.28em', marginRight: '18px', marginTop: '10px', paddingBottom: '2px', pointerEvents: 'auto', textShadow: '0 0 8px rgba(96,165,250,0.6)', transition: 'color 180ms, border-color 180ms' },
+    children: label
+  })
+}
+
+function OperationLens({ kind, record, shown }) {
   const timeline = Array.isArray(record.timeline) ? record.timeline : []
   const history = String(record.history || record.tail || '')
   const color = STATE_COLOR[record.inFlight ? 'working' : record.status || record.state] || '#93C5FD'
   const title = kind === 'build' ? String(record.name || '') : String(record.goal || '')
+  const storedId = kind === 'build' ? buildSessionId(record) : ''
+  const waiting = kind === 'build' && record.state === 'waiting' && !record.inFlight
 
-  return jsx(Plate, {
-    color, drift: false, onClick: () => undefined, shown, style: { left: '50%', maxHeight: '74%', position: 'absolute', top: '11%', transform: 'translateX(-50%)', zIndex: 7 }, thread: false, width: 560,
-    children: jsxs('div', { children: [
-      jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
-        jsx(Rail, { left: (kind === 'build' ? 'BUILD SESSION' : (record.kind === 'research' ? 'RESEARCH' : record.kind === 'browser' ? 'BROWSER' : 'TASK') + ' OPERATION') + ' · FULL DETAIL', right: 'ESC · COLLAPSE' }),
-        jsx(Chip, { blink: Boolean(record.inFlight || record.status === 'running'), color, delay: 200, shown, text: String(record.inFlight ? 'WORKING' : record.status || record.state || '').toUpperCase() })
+  return jsxs('div', { children: [
+    jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
+      jsx(Rail, { left: (kind === 'build' ? 'BUILD SESSION' : (record.kind === 'research' ? 'RESEARCH' : record.kind === 'browser' ? 'BROWSER' : 'TASK') + ' OPERATION') + ' · FULL DETAIL', right: 'ESC · COLLAPSE' }),
+      jsx(Chip, { blink: Boolean(record.inFlight || record.status === 'running'), color, delay: 200, shown, text: String(record.inFlight ? 'WORKING' : record.status || record.state || '').toUpperCase() })
+    ] }),
+    jsx(Title, { delay: 100, shown, size: 13, text: title.slice(0, 90) }),
+    kind === 'build' && record.goal ? jsx(NextLine, { delay: 250, label: 'GOAL ▸', shown, text: String(record.goal) }) : null,
+    jsxs('div', { style: { display: 'grid', gap: '0 18px', gridTemplateColumns: '190px 1fr', marginTop: '8px' }, children: [
+      jsxs('div', { children: [
+        jsx('div', { style: { ...LABEL, fontSize: '7px' }, children: 'STATUS TIMELINE' }),
+        ...(timeline.length ? timeline.slice(-12) : [{ at: '—', text: 'no events yet' }]).map((entry, i) =>
+          jsxs('div', { style: { color: INK, display: 'flex', fontFamily: T.data, fontSize: '8.5px', gap: '8px', opacity: shown ? 1 : 0, padding: '2px 0', transition: 'opacity 250ms ' + (300 + i * 50) + 'ms' }, children: [
+            jsx('span', { style: { color: 'rgba(96,165,250,0.8)', flexShrink: 0 }, children: entry.at }),
+            jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry.text })
+          ] }, i))
       ] }),
-      jsx(Title, { delay: 100, shown, size: 13, text: title.slice(0, 90) }),
-      kind === 'build' && record.goal ? jsx(NextLine, { delay: 250, label: 'GOAL ▸', shown, text: String(record.goal) }) : null,
-      jsxs('div', { style: { display: 'grid', gap: '0 18px', gridTemplateColumns: '190px 1fr', marginTop: '8px' }, children: [
-        jsxs('div', { children: [
-          jsx('div', { style: { ...LABEL, fontSize: '7px' }, children: 'STATUS TIMELINE' }),
-          ...(timeline.length ? timeline.slice(-12) : [{ at: '—', text: 'no events yet' }]).map((entry, i) =>
-            jsxs('div', { style: { color: INK, display: 'flex', fontFamily: T.data, fontSize: '8.5px', gap: '8px', opacity: shown ? 1 : 0, padding: '2px 0', transition: 'opacity 250ms ' + (300 + i * 50) + 'ms' }, children: [
-              jsx('span', { style: { color: 'rgba(96,165,250,0.8)', flexShrink: 0 }, children: entry.at }),
-              jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry.text })
-            ] }, i))
-        ] }),
-        jsxs('div', { style: { minWidth: 0 }, children: [
-          jsx('div', { style: { ...LABEL, fontSize: '7px' }, children: 'STREAM · LIVE OUTPUT' }),
-          jsx('div', { style: { color: INK_DIM, fontFamily: T.data, fontSize: '8.5px', lineHeight: 1.5, maxHeight: '220px', opacity: shown ? 1 : 0, overflowY: 'auto', paddingRight: '4px', transition: 'opacity 300ms 400ms', whiteSpace: 'pre-wrap' }, children: history ? history.slice(-3000) : '(nothing streamed yet)' })
-        ] })
-      ] }),
-      record.summary || record.last_summary ? jsx(Body, { color, delay: 300, shown, text: String(record.summary || record.last_summary).slice(0, 600) }) : null,
-      record.media && record.media.length
-        ? jsx('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' }, children: record.media.map((m, i) => jsx('img', { alt: '', src: m.thumbnail, style: { border: '1px solid rgba(96,165,250,0.4)', height: '64px', objectFit: 'cover', objectPosition: 'top' } }, m.path || i)) })
-        : null,
-      onOpenSession
-        ? jsx('div', { onClick: event => { event.stopPropagation(); onOpenSession() }, style: { color: '#93C5FD', cursor: 'pointer', display: 'inline-block', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.28em', marginTop: '10px', textShadow: '0 0 8px rgba(96,165,250,0.6)' }, children: 'OPEN SESSION ▸' })
-        : null
-    ] })
-  })
+      jsxs('div', { style: { minWidth: 0 }, children: [
+        jsx('div', { style: { ...LABEL, fontSize: '7px' }, children: 'STREAM · LIVE OUTPUT' }),
+        jsx('div', { style: { color: INK_DIM, fontFamily: T.data, fontSize: '8.5px', lineHeight: 1.5, maxHeight: '220px', opacity: shown ? 1 : 0, overflowY: 'auto', paddingRight: '4px', pointerEvents: 'auto', transition: 'opacity 300ms 400ms', whiteSpace: 'pre-wrap' }, children: history ? history.slice(-3000) : '(nothing streamed yet)' })
+      ] })
+    ] }),
+    record.summary || record.last_summary ? jsx(Body, { color, delay: 300, shown, text: String(record.summary || record.last_summary).slice(0, 600) }) : null,
+    record.media && record.media.length
+      ? jsx('div', { style: { display: 'flex', gap: '6px', marginTop: '8px' }, children: record.media.map((m, i) => jsx('img', { alt: '', src: m.thumbnail, style: { border: '1px solid rgba(96,165,250,0.4)', height: '64px', objectFit: 'cover', objectPosition: 'top' } }, m.path || i)) })
+      : null,
+    jsx(Meta, { items: [record.sessionId || record.session_id ? { text: 'SESSION · ' + String(record.stored_session_id || record.sessionId || record.session_id) } : { dim: true, text: 'NO SESSION LINKED' }] }),
+    storedId && typeof host.openSession === 'function'
+      ? jsx(NavControl, { label: waiting ? 'ANSWER IN SESSION ▸' : 'OPEN SESSION ▸', onClick: () => openBuildSession(record) })
+      : null
+  ] })
 }
 
-function SightPlate({ sight }) {
+function sightColor(sight) {
+  return sight.status === 'failed' ? '#F87171' : sight.status === 'done' ? '#34D399' : '#93C5FD'
+}
+
+function SightPlate({ onExpand, sight }) {
   const shown = useMaterialize(sight.at)
-  const color = sight.status === 'failed' ? '#F87171' : sight.status === 'done' ? '#34D399' : '#93C5FD'
+  const [hot, setHot] = useState(false)
+  const color = sightColor(sight)
   const target = sight.target
 
   return jsx(Plate, {
-    color, drift: false, shown, thread: 'down', width: 440,
+    color, drift: false, hot, onClick: () => { uiSound('tick'); onExpand() }, onHover: setHot, shown, thread: 'down', width: 440,
     children: jsxs('div', { children: [
       jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
         jsx(Rail, { left: 'SIGHT · SCREEN CAPTURE', right: target ? (target.kind === 'window' ? 'TARGET · ' + String(target.app || 'WINDOW').toUpperCase().slice(0, 22) : 'TARGET · DISPLAY ' + (target.display_index || 1) + (target.includes_self ? ' · INCLUDES JARVIS' : '')) : sight.app ? 'TARGET · ' + String(sight.app).toUpperCase().slice(0, 22) : '' }),
@@ -1345,12 +1433,17 @@ function SightPlate({ sight }) {
   })
 }
 
-function JudgmentPlate({ judgment }) {
+function judgmentColor(judgment) {
+  return judgment.status === 'failed' ? '#F87171' : judgment.status === 'done' ? '#34D399' : '#93C5FD'
+}
+
+function JudgmentPlate({ judgment, onExpand }) {
   const shown = useMaterialize(judgment.at)
-  const color = judgment.status === 'failed' ? '#F87171' : judgment.status === 'done' ? '#34D399' : '#93C5FD'
+  const [hot, setHot] = useState(false)
+  const color = judgmentColor(judgment)
 
   return jsx(Plate, {
-    color, drift: false, shown, thread: 'down', width: 440,
+    color, drift: false, hot, onClick: () => { uiSound('tick'); onExpand() }, onHover: setHot, shown, thread: 'down', width: 440,
     children: jsxs('div', { children: [
       jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
         jsx(Rail, { left: 'JUDGMENT · FULL AGENT · WHOLE BOARD' }),
@@ -1386,33 +1479,87 @@ function paymentLabel(raw) {
   return [status ? status.toUpperCase() : '', total ? '$' + (paid || '0') + '/' + total : ''].filter(Boolean).join(' · ') || text
 }
 
-function DetailStage({ detail }) {
-  const shown = useMaterialize(detail.name)
+function ProjectLens({ detail, shown }) {
   const f = projectFacts(detail)
   const tasks = Array.isArray(detail.task_list) ? detail.task_list : []
   const facts = [['CLIENT', detail.client], ['COMPANY', detail.company], ['PAYMENT', paymentLabel(detail.payment)], ['OWNER', detail.owner], ['START', detail.start], ['TARGET', detail.target_end], ['BUILD', detail.build_type], ['DEADLINE', detail.deadline || detail.target_end], ['COUNTDOWN', f.countdown], ['STALE', f.stale], ['REVENUE', f.revenue]].filter(([, v]) => v && v !== '—').map(([k, v]) => [k, String(v).slice(0, 34)])
 
-  return jsx(Plate, {
-    color: f.color, onClick: () => undefined, phase: 1.7, shown, style: { maxHeight: '78%', position: 'absolute', right: '3%', top: '10%', zIndex: 4 }, thread: 'left', width: 390,
-    children: jsxs('div', { children: [
-      jsx(Rail, { left: 'PROJECT DETAIL · ' + String(detail.priority || 'NORMAL').toUpperCase(), right: (detail.id ? String(detail.id) + ' · ' : '') + 'ESC · COLLAPSE' }),
-      jsxs('div', { style: { alignItems: 'flex-end', display: 'flex', gap: '10px', justifyContent: 'space-between' }, children: [
-        jsx('div', { style: { minWidth: 0 }, children: jsx(Title, { delay: 120, shown, size: 16, text: String(detail.name || '') }) }),
-        jsx(Chip, { blink: detail.status === 'Blocked', color: f.color, delay: 400, shown, text: String(detail.status || '') })
-      ] }),
-      detail.status === 'Blocked' && (detail.note || detail.notes) ? jsx(Hazard, { delay: 380, shown, text: String(detail.note || detail.notes).slice(0, 90) }) : null,
-      jsx(DataGrid, { cols: 3, delay: 500, items: facts, shown }),
-      f.total ? jsx(ChargeBar, { color: f.color, delay: 700, done: f.done, shown, total: f.total }) : null,
-      (detail.note || detail.notes) && detail.status !== 'Blocked' ? jsx(Body, { color: f.color, delay: 800, shown, text: String(detail.note || detail.notes).slice(0, 300) }) : null,
-      tasks.length
-        ? jsx('div', { style: { marginTop: '8px' }, children: tasks.slice(0, 12).map((task, i) =>
-            jsxs('div', { style: { alignItems: 'center', display: 'flex', fontSize: '10px', gap: '8px', opacity: shown ? (task.done ? 0.55 : 1) : 0, padding: '2px 0', transition: 'opacity 250ms ' + (900 + i * 60) + 'ms' }, children: [
-              jsx('div', { style: { background: task.done ? f.color : 'transparent', border: '1px solid ' + (task.done ? f.color : 'rgba(96,165,250,0.6)'), flexShrink: 0, height: '6px', width: '6px' } }),
-              jsx('span', { style: { overflow: 'hidden', textDecoration: task.done ? 'line-through' : 'none', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: String(task.label).slice(0, 60) })
-            ] }, i)) })
-        : null
-    ] })
-  })
+  return jsxs('div', { children: [
+    jsx(Rail, { left: 'PROJECT DETAIL · ' + String(detail.priority || 'NORMAL').toUpperCase(), right: (detail.id ? String(detail.id) + ' · ' : '') + 'ESC · COLLAPSE' }),
+    jsxs('div', { style: { alignItems: 'flex-end', display: 'flex', gap: '10px', justifyContent: 'space-between' }, children: [
+      jsx('div', { style: { minWidth: 0 }, children: jsx(Title, { delay: 120, shown, size: 16, text: String(detail.name || '') }) }),
+      jsx(Chip, { blink: detail.status === 'Blocked', color: f.color, delay: 400, shown, text: String(detail.status || '') })
+    ] }),
+    detail.status === 'Blocked' && (detail.note || detail.notes) ? jsx(Hazard, { delay: 380, shown, text: String(detail.note || detail.notes).slice(0, 90) }) : null,
+    jsx(DataGrid, { cols: 4, delay: 500, items: facts, shown }),
+    f.total ? jsx(ChargeBar, { color: f.color, delay: 700, done: f.done, shown, total: f.total }) : null,
+    (detail.note || detail.notes) && detail.status !== 'Blocked' ? jsx(Body, { color: f.color, delay: 800, shown, text: String(detail.note || detail.notes).slice(0, 300) }) : null,
+    tasks.length
+      ? jsx('div', { style: { columnGap: '18px', columns: tasks.length > 6 ? 2 : 1, marginTop: '8px' }, children: tasks.slice(0, 14).map((task, i) =>
+          jsxs('div', { style: { alignItems: 'center', breakInside: 'avoid', display: 'flex', fontSize: '10px', gap: '8px', opacity: shown ? (task.done ? 0.55 : 1) : 0, padding: '2px 0', transition: 'opacity 250ms ' + (900 + i * 60) + 'ms' }, children: [
+            jsx('div', { style: { background: task.done ? f.color : 'transparent', border: '1px solid ' + (task.done ? f.color : 'rgba(96,165,250,0.6)'), flexShrink: 0, height: '6px', width: '6px' } }),
+            jsx('span', { style: { overflow: 'hidden', textDecoration: task.done ? 'line-through' : 'none', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: String(task.label).slice(0, 60) })
+          ] }, i)) })
+      : null
+  ] })
+}
+
+function SightLens({ shown, sight }) {
+  const color = sightColor(sight)
+  const target = sight.target
+
+  return jsxs('div', { children: [
+    jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
+      jsx(Rail, { left: 'SIGHT · SCREEN CAPTURE · FULL DETAIL', right: 'ESC · COLLAPSE' }),
+      jsx(Chip, { blink: sight.status === 'capturing', color, delay: 200, shown, text: sight.status === 'capturing' ? 'CAPTURING' : sight.status === 'done' ? 'ANALYZED' : 'FAILED' })
+    ] }),
+    jsx(Title, { delay: 100, shown, size: 12, text: String(sight.question || 'What is on screen?').slice(0, 90) }),
+    target ? jsx(NextLine, { delay: 250, label: 'TARGET ▸', shown, text: target.kind === 'window' ? String(target.app || 'window') + (target.title ? ' — ' + target.title : '') : 'display ' + (target.display_index || 1) + (target.includes_self ? ' (includes JARVIS)' : '') }) : null,
+    sight.thumbnail ? jsx('img', { alt: '', src: sight.thumbnail, style: { border: '1px solid rgba(96,165,250,0.4)', display: 'block', marginTop: '8px', maxHeight: '260px', objectFit: 'contain', objectPosition: 'left top', width: '100%' } }) : null,
+    sight.answer ? jsx('div', { style: { borderLeft: '1px solid ' + color, color: 'rgba(217,230,242,0.95)', fontSize: '10.5px', lineHeight: 1.55, marginTop: '8px', maxHeight: '160px', overflowY: 'auto', paddingLeft: '9px', pointerEvents: 'auto', whiteSpace: 'pre-wrap' }, children: String(sight.answer) }) : null,
+    sight.error ? jsx('div', { style: { color: '#F87171', fontSize: '10px', marginTop: '6px' }, children: String(sight.error) }) : null,
+    sight.status === 'done'
+      ? jsx(DataGrid, { cols: 5, delay: 200, items: [['LOOK', (sight.latencyMs / 1000).toFixed(1) + 's'], ['CAPTURE', (sight.captureMs ?? '?') + 'ms'], ['VISION', (sight.analyzeMs ?? '?') + 'ms'], ['COST', typeof sight.costUsd === 'number' ? '$' + sight.costUsd.toFixed(4) + ' est' : 'n/a'], ['MODEL', String(sight.model || '—')]], shown })
+      : null
+  ] })
+}
+
+function JudgmentLens({ judgment, shown }) {
+  const color = judgmentColor(judgment)
+
+  return jsxs('div', { children: [
+    jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
+      jsx(Rail, { left: 'JUDGMENT · FULL AGENT · FULL DETAIL', right: 'ESC · COLLAPSE' }),
+      jsx(Chip, { blink: judgment.status === 'reasoning', color, delay: 200, shown, text: judgment.status === 'reasoning' ? 'REASONING' : judgment.status === 'done' ? 'ANSWERED' : 'NO ANSWER' })
+    ] }),
+    jsx(Title, { delay: 100, shown, size: 12, text: String(judgment.question || '').slice(0, 90) }),
+    judgment.answer ? jsx('div', { style: { borderLeft: '1px solid ' + color, color: 'rgba(217,230,242,0.95)', fontSize: '10.5px', lineHeight: 1.55, marginTop: '8px', maxHeight: '260px', overflowY: 'auto', paddingLeft: '9px', pointerEvents: 'auto', whiteSpace: 'pre-wrap' }, children: String(judgment.answer) }) : null,
+    judgment.error ? jsx('div', { style: { color: '#F87171', fontSize: '10px', marginTop: '6px' }, children: String(judgment.error) }) : null,
+    typeof judgment.elapsedMs === 'number' ? jsx(Meta, { items: [{ text: 'T ' + (judgment.elapsedMs / 1000).toFixed(1) + 's' + (judgment.elapsedMs > 10_000 ? ' · OVER BUDGET' : ' · WITHIN BUDGET') }] }) : null
+  ] })
+}
+
+function ActivityLens({ build, item, shown }) {
+  return jsxs('div', { children: [
+    jsx(Rail, { left: 'LIVE ACTIVITY · EVENT', right: 'ESC · COLLAPSE' }),
+    jsx(Title, { delay: 100, shown, size: 12, text: String(item.label || '') }),
+    jsx(DataGrid, { cols: 3, delay: 250, items: [['AT', item.at], ['DETAIL', item.detail || '—'], ['SESSION', item.sessionId ? String(item.sessionId).slice(0, 22) : '—']], shown }),
+    build
+      ? jsxs('div', { children: [jsx(NextLine, { delay: 350, label: 'BUILD ▸', shown, text: String(build.name || '') }), typeof host.openSession === 'function' ? jsx(NavControl, { label: 'OPEN SESSION ▸', onClick: () => openBuildSession(build) }) : null] })
+      : item.sessionId ? jsx(Meta, { items: [{ dim: true, text: 'RUNTIME SESSION · NOT OPENABLE FROM HERE' }] }) : null
+  ] })
+}
+
+function JobLens({ job, shown }) {
+  const facts = [['ID', job.id], ['SCHEDULE', job.schedule_display || job.schedule?.display || job.schedule], ['STATUS', job.enabled === false ? 'DISABLED' : job.status || 'ENABLED'], ['LAST RUN', job.last_run || job.last_run_at || job.lastRun], ['NEXT RUN', job.next_run || job.next_run_at || job.nextRun]].filter(([, v]) => v !== undefined && v !== null && v !== '').map(([k, v]) => [k, String(typeof v === 'object' ? JSON.stringify(v) : v).slice(0, 30)])
+
+  return jsxs('div', { children: [
+    jsx(Rail, { left: 'SCHEDULED OPERATION', right: 'ESC · COLLAPSE' }),
+    jsx(Title, { delay: 100, shown, size: 12, text: String(job.name || job.id || '') }),
+    jsx(DataGrid, { cols: 3, delay: 250, items: facts, shown }),
+    job.prompt || job.command || job.description ? jsx(Body, { delay: 350, shown, text: String(job.prompt || job.command || job.description).slice(0, 400) }) : null,
+    jsx(NavControl, { label: 'OPEN SCHEDULER ▸', onClick: () => host.navigate('/cron') })
+  ] })
 }
 
 // Metric tiles: number, label, a filament underline that draws in. No box.
@@ -1466,7 +1613,7 @@ function RailRow({ children, delay, onClick, shown, style }) {
   })
 }
 
-function JobsRail({ jobs }) {
+function JobsRail({ jobs, onExpand }) {
   const shown = useMaterialize(jobs.length)
 
   return jsx(Plate, {
@@ -1474,7 +1621,7 @@ function JobsRail({ jobs }) {
     children: jsxs('div', { children: [
       jsx(Rail, { left: 'SCHEDULED OPERATIONS', right: jobs.length + ' JOB' + (jobs.length === 1 ? '' : 'S') }),
       ...jobs.map((job, i) =>
-        jsxs(RailRow, { delay: 200 + i * 90, onClick: () => host.navigate('/cron'), shown, style: { fontSize: '9.5px', justifyContent: 'space-between', padding: '3px 0 0 5px' }, children: [
+        jsxs(RailRow, { delay: 200 + i * 90, onClick: () => onExpand(job), shown, style: { fontSize: '9.5px', justifyContent: 'space-between', padding: '3px 0 0 5px' }, children: [
           jsx('span', { style: { color: INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: String(job.name || job.id || '').slice(0, 30) }),
           jsx('span', { style: { color: 'rgba(96,165,250,0.85)', fontFamily: T.data, fontSize: '8.5px', whiteSpace: 'nowrap' }, children: String(job.schedule_display || job.schedule?.display || '').slice(0, 12) })
         ] }, job.id || i))
@@ -1482,7 +1629,7 @@ function JobsRail({ jobs }) {
   })
 }
 
-function ActivityRail({ activity }) {
+function ActivityRail({ activity, onExpand }) {
   const shown = useMaterialize(activity.length > 0)
 
   return jsx(Plate, {
@@ -1490,7 +1637,7 @@ function ActivityRail({ activity }) {
     children: jsxs('div', { children: [
       jsx(Rail, { left: 'LIVE ACTIVITY' }),
       ...activity.map(item =>
-        jsxs(RailRow, { delay: 0, onClick: item.sessionId && typeof host.openSession === 'function' ? () => void host.openSession(String(item.sessionId)).catch(() => undefined) : undefined, shown: true, style: { animation: 'jvFadeUp 320ms both', fontSize: '9px', padding: '2px 0 0 5px' }, children: [
+        jsxs(RailRow, { delay: 0, onClick: () => onExpand(item), shown: true, style: { animation: 'jvFadeUp 320ms both', fontSize: '9px', padding: '2px 0 0 5px' }, children: [
           jsx('span', { style: { color: 'rgba(96,165,250,0.75)', fontFamily: T.data, fontSize: '8px' }, children: item.at }),
           jsx('span', { style: { color: 'rgba(217,230,242,0.9)', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.14em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: item.label }),
           item.detail ? jsx('span', { style: { color: 'rgba(96,165,250,0.8)', fontFamily: T.data, fontSize: '7.5px', marginLeft: 'auto', whiteSpace: 'nowrap' }, children: item.detail }) : null
@@ -1541,6 +1688,8 @@ function HudPage() {
   // stage so the keyboard/click-off handlers (installed once) see live state.
   const [expanded, setExpanded] = useState(null)
   const stageRef = useRef({ expanded: null, open: false })
+  // The focus card that was up when a lens opened — restored on collapse.
+  const priorFocusRef = useRef(null)
   const p51TimersRef = useRef({})
 
   useEffect(() => {
@@ -1710,15 +1859,15 @@ function HudPage() {
 
     const collapseStage = () => {
       setExpanded(null)
-      window.dispatchEvent(new CustomEvent('jarvis:stage-collapse'))
+      window.dispatchEvent(new CustomEvent('jarvis:stage-collapse', { detail: { focus: priorFocusRef.current?.name ?? null } }))
     }
 
     const onKey = event => {
-      if (event.key !== 'Escape') {
-        return
+      if (event.key !== 'Escape' || stageState.open) {
+        return // a Stage is open: the capture-phase handler already collapsed it
       }
 
-      // Esc universally collapses; with nothing open it is the voice kill.
+      // A bare focus card (no Stage) collapses; with nothing open Esc is the voice kill.
       if (stageRef.current.open) {
         collapseStage()
       } else {
@@ -1730,7 +1879,7 @@ function HudPage() {
     canvas.style.pointerEvents = 'auto'
     canvas.style.cursor = 'pointer'
     canvas.title = 'Click to stop JARVIS'
-    const onCanvasClick = () => (stageRef.current.open ? collapseStage() : killVoice())
+    const onCanvasClick = () => (stageState.open ? stageState.collapse?.() : stageRef.current.open ? collapseStage() : killVoice())
 
     canvas.addEventListener('click', onCanvasClick)
 
@@ -1794,12 +1943,22 @@ function HudPage() {
         if (row) {
           tracker.gesture = { at: performance.now(), kind: 'project' }
           uiSound('materialize')
-          setDisplay(prev => ({ ...prev, detail: row, dissolving: false, focus: null, shown: true }))
+          setExpanded(null)
+          setDisplay(prev => {
+            priorFocusRef.current = prev.detail ? priorFocusRef.current : prev.focus
+
+            return { ...prev, detail: row, dissolving: false, focus: null, shown: true }
+          })
         }
       }),
-      host.onEvent('display.stage.clear', () => {
+      host.onEvent('display.stage.clear', event => {
+        // Collapse is a lens closing: the board (rows, filter, scroll) is
+        // untouched and the focus card that was up before comes back.
+        const restore = priorFocusRef.current && event.payload?.focus === priorFocusRef.current.name ? priorFocusRef.current : null
+
+        priorFocusRef.current = null
         setExpanded(null)
-        setDisplay(prev => ({ ...prev, detail: null, focus: null }))
+        setDisplay(prev => ({ ...prev, detail: null, focus: restore }))
       }),
       host.onEvent('display.focus', event => {
         const row = event.payload?.result?.projects?.[0]
@@ -2085,7 +2244,7 @@ function HudPage() {
   // cards reflow into the remainder. Nothing overlaps.
   const dockBuilds = builds.slice(0, 4)
   const opsList = [...dockBuilds.map(build => ({ build, kind: 'build' })), ...(task ? [{ kind: 'task' }] : [])]
-  const layout = computeCockpitLayout({ cards: display.rows.length, detailOpen: Boolean(display.detail), ops: opsList.length })
+  const layout = computeCockpitLayout({ cards: display.rows.length, detailOpen: false, ops: opsList.length })
   const taskPos = task ? layout.ops[opsList.length - 1] : null
   const boardShown = display.shown && !display.dissolving
 
@@ -2093,11 +2252,34 @@ function HudPage() {
   // (every hook above has run by this point — never before a declaration).
   stageRef.current = { expanded, open: Boolean(display.detail || display.focus || expanded) }
 
-  const expandedBuild = expanded && expanded.build ? dockBuilds.find(b => b.id === expanded.build) : null
+  // One lens at a time. The project lens is voice+pointer state (display.detail);
+  // the others are cockpit-local. Collapse tells the supervisor which focus to
+  // restore so voice's displayContext matches what is on screen.
   const collapse = () => {
     setExpanded(null)
-    window.dispatchEvent(new CustomEvent('jarvis:stage-collapse'))
+
+    if (display.detail || display.focus) {
+      window.dispatchEvent(new CustomEvent('jarvis:stage-collapse', { detail: { focus: priorFocusRef.current?.name ?? null } }))
+    }
   }
+  const lensBuild = expanded?.kind === 'build' ? dockBuilds.find(b => b.id === expanded.id) : null
+  const lensActivity = expanded?.kind === 'activity' ? activity.find(a => a.key === expanded.key) : null
+  const lensJob = expanded?.kind === 'job' ? jobs.find(j => (j.id || j.name) === expanded.id) : null
+  const lens = display.detail
+    ? { color: projectFacts(display.detail).color, node: jsx(ProjectLens, { detail: display.detail, shown: true }), width: 560 }
+    : expanded?.kind === 'task' && task
+      ? { color: STATE_COLOR[task.status] || '#93C5FD', node: jsx(OperationLens, { kind: 'task', record: task, shown: true }), width: 560 }
+      : lensBuild
+        ? { color: STATE_COLOR[lensBuild.inFlight ? 'working' : lensBuild.state] || '#60A5FA', node: jsx(OperationLens, { kind: 'build', record: lensBuild, shown: true }), width: 560 }
+        : expanded?.kind === 'sight' && sight
+          ? { color: sightColor(sight), node: jsx(SightLens, { shown: true, sight }), width: 560 }
+          : expanded?.kind === 'judgment' && judgment
+            ? { color: judgmentColor(judgment), node: jsx(JudgmentLens, { judgment, shown: true }), width: 560 }
+            : lensActivity
+              ? { color: '#93C5FD', node: jsx(ActivityLens, { build: dockBuilds.find(b => lensActivity.sessionId && b.session_id === lensActivity.sessionId) || null, item: lensActivity, shown: true }), width: 480 }
+              : lensJob
+                ? { color: '#93C5FD', node: jsx(JobLens, { job: lensJob, shown: true }), width: 480 }
+                : null
 
   return jsxs('div', {
     // Click-off anywhere on the void collapses whatever is open (stage,
@@ -2169,32 +2351,26 @@ function HudPage() {
           ] })
         ]
       }),
-      // detail stage: the expand verb's instrument
-      display.detail ? jsx(DetailStage, { detail: display.detail }, 'detail') : null,
+      // the managed Stage: whichever lens is open, with all three dismiss paths
+      lens ? jsx(Stage, { color: lens.color, onClose: collapse, width: lens.width, children: lens.node }, 'stage') : null,
       // metric tiles: real aggregates from the live board
       display.rows.length || display.status
         ? jsx(MetricTiles, { active: display.status ?? null, onToggle: status => window.dispatchEvent(new CustomEvent('jarvis:board-filter', { detail: { status } })), rows: display.rows, shown: boardShown })
         : null,
       // delegated work: the task plate — the task pop
-      task && taskPos ? jsx(TaskPlate, { clock, onExpand: () => setExpanded('task'), pos: taskPos, task }, 'task-' + task.id) : null,
+      task && taskPos ? jsx(TaskPlate, { clock, onExpand: () => setExpanded({ kind: 'task' }), pos: taskPos, task }, 'task-' + task.id) : null,
       // build sessions: pinned plates in their slots
-      ...dockBuilds.map((build, i) => (layout.ops[i] ? jsx(BuildPlate, { build, clock, onExpand: () => setExpanded({ build: build.id }), pos: layout.ops[i] }, build.id) : null)),
-      // expanded operation: full detail — stream history, status timeline, open session
-      expanded === 'task' && task
-        ? jsx(OperationDetail, { kind: 'task', onOpenSession: task.sessionId && typeof host.openSession === 'function' ? () => void host.openSession(String(task.sessionId)).catch(() => undefined) : null, record: task }, 'task-detail')
-        : expandedBuild
-          ? jsx(OperationDetail, { kind: 'build', onOpenSession: () => openBuildSession(expandedBuild), record: expandedBuild }, 'build-detail')
-          : null,
+      ...dockBuilds.map((build, i) => (layout.ops[i] ? jsx(BuildPlate, { build, clock, onExpand: () => setExpanded({ id: build.id, kind: 'build' }), pos: layout.ops[i] }, build.id) : null)),
       // center column: SIGHT + JUDGMENT (one of each at a time)
       sight || judgment
         ? jsxs('div', {
             style: { display: 'flex', flexDirection: 'column', gap: '14px', left: '50%', pointerEvents: 'none', position: 'absolute', top: '86px', transform: 'translateX(-50%)', width: '440px', zIndex: 5 },
-            children: [sight ? jsx(SightPlate, { sight }, 'sight') : null, judgment ? jsx(JudgmentPlate, { judgment }, 'judgment') : null]
+            children: [sight ? jsx(SightPlate, { onExpand: () => setExpanded({ kind: 'sight' }), sight }, 'sight') : null, judgment ? jsx(JudgmentPlate, { judgment, onExpand: () => setExpanded({ kind: 'judgment' }) }, 'judgment') : null]
           })
         : null,
       // rails: scheduled operations + live activity
-      jobs.length ? jsx(JobsRail, { jobs }, 'jobs') : null,
-      activity.length ? jsx(ActivityRail, { activity }, 'activity') : null,
+      jobs.length ? jsx(JobsRail, { jobs, onExpand: job => setExpanded({ id: job.id || job.name, kind: 'job' }) }, 'jobs') : null,
+      activity.length ? jsx(ActivityRail, { activity, onExpand: item => setExpanded({ key: item.key, kind: 'activity' }) }, 'activity') : null,
       // edge tab: sessions/nav reachable without stock chrome (no fill — a filament tab)
       jsx('div', {
         onClick: () => window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: false } })),

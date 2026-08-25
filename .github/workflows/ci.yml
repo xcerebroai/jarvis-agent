@@ -299,6 +299,11 @@ jobs:
             src/themes/presets.test.ts src/themes/profile-theme.test.ts \
             src/themes/context.test.tsx src/themes/user-themes.test.ts
           npx vitest run --project electron electron/stream-throttle.test.ts
+      - name: Install a Playwright browser for the cockpit harness
+        working-directory: /tmp/hsrc/apps/desktop
+        run: npx playwright install --with-deps chromium
+      - name: Cockpit harness — render, pointer, dismiss matrix on every plate type
+        run: HERMES_SRC=/tmp/hsrc node tests/hud_harness/run.mjs
 
       - name: Typecheck (renderer + electron)
         working-directory: /tmp/hsrc/apps/desktop

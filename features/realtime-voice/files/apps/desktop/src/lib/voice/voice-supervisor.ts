@@ -1867,9 +1867,13 @@ if (typeof window !== 'undefined') {
       .catch(() => undefined)
   })
 
-  window.addEventListener('jarvis:stage-collapse', () => {
-    displayContext.focused = null
-    emitGatewayEvent({ payload: { source: 'pointer' }, type: 'display.stage.clear' })
+  window.addEventListener('jarvis:stage-collapse', event => {
+    // A lens closing restores the focus card that was up before it (if any):
+    // the supervisor's notion of "it" follows what is back on screen.
+    const focus = String((event as CustomEvent).detail?.focus ?? '').trim() || null
+
+    displayContext.focused = focus
+    emitGatewayEvent({ payload: { focus, source: 'pointer' }, type: 'display.stage.clear' })
   })
 
   window.addEventListener('jarvis:board-filter', event => {

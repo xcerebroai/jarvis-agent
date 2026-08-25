@@ -1,0 +1,28 @@
+{
+ "builds": [
+  {
+   "id": "stripe-x",
+   "name": "Stripe integration",
+   "goal": "attach my Stripe account to the agent via API",
+   "state": "waiting",
+   "session_id": "rt-1",
+   "stored_session_id": "20260824_000000_abcdef",
+   "project_id": "LP-002",
+   "last_summary": "Planning is done; I still need the Stripe environment, key type, required permissions, and a secure credential source.",
+   "created_at": "2026-08-24T19:18:28",
+   "updated_at": "2026-08-24T19:20:00"
+  },
+  {
+   "id": "site-y",
+   "name": "Landing page refresh",
+   "goal": "rebuild the landing page hero",
+   "state": "working",
+   "session_id": "rt-2",
+   "stored_session_id": "20260824_000001_bcdefa",
+   "project_id": null,
+   "last_summary": "",
+   "created_at": "2026-08-24T20:00:00",
+   "updated_at": "2026-08-24T20:05:00"
+  }
+ ]
+}

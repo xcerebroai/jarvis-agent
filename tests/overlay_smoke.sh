@@ -465,6 +465,7 @@ if [ -f "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" ]; then
   chk "orb click / Esc hard-kill wired"       "grep -q 'jarvis:voice-kill' '$HUD' && grep -qE \"key (===|!==) 'Escape'\" '$HUD'"
   chk "panels materialize on display events"  "grep -q \"onEvent('display.projects'\" '$HUD' && grep -q 'ProjectPlate' '$HUD' && grep -q 'function Plate(' '$HUD'"
   chk "cockpit is clickable in the same language" "grep -q 'jarvis:detail-request' '$HUD' && grep -q 'jarvis:board-filter' '$HUD' && grep -q 'jarvis:stage-collapse' '$HUD' && grep -q 'data-jv-interactive' '$HUD'"
+  chk "every lens mounts in the managed Stage (Esc/×/backdrop)" "grep -q 'data-jv-stage' '$HUD' && grep -q 'data-jv-close' '$HUD' && grep -q \"'keydown', event => {\" '$HUD' && grep -q 'stageState' '$HUD'"
   chk "orb action grammar present"            "grep -q \"kind: 'gather'\" '$HUD' && grep -q \"kind: 'sweep'\" '$HUD'"
   chk "task plate streams delegated work"     "grep -q \"onEvent('voice.task.started'\" '$HUD' && grep -q 'RESEARCH OPERATION' '$HUD'"
   chk "task plate settles on done/cancel"     "grep -q \"onEvent('voice.task.done'\" '$HUD' && grep -q \"onEvent('voice.task.cancelled'\" '$HUD'"

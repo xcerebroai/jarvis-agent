@@ -1,0 +1,360 @@
+{
+ "Northwind Onboarding": {
+  "name": "Northwind Onboarding",
+  "status": "Planning",
+  "priority": "Urgent",
+  "note": "",
+  "next_action": "Follow up for payment, confirm scope, then move into onboarding.",
+  "tasks_done": 1,
+  "tasks_total": 8,
+  "target_end": "2026-07-03",
+  "deadline": "2026-07-03",
+  "days_to_deadline": -52,
+  "staleness_days": 0,
+  "revenue_relevance": "Low",
+  "revenue_outstanding": 0,
+  "overridden": [],
+  "build_id": "",
+  "id": "P-001",
+  "client": "Client A",
+  "company": "Company A",
+  "owner": "Ops",
+  "payment": "{'total': 527, 'paid': 527, 'status': 'Paid'}",
+  "start": "2026-07-17",
+  "build_type": "AI Agent Installation",
+  "notes": "",
+  "task_list": [
+   {
+    "done": true,
+    "label": "Task 1"
+   },
+   {
+    "done": false,
+    "label": "Task 2"
+   },
+   {
+    "done": false,
+    "label": "Task 3"
+   },
+   {
+    "done": false,
+    "label": "Task 4"
+   },
+   {
+    "done": false,
+    "label": "Task 5"
+   },
+   {
+    "done": false,
+    "label": "Task 6"
+   },
+   {
+    "done": false,
+    "label": "Task 7"
+   },
+   {
+    "done": false,
+    "label": "Task 8"
+   }
+  ]
+ },
+ "Agent Installation": {
+  "name": "Agent Installation",
+  "status": "Blocked",
+  "priority": "Urgent",
+  "note": "Payment status and final scope need confirmation.",
+  "next_action": "Confirm payment and intake, configure the agent, wire the workflows.",
+  "tasks_done": 7,
+  "tasks_total": 9,
+  "target_end": "2026-08-12",
+  "deadline": "2026-08-12",
+  "days_to_deadline": -12,
+  "staleness_days": 0,
+  "revenue_relevance": "Low",
+  "revenue_outstanding": 0,
+  "overridden": [],
+  "build_id": "",
+  "id": "P-002",
+  "client": "Client B",
+  "company": "Company B",
+  "owner": "Ops",
+  "payment": "{'total': 527, 'paid': 527, 'status': 'Paid'}",
+  "start": "2026-07-17",
+  "build_type": "AI Agent Installation",
+  "notes": "Payment status and final scope need confirmation.",
+  "task_list": [
+   {
+    "done": true,
+    "label": "Task 1"
+   },
+   {
+    "done": true,
+    "label": "Task 2"
+   },
+   {
+    "done": true,
+    "label": "Task 3"
+   },
+   {
+    "done": true,
+    "label": "Task 4"
+   },
+   {
+    "done": true,
+    "label": "Task 5"
+   },
+   {
+    "done": true,
+    "label": "Task 6"
+   },
+   {
+    "done": true,
+    "label": "Task 7"
+   },
+   {
+    "done": false,
+    "label": "Task 8"
+   },
+   {
+    "done": false,
+    "label": "Task 9"
+   }
+  ]
+ },
+ "Coastal Campaign": {
+  "name": "Coastal Campaign",
+  "status": "Build Mode",
+  "priority": "High",
+  "note": "",
+  "next_action": "Build campaign copy, agent prompt, pipeline statuses.",
+  "tasks_done": 5,
+  "tasks_total": 8,
+  "target_end": "2026-07-05",
+  "deadline": "2026-07-05",
+  "days_to_deadline": -50,
+  "staleness_days": 3,
+  "revenue_relevance": "Unknown",
+  "revenue_outstanding": 0,
+  "overridden": [],
+  "build_id": "",
+  "id": "P-003",
+  "client": "Client C",
+  "company": "Company C",
+  "owner": "Ops",
+  "payment": "{'total': 527, 'paid': 527, 'status': 'Paid'}",
+  "start": "2026-07-17",
+  "build_type": "AI Agent Installation",
+  "notes": "",
+  "task_list": [
+   {
+    "done": true,
+    "label": "Task 1"
+   },
+   {
+    "done": true,
+    "label": "Task 2"
+   },
+   {
+    "done": true,
+    "label": "Task 3"
+   },
+   {
+    "done": true,
+    "label": "Task 4"
+   },
+   {
+    "done": true,
+    "label": "Task 5"
+   },
+   {
+    "done": false,
+    "label": "Task 6"
+   },
+   {
+    "done": false,
+    "label": "Task 7"
+   },
+   {
+    "done": false,
+    "label": "Task 8"
+   }
+  ]
+ },
+ "AI Agents": {
+  "name": "AI Agents",
+  "status": "Planning",
+  "priority": "High",
+  "note": "",
+  "next_action": "Collect intake details, define agent outcome.",
+  "tasks_done": 2,
+  "tasks_total": 8,
+  "target_end": "2026-07-08",
+  "deadline": "2026-07-08",
+  "days_to_deadline": -47,
+  "staleness_days": 1,
+  "revenue_relevance": "Unknown",
+  "revenue_outstanding": 0,
+  "overridden": [],
+  "build_id": "",
+  "id": "P-006",
+  "client": "Client F",
+  "company": "Company F",
+  "owner": "Ops",
+  "payment": "{'total': 527, 'paid': 527, 'status': 'Paid'}",
+  "start": "2026-07-17",
+  "build_type": "AI Agent Installation",
+  "notes": "",
+  "task_list": [
+   {
+    "done": true,
+    "label": "Task 1"
+   },
+   {
+    "done": true,
+    "label": "Task 2"
+   },
+   {
+    "done": false,
+    "label": "Task 3"
+   },
+   {
+    "done": false,
+    "label": "Task 4"
+   },
+   {
+    "done": false,
+    "label": "Task 5"
+   },
+   {
+    "done": false,
+    "label": "Task 6"
+   },
+   {
+    "done": false,
+    "label": "Task 7"
+   },
+   {
+    "done": false,
+    "label": "Task 8"
+   }
+  ]
+ },
+ "Custom Workflow": {
+  "name": "Custom Workflow",
+  "status": "Live",
+  "priority": "High",
+  "note": "",
+  "next_action": "Confirm use case, map workflow logic, build agent.",
+  "tasks_done": 8,
+  "tasks_total": 8,
+  "target_end": "2026-07-10",
+  "deadline": "2026-07-10",
+  "days_to_deadline": -45,
+  "staleness_days": 0,
+  "revenue_relevance": "High",
+  "revenue_outstanding": 2000,
+  "overridden": [],
+  "build_id": "",
+  "id": "P-007",
+  "client": "Client G",
+  "company": "Company G",
+  "owner": "Ops",
+  "payment": "{'total': 527, 'paid': 527, 'status': 'Paid'}",
+  "start": "2026-07-17",
+  "build_type": "AI Agent Installation",
+  "notes": "",
+  "task_list": [
+   {
+    "done": true,
+    "label": "Task 1"
+   },
+   {
+    "done": true,
+    "label": "Task 2"
+   },
+   {
+    "done": true,
+    "label": "Task 3"
+   },
+   {
+    "done": true,
+    "label": "Task 4"
+   },
+   {
+    "done": true,
+    "label": "Task 5"
+   },
+   {
+    "done": true,
+    "label": "Task 6"
+   },
+   {
+    "done": true,
+    "label": "Task 7"
+   },
+   {
+    "done": true,
+    "label": "Task 8"
+   }
+  ]
+ },
+ "Skool Build": {
+  "name": "Skool Build",
+  "status": "Build Mode",
+  "priority": "High",
+  "note": "",
+  "next_action": "Design course flow and community structure.",
+  "tasks_done": 3,
+  "tasks_total": 8,
+  "target_end": "2026-07-12",
+  "deadline": "2026-07-12",
+  "days_to_deadline": -43,
+  "staleness_days": 0,
+  "revenue_relevance": "Medium",
+  "revenue_outstanding": 400,
+  "overridden": [],
+  "build_id": "",
+  "id": "P-008",
+  "client": "Client H",
+  "company": "Company H",
+  "owner": "Ops",
+  "payment": "{'total': 527, 'paid': 527, 'status': 'Paid'}",
+  "start": "2026-07-17",
+  "build_type": "AI Agent Installation",
+  "notes": "",
+  "task_list": [
+   {
+    "done": true,
+    "label": "Task 1"
+   },
+   {
+    "done": true,
+    "label": "Task 2"
+   },
+   {
+    "done": true,
+    "label": "Task 3"
+   },
+   {
+    "done": false,
+    "label": "Task 4"
+   },
+   {
+    "done": false,
+    "label": "Task 5"
+   },
+   {
+    "done": false,
+    "label": "Task 6"
+   },
+   {
+    "done": false,
+    "label": "Task 7"
+   },
+   {
+    "done": false,
+    "label": "Task 8"
+   }
+  ]
+ }
+}

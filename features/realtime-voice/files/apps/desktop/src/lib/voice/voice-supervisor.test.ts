@@ -139,7 +139,8 @@ vi.mock('./agent-delegate', () => ({
   })
 }))
 
-import { onGatewayEvent } from '@/contrib/events'
+import { emitGatewayEvent, onGatewayEvent } from '@/contrib/events'
+import { requestVoiceConversationStart } from '@/store/composer'
 import { $voiceState, voiceSupervisor } from './voice-supervisor'
 
 const tick = async (n = 4) => {
@@ -556,5 +557,34 @@ describe('voiceSupervisor', () => {
     expect(projected).toBeTruthy()
     expect((projected!.payload as { status: string }).status).toBe('Blocked')
     off()
+  })
+
+  it('cold start: a wake, the composer start and the supervisor fallback claim open exactly ONE session', async () => {
+    const before = fakeSessions.length
+
+    // The wake window/gateway fires the detection; the app requests a start;
+    // the composer consumes it (calls start) while the supervisor's fallback
+    // also wakes up 350ms later — historically the seam for a second voice.
+    emitGatewayEvent({ payload: {}, type: 'wake.detected' })
+    requestVoiceConversationStart()
+    voiceSupervisor.start()
+    voiceSupervisor.start()
+    await tick()
+    await new Promise(resolve => setTimeout(resolve, 450))
+    await tick()
+
+    expect(fakeSessions.length - before).toBe(1)
+    expect(fakeSessions.at(-1)!.deps.suppressGreeting).toBe(false)
+
+    // Second wake after an explicit end: again exactly one session.
+    voiceSupervisor.end()
+    await tick()
+    emitGatewayEvent({ payload: {}, type: 'wake.detected' })
+    requestVoiceConversationStart()
+    voiceSupervisor.start()
+    await tick()
+    await new Promise(resolve => setTimeout(resolve, 450))
+    await tick()
+    expect(fakeSessions.length - before).toBe(2)
   })
 })

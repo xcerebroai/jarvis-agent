@@ -108,6 +108,7 @@ function makeHarness(overrides: {
   mintToken?: () => Promise<RealtimeTokenResponse>
   getUserMedia?: () => Promise<MediaStream>
   sdpResponse?: Partial<Response>
+  suppressGreeting?: boolean
 } = {}): Harness {
   const pc = new FakePeerConnection()
   const mic = fakeMicStream()
@@ -134,6 +135,7 @@ function makeHarness(overrides: {
     // both tools and a named greeting; the public defaults (no name, review off)
     // are covered in realtime-config.test.ts.
     config: { reviewProjectsEnabled: true, userName: 'Ada' },
+    suppressGreeting: overrides.suppressGreeting ?? false,
     callbacks: {
       onStatusChange: s => statuses.push(s),
       onToolCall: c => toolCalls.push(c),
@@ -204,9 +206,12 @@ describe('RealtimeVoiceSession', () => {
 
     h.pc.dc!.emit({ type: 'session.updated' })
     sent = h.pc.dc!.parsedSent()
-    expect(sent[1].type).toBe('response.create')
-    expect(sent[1].response.instructions).toContain('Ada')
-    expect(sent[1].response.instructions.toLowerCase()).not.toContain('hey jarvis')
+    // The input buffer is cleared right before the greeting: nothing captured
+    // during the connect can become a competing turn.
+    expect(sent[1].type).toBe('input_audio_buffer.clear')
+    expect(sent[2].type).toBe('response.create')
+    expect(sent[2].response.instructions).toContain('Ada')
+    expect(sent[2].response.instructions.toLowerCase()).not.toContain('hey jarvis')
 
     // A duplicate acknowledgement must not replay the greeting.
     h.pc.dc!.emit({ type: 'session.updated' })
@@ -314,6 +319,11 @@ describe('RealtimeVoiceSession', () => {
     await h.session.connect()
     h.pc.dc!.open()
 
+    // The greeting owns the first turn; barge-in is a user-turn behaviour.
+    h.pc.dc!.emit({ type: 'session.updated' })
+    h.pc.dc!.emit({ type: 'response.created', response: { id: 'resp_greeting' } })
+    h.pc.dc!.emit({ type: 'response.done', response: { id: 'resp_greeting', output: [] } })
+
     h.pc.dc!.emit({ type: 'response.created' })
     h.pc.dc!.emit({ type: 'response.output_audio.delta', delta: 'x' })
     expect(h.session.getStatus()).toBe('speaking')
@@ -328,6 +338,12 @@ describe('RealtimeVoiceSession', () => {
     await h.session.connect()
     h.pc.dc!.open()
 
+    // Let the greeting finish so the first-turn gate is not what we measure.
+    h.pc.dc!.emit({ type: 'session.updated' })
+    h.pc.dc!.emit({ type: 'response.created', response: { id: 'resp_g' } })
+    h.pc.dc!.emit({ type: 'response.done', response: { id: 'resp_g', output: [] } })
+    expect(h.mic.track.enabled).toBe(true)
+
     h.session.setMuted(true)
     expect(h.mic.track.enabled).toBe(false)
     expect(h.session.isMuted()).toBe(true)
@@ -335,6 +351,82 @@ describe('RealtimeVoiceSession', () => {
 
     h.session.setMuted(false)
     expect(h.mic.track.enabled).toBe(true)
+  })
+
+  // ── first-wake: exactly ONE utterance source ────────────────────────────
+  it('cold start: the greeting owns the first turn — mic gated until its response is done, one response.create', async () => {
+    const h = makeHarness()
+    await h.session.connect()
+    h.pc.dc!.open()
+
+    // Mic is attached but silent to the server while the greeting is pending.
+    expect(h.pc.addedTracks).toHaveLength(1)
+    expect(h.mic.track.enabled).toBe(false)
+    expect(h.session.isFirstTurnGated()).toBe(true)
+
+    h.pc.dc!.emit({ type: 'session.updated' })
+    h.pc.dc!.emit({ type: 'session.updated' }) // duplicate ack: still one greeting
+    const utterances = h.pc.dc!.parsedSent().filter(e => e.type === 'response.create')
+    expect(utterances).toHaveLength(1)
+    expect(h.mic.track.enabled).toBe(false)
+
+    // A VAD speech_started during the greeting is not a barge-in (mic is gated).
+    h.pc.dc!.emit({ type: 'input_audio_buffer.speech_started' })
+    expect(h.userSpeechStarts).toBe(0)
+
+    // The greeting's response completes → the turn is handed to the user.
+    h.pc.dc!.emit({ type: 'response.created', response: { id: 'resp_greeting' } })
+    h.pc.dc!.emit({ type: 'response.done', response: { id: 'resp_greeting', output: [] } })
+    expect(h.mic.track.enabled).toBe(true)
+    expect(h.session.isFirstTurnGated()).toBe(false)
+    // Only the greeting was ever requested by the client.
+    expect(h.pc.dc!.parsedSent().filter(e => e.type === 'response.create')).toHaveLength(1)
+  })
+
+  it('second wake (a fresh session) behaves identically: one greeting, mic gated, then released', async () => {
+    for (const round of [1, 2]) {
+      const h = makeHarness()
+      await h.session.connect()
+      h.pc.dc!.open()
+      h.pc.dc!.emit({ type: 'session.updated' })
+      expect(h.pc.dc!.parsedSent().filter(e => e.type === 'response.create')).toHaveLength(1)
+      expect(h.mic.track.enabled).toBe(false)
+      h.pc.dc!.emit({ type: 'response.created', response: { id: 'resp_' + round } })
+      h.pc.dc!.emit({ type: 'response.done', response: { id: 'resp_' + round, output: [] } })
+      expect(h.mic.track.enabled).toBe(true)
+      h.session.close()
+    }
+  })
+
+  it('a renewal (suppressGreeting) has no gate: mic open at once, no response.create', async () => {
+    const h = makeHarness({ suppressGreeting: true })
+    await h.session.connect()
+    h.pc.dc!.open()
+    h.pc.dc!.emit({ type: 'session.updated' })
+    expect(h.mic.track.enabled).toBe(true)
+    expect(h.session.isFirstTurnGated()).toBe(false)
+    expect(h.pc.dc!.parsedSent().filter(e => e.type === 'response.create')).toHaveLength(0)
+  })
+
+  it('the gate never wedges: a server error during the greeting releases the mic', async () => {
+    const h = makeHarness()
+    await h.session.connect()
+    h.pc.dc!.open()
+    h.pc.dc!.emit({ type: 'session.updated' })
+    h.pc.dc!.emit({ type: 'error', error: { message: 'rejected' } })
+    expect(h.mic.track.enabled).toBe(true)
+  })
+
+  it('user mute during the greeting stays muted after the turn is released', async () => {
+    const h = makeHarness()
+    await h.session.connect()
+    h.pc.dc!.open()
+    h.pc.dc!.emit({ type: 'session.updated' })
+    h.session.setMuted(true)
+    h.pc.dc!.emit({ type: 'response.created', response: { id: 'r' } })
+    h.pc.dc!.emit({ type: 'response.done', response: { id: 'r', output: [] } })
+    expect(h.mic.track.enabled).toBe(false)
+    expect(h.session.isMuted()).toBe(true)
   })
 
   it('closes the peer connection, data channel, mic tracks, and remote audio on end', async () => {

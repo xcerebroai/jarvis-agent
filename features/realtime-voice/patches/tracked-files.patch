@@ -655,7 +655,7 @@ index 2a44cfef083..00a30346517 100644
  
  class OAuthSubmitBody(BaseModel):
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 201d37f1972..39d5c8fbdb6 100644
+index 201d37f1972..8bafa0f794a 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
 @@ -1648,6 +1648,14 @@ from hermes_cli.web_models import (  # noqa: F401
@@ -673,7 +673,7 @@ index 201d37f1972..39d5c8fbdb6 100644
      OAuthSubmitBody,
      BulkDeleteSessions,
      SessionImport,
-@@ -5493,6 +5501,396 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+@@ -5493,6 +5501,399 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
      }
  
  
@@ -841,6 +841,9 @@ index 201d37f1972..39d5c8fbdb6 100644
 +    if isinstance(session, dict) and isinstance(session.get("id"), str):
 +        session_id = session["id"]
 +    expires_at = data.get("expires_at") if isinstance(data, dict) else None
++    # One line per Realtime session start — the trace that counts voices.
++    # Never the key, never the ephemeral value.
++    _log.info("Realtime token minted (model=%s voice=%s session=%s)", model, voice, session_id or "-")
 +
 +    return {
 +        "ok": True,

@@ -120,6 +120,20 @@ function patchState(patch: Partial<VoiceState>): void {
 
 // ── Supervisor state (renderer-process scoped, survives every remount) ───────
 
+/** Trace lines for the wake/greeting seam. `console.warn` is the level the
+ *  desktop log captures from the renderer, so a live first-wake leaves a
+ *  readable timeline: wake token → start → connect → greeting → mic open. */
+let wakeTokenSeq = 0
+let lastWakeToken = 0
+
+function voiceTrace(line: string): void {
+  try {
+    console.warn('[voice] ' + line)
+  } catch {
+    // tracing never breaks the voice path
+  }
+}
+
 let config: RealtimeSessionConfigOptions = {}
 let realtimeEnabled = true
 let activeSession: RealtimeVoiceSession | null = null
@@ -1611,12 +1625,15 @@ async function connect(renewal: boolean): Promise<void> {
   // new conversation in that path.
   const suppressGreeting = renewal
 
+  voiceTrace('connect(' + (renewal ? 'renewal' : 'fresh') + ')')
+
   const session = new RealtimeVoiceSession({
     mintToken: overrides => mintRealtimeToken(overrides),
     requestMicAccess: () => window.hermesDesktop?.requestMicrophoneAccess?.() ?? Promise.resolve(true),
     config,
     suppressGreeting,
     callbacks: {
+      onTrace: voiceTrace,
       onStatusChange: next => patchState({ status: toConversationStatus(next) }),
       onLevel: level => {
         patchState({ level })
@@ -1765,9 +1782,12 @@ function start(): void {
   installLifecycle()
 
   if (intentActive) {
+    voiceTrace('start() ignored — a session is already wanted (wake token ' + lastWakeToken + ')')
+
     return
   }
 
+  voiceTrace('start() — opening ONE session (wake token ' + lastWakeToken + ')')
   intentActive = true
   patchState({ active: true, fallback: false, status: 'idle', muted: false, level: 0 })
   syncThrottleSignal()
@@ -1977,6 +1997,7 @@ $voiceConversationStartRequest.subscribe(requestId => {
 
   setTimeout(() => {
     if (takeVoiceConversationStart(requestId)) {
+      voiceTrace('start request ' + requestId + ' unclaimed by a composer — supervisor claims it')
       voiceSupervisor.start()
     }
   }, FALLBACK_CLAIM_DELAY_MS)
@@ -1994,6 +2015,11 @@ const WAKE_REARM_MS = 10_000
 let wakeWatchdog: null | ReturnType<typeof setTimeout> = null
 
 onGatewayEvent('wake.detected', () => {
+  // Single-fire token per detection: every consumer of this wake logs the
+  // same token, so a double voice is attributable in the trace.
+  lastWakeToken = ++wakeTokenSeq
+  voiceTrace('wake.detected token=' + lastWakeToken + ' active=' + $voiceState.get().active)
+
   if (wakeWatchdog) {
     clearTimeout(wakeWatchdog)
   }

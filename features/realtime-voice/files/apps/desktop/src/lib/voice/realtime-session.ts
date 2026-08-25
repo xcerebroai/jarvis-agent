@@ -39,6 +39,9 @@ import {
 
 const DEFAULT_SDP_BASE_URL = 'https://api.openai.com/v1/realtime/calls'
 
+/** Longest the greeting may hold the first turn before the mic opens anyway. */
+const FIRST_TURN_CAP_MS = 6000
+
 /** WebRTC / setup failure categories the hook uses to decide fallback + copy. */
 export type RealtimeErrorCode =
   | 'no-token' // ephemeral mint failed / returned nothing usable
@@ -70,6 +73,8 @@ export interface RealtimeSessionCallbacks {
   onError?: (error: RealtimeSessionError) => void
   /** Fired at most once per Realtime function call (deduped by call_id). */
   onToolCall?: (call: RealtimeToolCall) => void
+  /** Trace line for the wake/greeting seam (the desktop log captures it). */
+  onTrace?: (line: string) => void
   /** Mic input level (0..1), for the listening indicator. */
   onLevel?: (level: number) => void
   /** Assistant OUTPUT level (0..1) — the voice the user hears. */
@@ -148,6 +153,17 @@ export class RealtimeVoiceSession {
   private started = false
   private greetingPending = false
   private greetingSent = false
+  // FIRST-TURN OWNERSHIP. The greeting owns the first turn: the mic track is
+  // attached but DISABLED until the greeting's response is done (or a short
+  // cap), and the input buffer is cleared right before the greeting. Without
+  // this, semantic VAD (create_response: true) turns whatever was in the
+  // buffer when the session went live — a repeated "hey jarvis" during a
+  // slow cold connect — into a competing response that overlaps the greeting:
+  // two voices at once. A renewal (suppressGreeting) has no gate.
+  private firstTurnGate = false
+  private greetingAwaitingId = false
+  private greetingResponseId: null | string = null
+  private firstTurnTimer: null | number = null
   /** call_ids already dispatched to the bridge — enforces exactly-once. */
   private readonly handledToolCalls = new Set<string>()
 
@@ -253,10 +269,14 @@ export class RealtimeVoiceSession {
 
       const [micTrack] = this.micStream.getAudioTracks()
 
+      this.firstTurnGate = !this.deps.suppressGreeting
+
       if (micTrack) {
-        micTrack.enabled = !this.muted
+        micTrack.enabled = !this.muted && !this.firstTurnGate
         pc.addTrack(micTrack, this.micStream)
       }
+
+      this.trace(this.firstTurnGate ? 'mic attached, gated until the greeting is done' : 'mic attached (renewal — no greeting, no gate)')
 
       const dc = pc.createDataChannel('oai-events')
       this.dc = dc
@@ -380,7 +400,12 @@ export class RealtimeVoiceSession {
         if (this.greetingPending && !this.greetingSent) {
           this.greetingPending = false
           this.greetingSent = true
+          // Nothing captured before the config landed may become a turn.
+          this.send({ type: 'input_audio_buffer.clear' })
           this.send(buildGreetingResponseEvent(nextRealtimeGreeting(this.config)))
+          this.greetingAwaitingId = true
+          this.trace('greeting response.create sent (single utterance source)')
+          this.firstTurnTimer = window.setTimeout(() => this.releaseFirstTurn('cap reached'), FIRST_TURN_CAP_MS)
         }
 
         break
@@ -391,6 +416,12 @@ export class RealtimeVoiceSession {
         break
 
       case 'input_audio_buffer.speech_started':
+        if (this.firstTurnGate) {
+          this.trace('speech_started while the greeting owns the turn (mic gated) — not a barge-in')
+
+          break
+        }
+
         // Native barge-in: the model auto-truncates its unplayed output. Reflect
         // the switch back to listening for the UI.
         this.deps.callbacks.onUserSpeechStarted?.()
@@ -398,10 +429,21 @@ export class RealtimeVoiceSession {
 
         break
 
-      case 'response.created':
+      case 'response.created': {
+        const id = String((event as { response?: { id?: string } }).response?.id ?? '')
+
+        if (this.greetingAwaitingId) {
+          this.greetingAwaitingId = false
+          this.greetingResponseId = id || null
+          this.trace('greeting response ' + (id || '(no id)') + ' created')
+        } else if (this.firstTurnGate) {
+          this.trace('second response ' + (id || '(no id)') + ' created while the greeting owns the turn')
+        }
+
         this.setStatus('thinking')
 
         break
+      }
 
       case 'response.output_audio.delta':
 
@@ -412,15 +454,26 @@ export class RealtimeVoiceSession {
 
         break
 
-      case 'response.done':
+      case 'response.done': {
+        const id = String((event as { response?: { id?: string } }).response?.id ?? '')
+
+        if (this.firstTurnGate && (!this.greetingResponseId || id === this.greetingResponseId)) {
+          this.releaseFirstTurn('greeting done')
+        }
+
         this.handleResponseDone(event)
         this.setStatus('listening')
 
         break
+      }
 
       case 'error':
         // A non-fatal server error (e.g. a rejected response.create) — surface
         // it but keep the session alive; the transport itself is still up.
+        if (this.firstTurnGate) {
+          this.releaseFirstTurn('server error')
+        }
+
         this.setStatus('listening')
 
         break
@@ -532,12 +585,43 @@ export class RealtimeVoiceSession {
     this.send({ type: 'response.create' })
   }
 
-  /** Enable/disable the live mic track without tearing the session down. */
+  /** Hand the turn to the user: open the mic (unless muted). Idempotent. */
+  private releaseFirstTurn(reason: string): void {
+    if (!this.firstTurnGate) {
+      return
+    }
+
+    this.firstTurnGate = false
+    this.greetingAwaitingId = false
+
+    if (this.firstTurnTimer !== null) {
+      window.clearTimeout(this.firstTurnTimer)
+      this.firstTurnTimer = null
+    }
+
+    for (const track of this.micStream?.getAudioTracks() ?? []) {
+      track.enabled = !this.muted
+    }
+
+    this.trace('first turn released (' + reason + ') — mic ' + (this.muted ? 'stays muted' : 'open'))
+  }
+
+  /** True while the greeting owns the first turn (mic gated). */
+  isFirstTurnGated(): boolean {
+    return this.firstTurnGate
+  }
+
+  private trace(line: string): void {
+    this.deps.callbacks.onTrace?.(line)
+  }
+
+  /** Enable/disable the live mic track without tearing the session down. The
+   *  first-turn gate wins while the greeting is playing. */
   setMuted(muted: boolean): void {
     this.muted = muted
 
     for (const track of this.micStream?.getAudioTracks() ?? []) {
-      track.enabled = !muted
+      track.enabled = !muted && !this.firstTurnGate
     }
 
     if (muted) {
@@ -685,6 +769,11 @@ export class RealtimeVoiceSession {
     }
 
     this.micStream = null
+
+    if (this.firstTurnTimer !== null) {
+      window.clearTimeout(this.firstTurnTimer)
+      this.firstTurnTimer = null
+    }
 
     if (this.remoteAudio) {
       try {

@@ -274,6 +274,14 @@ echo "== 5j. P6: pointer and voice drive one stage =="
 grep -q "jarvis:detail-request" "$V/voice-supervisor.ts" && grep -q "jarvis:board-filter" "$V/voice-supervisor.ts" && grep -q "display.stage.clear" "$V/voice-supervisor.ts" && ok "pointer seams route through displayContext (expand it → clicked card)" || bad "pointer seams missing"
 grep -q "P6: a pointer click on a card drives the same stage state" "$V/voice-supervisor.test.ts" && ok "shared-stage regression test shipped" || bad "shared-stage test missing"
 
+echo "== 5k. voice reaches current upstream: token endpoint + wake handoff + drift guard =="
+grep -q "/api/audio/realtime/token" "$SRC/hermes_cli/web_server.py" && ok "realtime token endpoint present after apply" || bad "token endpoint missing (feature did not apply)"
+grep -q "import('@/lib/voice/voice-supervisor')" "$SRC/apps/desktop/src/main.tsx" && ok "wake->voice handoff: supervisor eager-loaded on the main window (works on /hud home)" || bad "supervisor not eager-loaded — wake will not start voice on the cockpit"
+grep -q "probeBackendHealth" "$V/voice-supervisor.ts" && grep -q "voice.backend" "$V/voice-supervisor.ts" && ok "drift guard: startup backend health probe emits voice.backend" || bad "backend health probe missing"
+grep -q "def audio_input_rms" "$SRC/tools/wake_word.py" && grep -q "input level rms" "$SRC/tools/wake_word.py" && ok "detector logs input RMS periodically (deafness is visible)" || bad "RMS telemetry missing"
+grep -q "audio_rms" "$SRC/tui_gateway/server.py" && ok "wake.status carries audio_rms for the cockpit" || bad "audio_rms not on wake.status"
+grep -q "VOICE OFFLINE" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && grep -q "MIC \\u00b7 NO INPUT" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && ok "cockpit shows honest voice/mic health (never silent deafness that looks like listening)" || bad "honest-state surfacing missing from the cockpit"
+
 echo "== 6. revert restores an EXACT clean upstream =="
 bash "$APPLY" revert "$SRC" >/dev/null 2>&1
 AFTER="$(git -C "$SRCG" status --porcelain | sort)"

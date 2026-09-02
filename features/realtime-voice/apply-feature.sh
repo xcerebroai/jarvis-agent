@@ -105,6 +105,8 @@ feature_present() {
   grep -q "mintRealtimeToken" "$src/apps/desktop/src/api/realtime-voice.ts" 2>/dev/null &&
   grep -q "api/realtime-voice" "$src/apps/desktop/src/hermes.ts" 2>/dev/null &&
   grep -q "/api/audio/realtime/token" "$src/hermes_cli/web_server.py" 2>/dev/null &&
+  grep -q "voice-supervisor" "$src/apps/desktop/src/main.tsx" 2>/dev/null &&
+  grep -q "def audio_input_rms" "$src/tools/wake_word.py" 2>/dev/null &&
   [ -f "$src/apps/desktop/src/lib/voice/voice-supervisor.ts" ] &&
   [ -f "$src/hermes_cli/realtime_voice.py" ]
 }

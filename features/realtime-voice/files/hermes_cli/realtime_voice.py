@@ -1280,3 +1280,85 @@ def update_build(home: "Path", build_id: str, patch: Dict[str, Any]) -> Optional
             _write_builds(home, rows)
             return rows[index]
     return None
+
+
+# =============================================================================
+# P6.x — MIC HEALTH: honest "can I hear?" state for the cockpit
+# =============================================================================
+# The wake detector already exposes audio_silent via wake.status. This adds the
+# device-level context the HUD shows so silent deafness can never look like
+# listening: which input device is default, and whether it is being captured
+# right now (by us and/or another app such as a call). macOS reads it straight
+# from CoreAudio via ctypes (no pyobjc); other platforms report unknown. This
+# is a READ — it never opens the device, so it cannot contend with the detector.
+
+def _coreaudio():
+    import ctypes
+    import sys
+
+    if sys.platform != "darwin":
+        return None
+    try:
+        ca = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreAudio.framework/CoreAudio")
+        cf = ctypes.cdll.LoadLibrary("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+    except OSError:
+        return None
+
+    class AudioObjectPropertyAddress(ctypes.Structure):
+        _fields_ = [("mSelector", ctypes.c_uint32), ("mScope", ctypes.c_uint32), ("mElement", ctypes.c_uint32)]
+
+    for name, argtypes, restype in (
+        ("AudioObjectGetPropertyData", [ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p], ctypes.c_int32),
+    ):
+        getattr(ca, name).argtypes = argtypes
+        getattr(ca, name).restype = restype
+    cf.CFStringGetCString.restype = ctypes.c_bool
+    cf.CFStringGetCString.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_uint32]
+    cf.CFRelease.argtypes = [ctypes.c_void_p]
+    return {"ca": ca, "cf": cf, "ctypes": ctypes, "Addr": AudioObjectPropertyAddress}
+
+
+def _fourcc(code: str) -> int:
+    return (ord(code[0]) << 24) | (ord(code[1]) << 16) | (ord(code[2]) << 8) | ord(code[3])
+
+
+def mic_input_status() -> Dict[str, Any]:
+    """Default input device + whether it is actively captured right now.
+
+    Returns ``capturing`` True when the device is running somewhere (our own
+    detector, a call app, or both) — the HUD uses it as neutral "mic shared"
+    context, never as proof of deafness (audio_silent from wake.status is the
+    real deafness signal). ``capturing`` is None when it cannot be read.
+    """
+    import sys
+
+    api = _coreaudio()
+    if not api:
+        return {"ok": True, "platform": sys.platform, "capturing": None, "device": ""}
+    ca, cf, ctypes, Addr = api["ca"], api["cf"], api["ctypes"], api["Addr"]
+    OBJ = 1  # kAudioObjectSystemObject
+    GLOBAL = _fourcc("glob")
+    MAIN = 0
+
+    def get(obj, selector, ctype):
+        addr = Addr(_fourcc(selector), GLOBAL, MAIN)
+        val = ctype()
+        size = ctypes.c_uint32(ctypes.sizeof(ctype))
+        rc = ca.AudioObjectGetPropertyData(obj, ctypes.byref(addr), 0, None, ctypes.byref(size), ctypes.byref(val))
+        return val if rc == 0 else None
+
+    dev = get(OBJ, "dIn ", ctypes.c_uint32)  # kAudioHardwarePropertyDefaultInputDevice
+    if dev is None or not dev.value:
+        return {"ok": True, "platform": "darwin", "capturing": None, "device": ""}
+    running = get(int(dev.value), "gone", ctypes.c_uint32)  # kAudioDevicePropertyDeviceIsRunningSomewhere
+    # kAudioObjectPropertyName as a CFString
+    name = ""
+    addr = Addr(_fourcc("lnam"), GLOBAL, MAIN)
+    cfstr = ctypes.c_void_p()
+    size = ctypes.c_uint32(ctypes.sizeof(ctypes.c_void_p))
+    if ca.AudioObjectGetPropertyData(int(dev.value), ctypes.byref(addr), 0, None, ctypes.byref(size), ctypes.byref(cfstr)) == 0 and cfstr.value:
+        buf = ctypes.create_string_buffer(256)
+        if cf.CFStringGetCString(cfstr.value, buf, 256, 0x08000100):
+            name = buf.value.decode("utf-8", "replace")
+        cf.CFRelease(cfstr.value)
+    return {"ok": True, "platform": "darwin", "capturing": bool(running.value) if running is not None else None, "device": name}

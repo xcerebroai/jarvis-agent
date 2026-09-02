@@ -2033,14 +2033,53 @@ onGatewayEvent('wake.detected', () => {
   }, WAKE_REARM_MS)
 })
 
+/** Backend health for the drift guard. `available:false` means the realtime
+ *  endpoints are missing or errored (feature not applied, or an upstream API
+ *  change) — the cockpit surfaces it instead of pretending voice works. */
+export interface VoiceBackendHealth {
+  available: boolean
+  reason: string
+  checkedAt: number
+}
+
+let backendHealth: VoiceBackendHealth = { available: true, reason: '', checkedAt: 0 }
+
+export function getVoiceBackendHealth(): VoiceBackendHealth {
+  return backendHealth
+}
+
+async function probeBackendHealth(): Promise<VoiceBackendHealth> {
+  let health: VoiceBackendHealth
+  try {
+    const resolved = await getRealtimeVoiceConfig()
+    health = { available: resolved?.ok !== false, reason: resolved?.ok === false ? 'backend reported not ok' : '', checkedAt: Date.now() }
+  } catch (error) {
+    // 404/405 => the endpoint route is absent (feature not applied on this
+    // upstream, or its shape changed); anything else => backend unreachable.
+    const message = error instanceof Error ? error.message : String(error)
+    const missing = /\b40[45]\b|not found|method not allowed|unavailable/i.test(message)
+    health = { available: false, reason: missing ? 'realtime endpoints missing (feature not applied or upstream API drift)' : ('backend error: ' + message.slice(0, 120)), checkedAt: Date.now() }
+  }
+
+  backendHealth = health
+  emitGatewayEvent({ payload: health, type: 'voice.backend' })
+  if (!health.available) {
+    voiceTrace('backend health: UNAVAILABLE — ' + health.reason)
+  }
+
+  return health
+}
+
 export const voiceSupervisor = {
   start,
+  probeBackendHealth,
   maybeAutoStart,
   end,
   stopTurn,
   toggleMute,
   registerDelegate,
   isActive: () => intentActive,
+  getBackendHealth: () => backendHealth,
   /** @internal test seam — reset all module state between tests. */
   __resetForTests(): void {
     clearRenewalTimer()

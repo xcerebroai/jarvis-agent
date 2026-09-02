@@ -587,4 +587,35 @@ describe('voiceSupervisor', () => {
     await tick()
     expect(fakeSessions.length - before).toBe(2)
   })
+
+  it('P6.x drift guard: probeBackendHealth reports available when the config endpoint answers, and emits voice.backend', async () => {
+    const seen: Array<{ type: string; payload?: unknown }> = []
+    const off = onGatewayEvent('*', event => { seen.push({ payload: event.payload, type: event.type }) })
+
+    getRealtimeVoiceConfig.mockResolvedValueOnce({ ok: true } as never)
+    const health = await voiceSupervisor.probeBackendHealth()
+    await tick()
+
+    expect(health.available).toBe(true)
+    expect(voiceSupervisor.getBackendHealth().available).toBe(true)
+    const ev = seen.find(e => e.type === 'voice.backend')
+    expect(ev).toBeTruthy()
+    expect((ev!.payload as { available: boolean }).available).toBe(true)
+    off()
+  })
+
+  it('P6.x drift guard: a missing realtime endpoint (405) is reported UNAVAILABLE with a drift reason, not swallowed', async () => {
+    const seen: Array<{ type: string; payload?: unknown }> = []
+    const off = onGatewayEvent('*', event => { seen.push({ payload: event.payload, type: event.type }) })
+
+    getRealtimeVoiceConfig.mockRejectedValueOnce(new Error('Error 405 Method Not Allowed'))
+    const health = await voiceSupervisor.probeBackendHealth()
+    await tick()
+
+    expect(health.available).toBe(false)
+    expect(health.reason).toMatch(/endpoints missing|feature not applied|upstream API drift/i)
+    const ev = seen.find(e => e.type === 'voice.backend')
+    expect((ev!.payload as { available: boolean }).available).toBe(false)
+    off()
+  })
 })

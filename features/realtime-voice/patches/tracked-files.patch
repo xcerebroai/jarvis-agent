@@ -1,8 +1,8 @@
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 2046c1c84c5..bc86325a817 100644
+index 4b339db9b29..a7e1162835f 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
-@@ -14542,6 +14542,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
+@@ -16436,6 +16436,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
    updateStreamThrottleFromActiveWork()
  })
  
@@ -19,10 +19,10 @@ index 2046c1c84c5..bc86325a817 100644
    if (!payload || !isHexColor(payload.background) || !isHexColor(payload.foreground)) {
      return
 diff --git a/apps/desktop/electron/preload.ts b/apps/desktop/electron/preload.ts
-index c4382210327..c04c798ba35 100644
+index a6b48e12185..016b02d17d4 100644
 --- a/apps/desktop/electron/preload.ts
 +++ b/apps/desktop/electron/preload.ts
-@@ -247,6 +247,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
+@@ -260,6 +260,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
    watchDirectory: dir => ipcRenderer.invoke('hermes:watchDirectory', dir),
    stopPreviewFileWatch: id => ipcRenderer.invoke('hermes:stopPreviewFileWatch', id),
    setActiveWork: payload => ipcRenderer.send('hermes:active-work', payload),
@@ -470,10 +470,10 @@ index 5389d9f4d57..e5ec3450733 100644
          const speechThreshold = options.silenceLevel ?? 0
          const silenceMs = options.silenceMs ?? 0
 diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
-index 52a7597ebf7..4d6b87c007a 100644
+index 795d5173339..bd5328c9101 100644
 --- a/apps/desktop/src/global.d.ts
 +++ b/apps/desktop/src/global.d.ts
-@@ -268,6 +268,10 @@ declare global {
+@@ -286,6 +286,10 @@ declare global {
        watchDirectory?: (dir: string) => Promise<HermesPreviewWatch>
        stopPreviewFileWatch: (id: string) => Promise<boolean>
        setActiveWork?: (payload: HermesActiveWork) => void
@@ -497,7 +497,7 @@ index 6242ef5998b..901d24e5406 100644
  export * from './api/skills'
  export * from './api/system'
 diff --git a/apps/desktop/src/lib/voice-playback.ts b/apps/desktop/src/lib/voice-playback.ts
-index eb64c4feb36..8fdfaba9953 100644
+index 0efb99c631f..5021a5d4833 100644
 --- a/apps/desktop/src/lib/voice-playback.ts
 +++ b/apps/desktop/src/lib/voice-playback.ts
 @@ -1,3 +1,4 @@
@@ -505,7 +505,7 @@ index eb64c4feb36..8fdfaba9953 100644
  import { resolveGatewayWsUrl } from '@hermes/shared'
  
  import { getApiRequestConnection, getApiRequestProfile, speakText } from '@/hermes'
-@@ -561,6 +562,7 @@ async function playSpeechDataUrl(
+@@ -580,6 +581,7 @@ async function playSpeechDataUrl(
    }
  
    const audio = new Audio(response.data_url)
@@ -513,8 +513,26 @@ index eb64c4feb36..8fdfaba9953 100644
    currentAudio = audio
    setVoicePlaybackState(currentState('speaking', options, audio))
  
+diff --git a/apps/desktop/src/main.tsx b/apps/desktop/src/main.tsx
+index 3c2a116a6b7..2bd926f4b71 100644
+--- a/apps/desktop/src/main.tsx
++++ b/apps/desktop/src/main.tsx
+@@ -61,6 +61,13 @@ if (winParam === 'overlay') {
+   // animations stop producing frames when nobody can see them.
+   installRendererAnimationPauseState()
+ 
++  // JARVIS realtime-voice (overlay feature): eager-load the voice supervisor so
++  // its wake->voice handoff (the fallback that claims a wake start-request when
++  // no composer is mounted) and its backend health probe are live on EVERY main
++  // window — including the /hud cockpit home, where no composer mounts. Without
++  // this, "hey jarvis" fires the detector but nothing starts a session.
++  void import('@/lib/voice/voice-supervisor').then(({ voiceSupervisor }) => voiceSupervisor.probeBackendHealth?.())
++
+   createRoot(document.getElementById('root')!).render(
+     <StrictMode>
+       <RootErrorBoundary>
 diff --git a/apps/desktop/src/types/hermes.ts b/apps/desktop/src/types/hermes.ts
-index f00bdd09cc8..bcda0621bff 100644
+index 4f39fca3bc9..275448feadd 100644
 --- a/apps/desktop/src/types/hermes.ts
 +++ b/apps/desktop/src/types/hermes.ts
 @@ -29,6 +29,58 @@ export interface AudioSpeakResponse {
@@ -577,7 +595,7 @@ index f00bdd09cc8..bcda0621bff 100644
    label: string
    name: string
 diff --git a/hermes_cli/web_models.py b/hermes_cli/web_models.py
-index 2a44cfef083..00a30346517 100644
+index fa5dd37243b..dba55229bfe 100644
 --- a/hermes_cli/web_models.py
 +++ b/hermes_cli/web_models.py
 @@ -306,6 +306,73 @@ class TTSSpeakRequest(BaseModel):
@@ -655,10 +673,10 @@ index 2a44cfef083..00a30346517 100644
  
  class OAuthSubmitBody(BaseModel):
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 201d37f1972..8bafa0f794a 100644
+index 9aad4fd8e43..3092e2d1c84 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
-@@ -1648,6 +1648,14 @@ from hermes_cli.web_models import (  # noqa: F401
+@@ -1724,6 +1724,14 @@ from hermes_cli.web_models import (  # noqa: F401
      LearningNodeEdit,
      DebugShareRequest,
      TTSSpeakRequest,
@@ -673,7 +691,7 @@ index 201d37f1972..8bafa0f794a 100644
      OAuthSubmitBody,
      BulkDeleteSessions,
      SessionImport,
-@@ -5493,6 +5501,399 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+@@ -5603,6 +5611,399 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
      }
  
  
@@ -1073,3 +1091,92 @@ index 201d37f1972..8bafa0f794a 100644
  def _split_text_for_speak_stream(text: str, cap: int) -> list:
      """Split *text* into provider-cap-sized pieces on sentence boundaries.
  
+diff --git a/tools/wake_word.py b/tools/wake_word.py
+index f433dc66023..bdaaf1e3550 100644
+--- a/tools/wake_word.py
++++ b/tools/wake_word.py
+@@ -62,6 +62,9 @@ _DEFAULT_CONFIRMATION_FRAMES = 3
+ # backend-selected stream is all zeros.
+ _SILENCE_PEAK = 10
+ _SILENCE_ALERT_SECONDS = 10
++# Cadence for the periodic input-level log — so deafness vs detection failure
++# is visible in the log during contention (e.g. a call holding the device).
++_RMS_LOG_SECONDS = 15
+ 
+ 
+ class WakeWordInUse(RuntimeError):
+@@ -1024,6 +1027,12 @@ class WakeWordDetector:
+         # from "deaf".
+         self.audio_silent = False
+         self._silent_frames = 0
++        # Rolling input level (0..~32767 int16 RMS), surfaced via wake.status so
++        # the cockpit can show honest 'can I hear?' state, and logged periodically.
++        self.audio_rms = 0.0
++        self._rms_accum = 0.0
++        self._rms_count = 0
++        self._rms_log_at = 0.0
+ 
+     @property
+     def running(self) -> bool:
+@@ -1235,6 +1244,26 @@ class WakeWordDetector:
+                         logger.info("wake word: mic audio detected — stream healthy")
+                     self._silent_frames = 0
+                     self.audio_silent = False
++                try:
++                    frms = float((frame.astype('float64') ** 2).mean() ** 0.5) if len(frame) else 0.0
++                    self.audio_rms = frms
++                    self._rms_accum += frms
++                    self._rms_count += 1
++                    _now = time.monotonic()
++                    if self._rms_log_at == 0.0:
++                        self._rms_log_at = _now
++                    elif _now - self._rms_log_at >= _RMS_LOG_SECONDS:
++                        _mean = self._rms_accum / max(1, self._rms_count)
++                        logger.info(
++                            "wake word: input level rms=%.0f over %ds (%s)",
++                            _mean, _RMS_LOG_SECONDS,
++                            "SILENT — mic delivers no audio" if self.audio_silent else "healthy",
++                        )
++                        self._rms_accum = 0.0
++                        self._rms_count = 0
++                        self._rms_log_at = _now
++                except Exception:
++                    pass
+                 try:
+                     fired = self.engine.process(frame)
+                 except Exception as e:
+@@ -1442,6 +1471,13 @@ def is_listening() -> bool:
+     return det is not None and det.running
+ 
+ 
++def audio_input_rms() -> float:
++    """Live input RMS of the armed detector (0.0 when not listening). Surfaced
++    via wake.status for the cockpit's honest mic-health state."""
++    det = _detector
++    return float(getattr(det, "audio_rms", 0.0)) if det is not None else 0.0
++
++
+ def audio_is_silent() -> bool:
+     """True when the armed stream has delivered only silence (dead mic).
+ 
+diff --git a/tui_gateway/server.py b/tui_gateway/server.py
+index 6f0f6ee2ef6..48c4315157c 100644
+--- a/tui_gateway/server.py
++++ b/tui_gateway/server.py
+@@ -16828,6 +16828,7 @@ def _(rid, params: dict) -> dict:
+ def _(rid, params: dict) -> dict:
+     try:
+         from tools.wake_word import (
++            audio_input_rms,
+             audio_is_silent,
+             check_wake_word_requirements,
+             detector_frame_info,
+@@ -16885,6 +16886,8 @@ def _(rid, params: dict) -> dict:
+             "enabled": bool(cfg.get("enabled")),
+             # Armed but deaf despite an open stream; see platform-specific hint.
+             "audio_silent": silent,
++            # Live input level (int16 RMS) so the cockpit shows honest mic health.
++            "audio_rms": round(audio_input_rms(), 1) if listening else 0.0,
+             "capture": capture,
+             "local_input_available": bool(reqs.get("local_input_available")),
+             "sample_rate": frame.get("sample_rate", 16000),

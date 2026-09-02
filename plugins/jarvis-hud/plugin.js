@@ -172,6 +172,40 @@ const PRESETS = {
 }
 
 const STATE_LABEL = { idle: 'standing by', listening: 'listening', speaking: 'speaking', thinking: 'thinking' }
+
+// Truthful idle state from detector (wake.status) + backend (voice.backend)
+// health. Order: a missing voice backend is the loudest (drift guard), then a
+// deaf mic, then wake-off, then healthy.
+function deriveHealth(h) {
+  const backend = h && h.backend
+  const wake = h && h.wake
+
+  if (backend && backend.available === false) {
+    return { chip: 'VOICE OFFLINE', color: '#F87171', label: 'voice offline \u00b7 backend unavailable', state: 'backend' }
+  }
+
+  if (wake) {
+    if (wake.enabled === false) {
+      return { chip: 'WAKE OFF', color: 'rgba(122,150,183,0.9)', label: 'wake word off', state: 'wakeoff' }
+    }
+
+    if (wake.available === false) {
+      return { chip: 'MIC UNAVAILABLE', color: '#FBBF24', label: 'mic unavailable', state: 'unavailable' }
+    }
+
+    if (wake.listening && wake.audio_silent) {
+      return { chip: 'MIC \u00b7 NO INPUT', color: '#F87171', label: 'mic \u2014 no input (deaf)', state: 'silent' }
+    }
+
+    if (wake.listening) {
+      return { chip: 'LISTENING', color: '#34D399', label: 'standing by \u00b7 mic ok', state: 'ok' }
+    }
+
+    return { chip: 'ARMING\u2026', color: 'rgba(147,197,253,0.9)', label: 'arming wake word\u2026', state: 'arming' }
+  }
+
+  return { chip: '', color: 'rgba(122, 140, 163, 0.85)', label: 'standing by', state: 'unknown' }
+}
 const LISTEN_HOLD_MS = 12_000
 const SPEAK_HOLD_MS = 1400
 const THINK_HOLD_MS = 30_000
@@ -1658,6 +1692,8 @@ function HudPage() {
   const taskRef = useRef(null)
   const taskTimersRef = useRef([])
   const pulseTimersRef = useRef([])
+  const [health, setHealth] = useState({ backend: null, wake: null })
+  const healthRef = useRef({ backend: null, wake: null })
   const boardArmedRef = useRef(false)
   const tracker = useRef({
     amp: null,
@@ -1708,7 +1744,22 @@ function HudPage() {
     pull()
     const timer = window.setInterval(pull, 60_000)
 
-    return () => window.clearInterval(timer)
+    const pullWake = () => {
+      void host
+        .request('wake.status', { surface: 'gui' })
+        .then(st => setHealth(prev => { const next = { ...prev, wake: st || null }; healthRef.current = next; return next }))
+        .catch(() => undefined)
+    }
+
+    pullWake()
+    const wakeTimer = window.setInterval(pullWake, 8000)
+    const offBackend = host.onEvent('voice.backend', event => setHealth(prev => { const next = { ...prev, backend: event.payload || null }; healthRef.current = next; return next }))
+
+    return () => {
+      window.clearInterval(timer)
+      window.clearInterval(wakeTimer)
+      offBackend?.()
+    }
   }, [])
 
   useEffect(() => {
@@ -1845,8 +1896,19 @@ function HudPage() {
 
       if (el) {
         const mode = tracker.mode()
+
+        if (mode === 'idle') {
+          const h = deriveHealth(healthRef.current)
+
+          el.textContent = h.label
+          el.style.color = h.color
+
+          return
+        }
+
         const feed = mode === 'speaking' || mode === 'listening' ? (real ? ' · live waveform' : ' · synthesized') : ''
 
+        el.style.color = 'rgba(122, 140, 163, 0.85)'
         el.textContent = STATE_LABEL[mode] + feed
       }
     }
@@ -2347,6 +2409,7 @@ function HudPage() {
             display.rows.length
               ? jsx('div', { style: { ...LABEL, color: 'rgba(96,165,250,0.9)' }, children: display.rows.length + ' ON BOARD' + (layout.hidden ? ' · ' + (display.rows.length - layout.hidden) + ' SHOWN' : '') })
               : null,
+            (() => { const h = deriveHealth(health); return h.chip ? jsxs('div', { style: { alignItems: 'center', display: 'flex', gap: '6px' }, children: [jsx('div', { className: h.state === 'silent' || h.state === 'backend' ? 'jv-chip' : '', style: { background: h.color, borderRadius: '50%', boxShadow: '0 0 6px ' + h.color, height: '5px', width: '5px' } }), jsx('div', { style: { ...LABEL, color: h.color }, children: h.chip })] }) : null })(),
             jsx('div', { style: { ...LABEL, fontFamily: T.data, fontVariantNumeric: 'tabular-nums', letterSpacing: '0.18em' }, children: clock })
           ] })
         ]

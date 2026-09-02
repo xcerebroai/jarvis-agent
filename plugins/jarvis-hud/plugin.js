@@ -1237,16 +1237,16 @@ function loadExpandStyle() {
   try {
     const k = localStorage.getItem('jarvis:hud-expand')
 
-    return EXPAND_PRESETS[k] ? k : 'zoom'
+    return EXPAND_PRESETS[k] ? k : 'dolly'
   } catch {
-    return 'zoom'
+    return 'dolly'
   }
 }
 
 let EXPAND_KEY = loadExpandStyle()
 
 function applyExpandStyle(key) {
-  EXPAND_KEY = EXPAND_PRESETS[key] ? key : 'zoom'
+  EXPAND_KEY = EXPAND_PRESETS[key] ? key : 'dolly'
 
   try {
     localStorage.setItem('jarvis:hud-expand', EXPAND_KEY)

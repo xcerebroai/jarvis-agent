@@ -24,4 +24,6 @@ let focused = null
 window.addEventListener('jarvis:detail-request', e => fx('detail.json').then(all => { const row = all[e.detail?.name]; if (row) { focused = row.name; emit('display.detail', { focus: true, result: { projects: [row] }, source: 'pointer' }) } }))
 window.addEventListener('jarvis:stage-collapse', e => { focused = e.detail?.focus || null; emit('display.stage.clear', { focus: focused, source: 'pointer' }) })
 window.addEventListener('jarvis:board-filter', e => fx('board.json').then(result => { const status = e.detail?.status || null; const projects = status ? result.projects.filter(p => p.status === status) : result.projects; emit('display.projects', { focus: false, result: { ...result, projects }, source: 'pointer', status }) }))
+window.__jvChrome = false
+window.addEventListener('jarvis:chrome', e => { window.__jvChrome = !e.detail?.hide })
 window.__jvFocused = () => focused

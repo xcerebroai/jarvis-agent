@@ -985,9 +985,14 @@ function CloseNode({ color, onClose }) {
 // card's board slot. Transform/opacity only, ~400ms open / 320ms close.
 const STAGE_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
 
-function Stage({ children, color = '#93C5FD', contentKey = '', expandStyle = 'zoom', onClose, origin = null, width = 560 }) {
+function Stage({ children, color = '#93C5FD', contentKey = '', expandStyle = 'zoom', onClose, onStep = null, origin = null, width = 560 }) {
   // The stage grows with the SIZE preset so bigger type never clips.
   const W = Math.round(width * (0.62 + 0.38 * FS))
+  // The lens never exceeds the viewport: its content scrolls inside a bounded
+  // region (bug: at XL a long task list ran off the bottom edge). The frame
+  // stays put; only the readout scrolls.
+  const MAXH = 'calc(82vh - 40px)'
+  const dragRef = useRef(null)
   const shown = useMaterialize(true)
   const lensRef = useRef(null)
   const closingRef = useRef(false)
@@ -1167,17 +1172,21 @@ function Stage({ children, color = '#93C5FD', contentKey = '', expandStyle = 'zo
     onClick: event => { event.stopPropagation(); requestClose() },
     style: { backdropFilter: 'blur(3px)', background: expandStyle === 'dolly' ? 'rgba(1,2,6,0.5)' : 'rgba(1,2,6,0.66)', cursor: 'default', inset: 0, opacity: shown ? 1 : 0, perspective: '1700px', pointerEvents: 'auto', position: 'absolute', transition: 'opacity 300ms', zIndex: 8 },
     children: [
-    exiting ? jsx('div', { key: 'exit-' + exiting.id, style: { animation: 'jvHandoffOut 440ms cubic-bezier(0.5, 0, 0.75, 0) both', left: '50%', maxHeight: '84%', pointerEvents: 'none', position: 'absolute', top: '8%', transformOrigin: 'center', width: W + 'px', zIndex: 9 }, children: jsx(Plate, { color, drift: false, shown: true, thread: false, width: W, children: exiting.node }) }) : null,
+    onStep ? jsx('div', { key: 'prev', 'data-jv-interactive': '1', onClick: event => { event.stopPropagation(); onStep(-1) }, title: 'Previous project', style: { alignItems: 'center', color: withAlpha(color, 0.92), cursor: 'pointer', display: 'flex', flexDirection: 'column', fontFamily: T.label, gap: '4px', left: 'calc(50% - ' + (W / 2 + 58) + 'px)', pointerEvents: 'auto', position: 'absolute', top: '50%', transform: 'translateY(-50%)', zIndex: 10 }, children: [jsx('div', { style: { alignItems: 'center', border: '1px solid ' + withAlpha(color, 0.5), borderRadius: '50%', boxShadow: '0 0 12px ' + withAlpha(color, 0.4), display: 'flex', fontSize: '22px', height: '40px', justifyContent: 'center', lineHeight: 1, paddingBottom: '3px', width: '40px' }, children: '\u2039' }), jsx('div', { style: { fontSize: fs(7.5), letterSpacing: '0.26em', opacity: 0.8 }, children: 'PREV' })] }) : null,
+    onStep ? jsx('div', { key: 'next', 'data-jv-interactive': '1', onClick: event => { event.stopPropagation(); onStep(1) }, title: 'Next project', style: { alignItems: 'center', color: withAlpha(color, 0.92), cursor: 'pointer', display: 'flex', flexDirection: 'column', fontFamily: T.label, gap: '4px', right: 'calc(50% - ' + (W / 2 + 58) + 'px)', pointerEvents: 'auto', position: 'absolute', top: '50%', transform: 'translateY(-50%)', zIndex: 10 }, children: [jsx('div', { style: { alignItems: 'center', border: '1px solid ' + withAlpha(color, 0.5), borderRadius: '50%', boxShadow: '0 0 12px ' + withAlpha(color, 0.4), display: 'flex', fontSize: '22px', height: '40px', justifyContent: 'center', lineHeight: 1, paddingBottom: '3px', width: '40px' }, children: '\u203a' }), jsx('div', { style: { fontSize: fs(7.5), letterSpacing: '0.26em', opacity: 0.8 }, children: 'NEXT' })] }) : null,
+    exiting ? jsx('div', { key: 'exit-' + exiting.id, style: { animation: 'jvHandoffOut 440ms cubic-bezier(0.5, 0, 0.75, 0) both', left: '50%', maxHeight: '84%', pointerEvents: 'none', position: 'absolute', top: '8%', transformOrigin: 'center', width: W + 'px', zIndex: 9 }, children: jsx(Plate, { color, drift: false, maxH: MAXH, shown: true, thread: false, width: W, children: exiting.node }) }) : null,
     jsx('div', {
       key: 'lens',
       'data-jv-interactive': '1',
       'data-jv-lens': '1',
       onClick: event => event.stopPropagation(),
+      onPointerDown: onStep ? (event => { dragRef.current = { down: true, x: event.clientX } }) : undefined,
+      onPointerUp: onStep ? (event => { const d = dragRef.current; dragRef.current = null; if (d && d.down) { const dx = event.clientX - d.x; if (Math.abs(dx) > 64) onStep(dx < 0 ? 1 : -1) } }) : undefined,
       ref: lensRef,
       style: { left: '50%', maxHeight: '84%', position: 'absolute', top: '8%', transform: 'translateX(-50%)', width: W + 'px', willChange: 'transform, filter, opacity' },
       children: jsxs('div', { style: { position: 'relative' }, children: [
         shards,
-        jsx(Plate, { color, drift: false, scroll: true, shown, thread: false, width: W, children }),
+        jsx(Plate, { color, drift: false, maxH: MAXH, scroll: true, shown, thread: false, width: W, children }),
         jsx(CloseNode, { color, onClose: requestClose })
       ] })
     })
@@ -1350,7 +1359,7 @@ function slotStyle(pos, width) {
  * 'left' for right-column plates, 'right' for left-column plates, 'down' for
  * the center column, false for the rails. `phase` desyncs the drift.
  */
-function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = false, onClick, onHover, phase = 0, scroll = false, shown, style, thread = 'left', vivid = true, width }) {
+function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = false, maxH, onClick, onHover, phase = 0, scroll = false, shown, style, thread = 'left', vivid = true, width }) {
   const at = ms => delay + ms + 'ms'
   const interactive = Boolean(onClick)
   // Hover in the frame-and-light language: the lines brighten, the nodes glow.
@@ -1410,7 +1419,7 @@ function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = fal
               jsx('div', { style: { background: bright, boxShadow: vivid ? '0 0 5px ' + withAlpha(color, 0.6) : 'none', bottom: 0, height: '5px', left: 52 + i * 22 + 'px', opacity: shown ? 0.85 : 0, position: 'absolute', transition: 'opacity 300ms ' + at(1000 + i * 70), width: '1px' } }, 't' + i))
           ]
         }),
-        jsx('div', { style: { overflowX: 'hidden', overflowY: scroll ? 'auto' : 'hidden', padding: '9px 14px 12px 15px', position: 'relative', maxHeight: 'inherit' }, children })
+        jsx('div', { style: { overflowX: 'hidden', overflowY: scroll ? 'auto' : 'hidden', overscrollBehavior: 'contain', padding: '9px 15px 18px 15px', position: 'relative', maxHeight: maxH || 'inherit' }, children })
       ]
     })
   })
@@ -2025,7 +2034,13 @@ function HudPage() {
   const [jobs, setJobs] = useState([])
   const [activity, setActivity] = useState([])
   const [isFull, setIsFull] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)
   const [scaleTick, setScaleTick] = useState(0)
+  // Live mirrors for window-level handlers (arrow-key sibling switch, NAV
+  // toggle) so their closures never see stale board/detail state.
+  const displayRef = useRef(null)
+  const navOpenRef = useRef(false)
+  const stepRef = useRef(() => {})
   const [expandStyle, setExpandStyle] = useState(loadExpandStyle())
   // P5.1 instruments: sight (one look at a time), judgment (one at a time),
   // and the build dock (persistent, restart-surviving plates).
@@ -2270,6 +2285,14 @@ function HudPage() {
     const onKey = event => {
       if (event.key !== 'Escape' || stageState.open) {
         return // a Stage is open: the capture-phase handler already collapsed it
+      }
+
+      // Esc closes the NAV drawer before anything else on the bare board.
+      if (navOpenRef.current) {
+        setNavOpen(false)
+        window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: true } }))
+
+        return
       }
 
       // A bare focus card (no Stage) collapses; with nothing open Esc is the voice kill.
@@ -2656,10 +2679,68 @@ function HudPage() {
   // Mirror the stage for the once-installed keyboard / click-off handlers
   // (every hook above has run by this point — never before a declaration).
   stageRef.current = { expanded, open: Boolean(display.detail || display.focus || expanded) }
+  displayRef.current = display
+  navOpenRef.current = navOpen
 
   // One lens at a time. The project lens is voice+pointer state (display.detail);
   // the others are cockpit-local. Collapse tells the supervisor which focus to
   // restore so voice's displayContext matches what is on screen.
+  // Move focus to an adjacent board project WITHOUT leaving the stage: dispatch
+  // a detail-request for the neighbour, which resolves to display.detail and
+  // changes the Stage's contentKey — firing the SAME jvHandoffOut/In spatial
+  // pass the voice path uses. This is what makes the throw-and-pull reachable
+  // by mouse (NEXT/PREV, arrow keys, drag) and not only by voice.
+  const stepSibling = dir => {
+    const d = displayRef.current
+    const rows = (d && d.rows) || []
+
+    if (!d || !d.detail || rows.length < 2) {
+      return
+    }
+
+    const cur = String(d.detail.name || '')
+    let i = rows.findIndex(r => String(r.name || '') === cur)
+
+    if (i < 0) {
+      i = 0
+    }
+
+    const n = ((i + dir) % rows.length + rows.length) % rows.length
+    const target = rows[n]
+
+    if (target && String(target.name || '') !== cur) {
+      window.dispatchEvent(new CustomEvent('jarvis:detail-request', { detail: { name: String(target.name || '') } }))
+    }
+  }
+
+  stepRef.current = stepSibling
+
+  useEffect(() => {
+    const onArrow = event => {
+      // Arrow keys page between projects only while a project lens is open.
+      if (!displayRef.current || !displayRef.current.detail) {
+        return
+      }
+
+      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+        event.preventDefault()
+        stepRef.current(1)
+      } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+        event.preventDefault()
+        stepRef.current(-1)
+      }
+    }
+
+    window.addEventListener('keydown', onArrow)
+
+    return () => window.removeEventListener('keydown', onArrow)
+  }, [])
+
+  const closeNav = () => {
+    setNavOpen(false)
+    window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: true } }))
+  }
+
   const collapse = () => {
     setExpanded(null)
 
@@ -2700,6 +2781,10 @@ function HudPage() {
     // Click-off anywhere on the void collapses whatever is open (stage,
     // expanded operation); plates stop propagation so clicks inside stay.
     onClick: event => {
+      if (navOpenRef.current && !(event.target instanceof Element && event.target.closest('[data-jv-navtab]'))) {
+        closeNav()
+      }
+
       if (stageRef.current.open && !(event.target instanceof Element && event.target.closest('[data-jv-interactive]'))) {
         collapse()
       }
@@ -2778,7 +2863,7 @@ function HudPage() {
         ]
       }),
       // the managed Stage: whichever lens is open, with all three dismiss paths
-      lens ? jsx(Stage, { color: lens.color, contentKey: lensName || 'lens', expandStyle, onClose: collapse, origin: display.detail ? expandOrigin : null, width: lens.width, children: lens.node }, 'stage') : null,
+      lens ? jsx(Stage, { color: lens.color, contentKey: lensName || 'lens', expandStyle, onClose: collapse, onStep: display.detail && (display.rows || []).length > 1 ? (dir => stepRef.current(dir)) : null, origin: display.detail ? expandOrigin : null, width: lens.width, children: lens.node }, 'stage') : null,
       // metric tiles: real aggregates from the live board
       display.rows.length || display.status
         ? jsx(MetricTiles, { active: display.status ?? null, onToggle: status => window.dispatchEvent(new CustomEvent('jarvis:board-filter', { detail: { status } })), rows: display.rows, shown: boardShown })
@@ -2799,9 +2884,10 @@ function HudPage() {
       activity.length ? jsx(ActivityRail, { activity, onExpand: item => setExpanded({ key: item.key, kind: 'activity' }) }, 'activity') : null,
       // edge tab: sessions/nav reachable without stock chrome (no fill — a filament tab)
       jsx('div', {
-        onClick: () => window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: false } })),
-        style: { alignItems: 'center', borderBottom: '1px solid rgba(59,130,246,0.35)', borderRight: '1px solid rgba(59,130,246,0.35)', borderTop: '1px solid rgba(59,130,246,0.35)', color: 'rgba(147,197,253,0.9)', cursor: 'pointer', display: 'flex', fontFamily: T.label, fontSize: fs(8), height: '86px', justifyContent: 'center', left: 0, letterSpacing: '0.28em', padding: '0 3px', position: 'absolute', textTransform: 'uppercase', top: '44%', writingMode: 'vertical-rl', zIndex: 6 },
-        children: 'NAV'
+        'data-jv-navtab': '1',
+        onClick: event => { event.stopPropagation(); setNavOpen(o => { const next = !o; window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: !next } })); return next }) },
+        style: { alignItems: 'center', background: navOpen ? withAlpha('#3B82F6', 0.22) : 'transparent', borderBottom: '1px solid rgba(59,130,246,0.35)', borderRight: '1px solid rgba(59,130,246,0.35)', borderTop: '1px solid rgba(59,130,246,0.35)', color: navOpen ? '#DCEBFF' : 'rgba(147,197,253,0.9)', cursor: 'pointer', display: 'flex', fontFamily: T.label, fontSize: fs(8), height: '86px', justifyContent: 'center', left: 0, letterSpacing: '0.28em', padding: '0 3px', pointerEvents: 'auto', position: 'absolute', textTransform: 'uppercase', top: '44%', writingMode: 'vertical-rl', zIndex: 6 },
+        children: navOpen ? 'CLOSE' : 'NAV'
       }),
       // fullscreen toggle
       jsx('div', {

@@ -124,6 +124,45 @@ await page.locator('[data-jv-interactive]', { hasText: /Northwind Onboarding/i }
 ok((await stageOpen()) === 1, 'lens opens over a focus card')
 await page.keyboard.press('Escape'); await page.waitForTimeout(600)
 ok((await stageOpen()) === 0 && (await page.locator('.jv-drift').count()) === focusBefore && (await page.evaluate(() => window.__jvFocused())) === 'Coastal Campaign', 'collapse brings the focus card back and the supervisor focus follows it')
+console.log('== task-to-task handoff reachable by mouse ==')
+// Esc back to a clean board, then expand a project and page with the NEXT
+// affordance — the SAME jvHandoffOut/In spatial pass the voice path fires.
+await page.keyboard.press('Escape'); await page.waitForTimeout(400)
+await page.evaluate(() => window.__jvEmit('display.clear', {})); await page.waitForTimeout(700)
+await page.evaluate(() => window.dispatchEvent(new CustomEvent('jarvis:display-request'))); await page.waitForTimeout(900)
+await page.locator('[data-jv-interactive]', { hasText: /Agent Installation/i }).first().click(f); await page.waitForTimeout(700)
+const stageText = async () => ((await page.locator('[data-jv-stage]').innerText()).replace(/\s+/g, ' '))
+const stageWas = (await stageOpen()) === 1 && /P-002/.test(await stageText())
+const nextCtrl = page.locator('[data-jv-stage] [data-jv-interactive]', { hasText: 'NEXT' }).first()
+ok(await nextCtrl.count() > 0, 'expanded project stage shows an explicit NEXT affordance')
+await nextCtrl.click(f)
+// mid-flight: the outgoing lens is thrown aside with the jvHandoffOut pass
+await page.waitForTimeout(120)
+const throwing = await page.evaluate(() => Array.from(document.querySelectorAll('[data-jv-stage] *')).some(el => (getComputedStyle(el).animationName || '').includes('jvHandoffOut')))
+await page.waitForFunction(() => { const el = document.querySelector('[data-jv-stage]'); return el && /P-003/.test(el.innerText) && !/P-002/.test(el.innerText) }, { timeout: 4000 }).catch(() => {})
+const stAfter = await stageText()
+const switched = /P-003/.test(stAfter) && !/P-002/.test(stAfter) && (await stageOpen()) === 1
+ok(stageWas && throwing && switched, 'mouse NEXT throws the current project aside and pulls the next in (jvHandoffOut fired, content switched)' + (throwing ? '' : ' [no jvHandoffOut]') + (switched ? '' : ' [content did not switch; stage=' + stAfter.slice(0,70) + ']'))
+// arrow keys page too
+const namePre = await stageText()
+await page.keyboard.press('ArrowLeft'); await page.waitForTimeout(900)
+ok((await stageOpen()) === 1 && (await stageText()) !== namePre, 'ArrowLeft pages to the previous project (same handoff)')
+await page.keyboard.press('Escape'); await page.waitForTimeout(500)
+
+console.log('== NAV is a real toggle ==')
+const sidebarOpen = () => page.evaluate(() => window.__jvChrome)
+await page.locator('[data-jv-navtab]').first().click(f); await page.waitForTimeout(200)
+const navShown = await sidebarOpen()
+await page.locator('[data-jv-navtab]').first().click(f); await page.waitForTimeout(200)
+const navHidden = await sidebarOpen()
+ok(navShown === true && navHidden === false, 'clicking NAV twice = open then closed (chrome ' + navShown + ' -> ' + navHidden + ')')
+await page.locator('[data-jv-navtab]').first().click(f); await page.waitForTimeout(150)
+await page.keyboard.press('Escape'); await page.waitForTimeout(200)
+ok((await sidebarOpen()) === false, 'Esc closes the NAV drawer')
+await page.locator('[data-jv-navtab]').first().click(f); await page.waitForTimeout(150)
+await page.mouse.click(760, 470); await page.waitForTimeout(200)
+ok((await sidebarOpen()) === false, 'click-outside closes the NAV drawer')
+
 ok(errors.length === 0, 'no page errors during the run' + (errors.length ? ': ' + errors[0].slice(0, 160) : ''))
 
 await browser.close(); server.close()

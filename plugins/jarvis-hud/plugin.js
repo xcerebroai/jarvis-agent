@@ -934,6 +934,9 @@ function Decipher({ delay = 0, style, text }) {
 // explicit labeled control inside a lens, and only with a STORED session id
 // (runtime ids cannot hydrate — that was the trap).
 const stageState = { collapse: null, open: false }
+// The clicked board card's viewport rect — the shared-element origin the
+// detail stage zooms out of (and collapses back into). Set on card click.
+let expandOrigin = null
 
 if (typeof window !== 'undefined' && !window.__jvStageKeys) {
   window.__jvStageKeys = true
@@ -959,33 +962,104 @@ function CloseNode({ color, onClose }) {
   })
 }
 
-function Stage({ children, color = '#93C5FD', onClose, width = 560 }) {
+// The stage is a LENS you dive into: the clicked card lifts and scales up INTO
+// the stage position (shared-element zoom); collapse shrinks it back into the
+// card's board slot. Transform/opacity only, ~400ms open / 320ms close.
+const STAGE_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
+
+function Stage({ children, color = '#93C5FD', onClose, origin = null, width = 560 }) {
   const shown = useMaterialize(true)
+  const lensRef = useRef(null)
+  const closingRef = useRef(false)
+
+  const invertTo = box => {
+    const el = lensRef.current
+
+    if (!el) {
+      return null
+    }
+
+    const last = el.getBoundingClientRect()
+
+    if (!last.width || !box || !box.width) {
+      return null
+    }
+
+    const scale = Math.max(0.04, box.width / last.width)
+    const dx = box.left + box.width / 2 - (last.left + last.width / 2)
+    const dy = box.top + box.height / 2 - (last.top + last.height / 2)
+
+    return 'translateX(-50%) translate(' + dx + 'px, ' + dy + 'px) scale(' + scale + ')'
+  }
+
+  // Open: place the stage AT the card, then play to the centered position.
+  useEffect(() => {
+    const el = lensRef.current
+    const from = invertTo(origin)
+
+    if (!el || !from) {
+      return
+    }
+
+    el.style.transformOrigin = 'center center'
+    el.style.transition = 'none'
+    el.style.transform = from
+    el.style.opacity = '0.5'
+    void el.offsetWidth
+    el.style.transition = 'transform 400ms ' + STAGE_EASE + ', opacity 260ms ease'
+    el.style.transform = 'translateX(-50%)'
+    el.style.opacity = '1'
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Collapse: shrink back into the card's slot, then unmount.
+  const requestClose = () => {
+    if (closingRef.current) {
+      return
+    }
+
+    const el = lensRef.current
+    const to = invertTo(origin)
+
+    if (!el || !to) {
+      onClose()
+
+      return
+    }
+
+    closingRef.current = true
+    el.style.transition = 'transform 320ms ' + STAGE_EASE + ', opacity 300ms ease'
+    el.style.transform = to
+    el.style.opacity = '0'
+    window.setTimeout(onClose, 300)
+  }
 
   useEffect(() => {
     stageState.open = true
-    stageState.collapse = onClose
+    stageState.collapse = requestClose
 
     return () => {
-      if (stageState.collapse === onClose) {
+      if (stageState.collapse === requestClose) {
         stageState.open = false
         stageState.collapse = null
       }
     }
-  }, [onClose])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose, origin])
 
   return jsx('div', {
     'data-jv-stage': '1',
-    onClick: event => { event.stopPropagation(); onClose() },
-    style: { backdropFilter: 'blur(2px)', background: 'rgba(1,2,6,0.58)', cursor: 'default', inset: 0, opacity: shown ? 1 : 0, pointerEvents: 'auto', position: 'absolute', transition: 'opacity 260ms', zIndex: 8 },
+    onClick: event => { event.stopPropagation(); requestClose() },
+    style: { backdropFilter: 'blur(3px)', background: 'rgba(1,2,6,0.66)', cursor: 'default', inset: 0, opacity: shown ? 1 : 0, pointerEvents: 'auto', position: 'absolute', transition: 'opacity 300ms', zIndex: 8 },
     children: jsx('div', {
       'data-jv-interactive': '1',
       'data-jv-lens': '1',
       onClick: event => event.stopPropagation(),
-      style: { left: '50%', maxHeight: '78%', position: 'absolute', top: '10%', transform: 'translateX(-50%)', width: width + 'px' },
+      ref: lensRef,
+      style: { left: '50%', maxHeight: '80%', position: 'absolute', top: '9%', transform: 'translateX(-50%)', width: width + 'px', willChange: 'transform' },
       children: jsxs('div', { style: { position: 'relative' }, children: [
         jsx(Plate, { color, drift: false, shown, thread: false, width, children }),
-        jsx(CloseNode, { color, onClose })
+        jsx(CloseNode, { color, onClose: requestClose })
       ] })
     })
   })
@@ -1130,13 +1204,13 @@ function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = fal
 // --- B's guts, as reusable instruments -------------------------------------
 function Rail({ left, right }) {
   return jsxs('div', {
-    style: { color: 'rgba(122,150,183,0.9)', display: 'flex', fontFamily: T.data, fontSize: '7.5px', gap: '8px', justifyContent: 'space-between', letterSpacing: '0.2em', whiteSpace: 'nowrap' },
+    style: { color: 'rgba(122,150,183,0.95)', display: 'flex', fontFamily: T.data, fontSize: '8.5px', gap: '8px', justifyContent: 'space-between', letterSpacing: '0.18em', whiteSpace: 'nowrap' },
     children: [jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' }, children: left }), right ? jsx('span', { style: { flexShrink: 0 }, children: right }) : null]
   })
 }
 
 /** Title: deciphers in while its tracking collapses from 0.34em to 0.08em. */
-function Title({ delay = 0, shown, size = 12, text }) {
+function Title({ delay = 0, shown, size = 13.5, text }) {
   return jsx('div', {
     style: { display: 'block', fontFamily: T.label, fontSize: size + 'px', fontWeight: 600, letterSpacing: shown ? '0.08em' : '0.34em', lineHeight: 1.2, marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: '0 0 12px rgba(96,165,250,0.45)', textTransform: 'uppercase', transition: 'letter-spacing 900ms ' + EASE + ' ' + delay + 'ms', whiteSpace: 'nowrap' },
     children: shown ? jsx(Decipher, { delay: delay + 40, text }) : ' '
@@ -1147,7 +1221,7 @@ function Chip({ blink, color, delay = 0, shown, text }) {
   return jsxs('div', {
     style: { display: 'inline-flex', flexDirection: 'column', flexShrink: 0 },
     children: [
-      jsx('span', { className: blink ? 'jv-chip' : '', style: { color, fontFamily: T.label, fontSize: '8px', letterSpacing: '0.28em', opacity: shown ? 1 : 0, textShadow: '0 0 8px ' + color, textTransform: 'uppercase', transition: 'opacity 400ms ' + delay + 'ms' }, children: text }),
+      jsx('span', { className: blink ? 'jv-chip' : '', style: { color, fontFamily: T.label, fontSize: '9.5px', letterSpacing: '0.24em', opacity: shown ? 1 : 0, textShadow: '0 0 8px ' + color, textTransform: 'uppercase', transition: 'opacity 400ms ' + delay + 'ms' }, children: text }),
       jsx('div', { style: { background: color, boxShadow: '0 0 5px ' + color, height: '1px', marginTop: '2px', transform: shown ? 'scaleX(1)' : 'scaleX(0)', transformOrigin: 'left', transition: 'transform 600ms ' + EASE + ' ' + (delay + 80) + 'ms' } })
     ]
   })
@@ -1155,7 +1229,7 @@ function Chip({ blink, color, delay = 0, shown, text }) {
 
 function Hazard({ delay = 0, shown, text }) {
   return jsxs('div', {
-    style: { alignItems: 'baseline', background: 'repeating-linear-gradient(135deg, rgba(248,113,113,0.14) 0 5px, transparent 5px 11px)', borderLeft: '2px solid #F87171', display: 'flex', fontSize: '8.5px', gap: '6px', lineHeight: 1.35, marginTop: '5px', opacity: shown ? 1 : 0, padding: '2px 6px', transition: 'opacity 300ms ' + delay + 'ms' },
+    style: { alignItems: 'baseline', background: 'repeating-linear-gradient(135deg, rgba(248,113,113,0.14) 0 5px, transparent 5px 11px)', borderLeft: '2px solid #F87171', display: 'flex', fontSize: '10px', gap: '6px', lineHeight: 1.4, marginTop: '6px', opacity: shown ? 1 : 0, padding: '3px 7px', transition: 'opacity 300ms ' + delay + 'ms' },
     children: [
       jsx('span', { style: { animation: 'jvBlink 1.1s steps(2) infinite', color: '#F87171', fontFamily: T.data, fontSize: '8px' }, children: '■' }),
       jsx('span', { style: { color: '#FCA5A5', fontFamily: T.label, fontSize: '8px', letterSpacing: '0.22em' }, children: 'BLOCKED' }),
@@ -1169,8 +1243,8 @@ function DataGrid({ cols = 4, delay = 0, items, shown }) {
     style: { display: 'grid', gap: '3px 8px', gridTemplateColumns: 'repeat(' + cols + ', minmax(0, 1fr))', marginTop: '6px' },
     children: items.map(([label, value], i) =>
       jsxs('div', { style: { display: 'flex', flexDirection: 'column', gap: '1px', minWidth: 0 }, children: [
-        jsx('span', { style: { ...LABEL, fontSize: '6.5px', letterSpacing: '0.24em' }, children: label }),
-        jsx('span', { style: { color: INK, fontFamily: T.data, fontSize: '9px', fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: shown ? jsx(Decipher, { delay: delay + i * 70, text: String(value) }) : ' ' })
+        jsx('span', { style: { ...LABEL, fontSize: '8px', letterSpacing: '0.2em' }, children: label }),
+        jsx('span', { style: { color: INK, fontFamily: T.data, fontSize: '11.5px', fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: shown ? jsx(Decipher, { delay: delay + i * 70, text: String(value) }) : ' ' })
       ] }, label))
   })
 }
@@ -1184,8 +1258,8 @@ function ChargeBar({ color, delay = 0, done, shown, total }) {
     style: { alignItems: 'center', display: 'flex', gap: '8px', marginTop: '7px' },
     children: [
       jsx('div', { style: { display: 'flex', flex: 1, gap: '2px' }, children: Array.from({ length: SEG }, (_, i) =>
-        jsx('div', { style: { background: i < filled ? color : 'rgba(59,130,246,0.16)', boxShadow: i < filled ? '0 0 4px ' + color : 'none', flex: 1, height: '4px', opacity: shown ? 1 : 0, transform: shown ? 'scaleY(1)' : 'scaleY(0)', transition: 'opacity 120ms ' + (delay + i * 40) + 'ms, transform 160ms ' + EASE + ' ' + (delay + i * 40) + 'ms' } }, i)) }),
-      jsx('span', { style: { color: 'rgba(147,197,253,0.9)', fontFamily: T.data, fontSize: '8.5px', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }, children: done + '/' + total + ' · ' + Math.round(frac * 100) + '%' })
+        jsx('div', { style: { background: i < filled ? color : 'rgba(59,130,246,0.16)', boxShadow: i < filled ? '0 0 4px ' + color : 'none', flex: 1, height: '5px', opacity: shown ? 1 : 0, transform: shown ? 'scaleY(1)' : 'scaleY(0)', transition: 'opacity 120ms ' + (delay + i * 40) + 'ms, transform 160ms ' + EASE + ' ' + (delay + i * 40) + 'ms' } }, i)) }),
+      jsx('span', { style: { color: 'rgba(147,197,253,0.95)', fontFamily: T.data, fontSize: '10.5px', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }, children: done + '/' + total + ' · ' + Math.round(frac * 100) + '%' })
     ]
   })
 }
@@ -1211,8 +1285,8 @@ function NextLine({ delay = 0, label = 'NEXT ▸', shown, text }) {
   }
 
   return jsxs('div', {
-    style: { color: INK_DIM, fontSize: '8.5px', lineHeight: 1.4, marginTop: '5px', opacity: shown ? 1 : 0, overflow: 'hidden', textOverflow: 'ellipsis', transition: 'opacity 400ms ' + delay + 'ms', whiteSpace: 'nowrap' },
-    children: [jsx('span', { style: { color: '#93C5FD', fontFamily: T.label, fontSize: '7.5px', letterSpacing: '0.22em', marginRight: '6px' }, children: label }), String(text).slice(0, 90)]
+    style: { color: INK_DIM, fontSize: '10.5px', lineHeight: 1.4, marginTop: '5px', opacity: shown ? 1 : 0, overflow: 'hidden', textOverflow: 'ellipsis', transition: 'opacity 400ms ' + delay + 'ms', whiteSpace: 'nowrap' },
+    children: [jsx('span', { style: { color: '#93C5FD', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.22em', marginRight: '6px' }, children: label }), String(text).slice(0, 90)]
   })
 }
 
@@ -1253,14 +1327,27 @@ function ProjectPlate({ delay, dissolving, focus, index, pos, row, shown, update
   const visible = shown && !dissolving
   const [hot, setHot] = useState(false)
   // Click = the "expand" voice verb: same stage, same displayContext.
-  const expand = () => {
+  const expand = event => {
     uiSound('tick')
+
+    try {
+      const el = event && event.currentTarget
+
+      expandOrigin = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null
+    } catch {
+      expandOrigin = null
+    }
+
     window.dispatchEvent(new CustomEvent('jarvis:detail-request', { detail: { name: String(row.name || '') } }))
   }
+  const full = hot || focus
   const width = focus ? 350 : GRID.cardWidth
-  const style = focus
+  const base = focus
     ? { left: '56%', position: 'absolute', top: '17%', zIndex: 3 }
     : { position: 'absolute', zIndex: 2, ...slotStyle(pos, GRID.cardWidth) }
+  // Compact by default; the hovered card lifts out of its slot to reveal the
+  // full readout without crowding neighbours.
+  const style = hot && !focus ? { ...base, maxHeight: 'none', zIndex: 7 } : base
   const d = dissolving ? Math.max(0, 3 - index) * 40 : delay
 
   return jsx(Plate, {
@@ -1268,14 +1355,18 @@ function ProjectPlate({ delay, dissolving, focus, index, pos, row, shown, update
     children: jsxs('div', { children: [
       jsx(Rail, { left: 'PROJECT · ' + String(row.priority || 'NORMAL').toUpperCase(), right: hot ? 'CLICK · EXPAND' : updated ? 'IDX ' + updated : '' }),
       jsxs('div', { style: { alignItems: 'flex-end', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
-        jsx('div', { style: { minWidth: 0 }, children: jsx(Title, { delay: d + 120, shown: visible, size: focus ? 15 : 12, text: String(row.name || '') }) }),
+        jsx('div', { style: { minWidth: 0 }, children: jsx(Title, { delay: d + 120, shown: visible, size: focus ? 17 : 14, text: String(row.name || '') }) }),
         jsx(Chip, { blink: row.status === 'Blocked' || row.status === 'Build Mode', color: f.color, delay: d + 420, shown: visible, text: String(row.status || '') })
       ] }),
-      row.status === 'Blocked' && f.note ? jsx(Hazard, { delay: d + 380, shown: visible, text: f.note.slice(0, 70) }) : null,
-      jsx(DataGrid, { delay: d + 520, items: [['DEADLINE', shortDate(row.deadline || row.target_end)], ['COUNTDOWN', f.countdown], ['STALE', f.stale], ['REVENUE', f.revenue]], shown: visible }),
-      f.total ? jsx(ChargeBar, { color: f.color, delay: d + 500, done: f.done, shown: visible, total: f.total }) : null,
-      jsx(TickRow, { color: f.color, delay: d + 980, done: f.done, shown: visible, total: f.total }),
-      jsx(NextLine, { delay: d + 1150, shown: visible, text: row.next_action || (row.status !== 'Blocked' ? f.note : '') })
+      f.total ? jsx(ChargeBar, { color: f.color, delay: d + 300, done: f.done, shown: visible, total: f.total }) : null,
+      full
+        ? jsxs('div', { style: { animation: 'jvFadeUp 260ms both' }, children: [
+            row.status === 'Blocked' && f.note ? jsx(Hazard, { delay: 0, shown: true, text: f.note.slice(0, 70) }) : null,
+            jsx(DataGrid, { delay: 0, items: [['DEADLINE', shortDate(row.deadline || row.target_end)], ['COUNTDOWN', f.countdown], ['STALE', f.stale], ['REVENUE', f.revenue]], shown: true }),
+            jsx(TickRow, { color: f.color, delay: 0, done: f.done, shown: true, total: f.total }),
+            jsx(NextLine, { delay: 0, shown: true, text: row.next_action || (row.status !== 'Blocked' ? f.note : '') })
+          ] })
+        : null
     ] })
   })
 }
@@ -1304,7 +1395,7 @@ function Body({ color, delay = 0, mono, shown, text }) {
   }
 
   return jsx('div', {
-    style: { borderLeft: '1px solid ' + (color || LINE_DIM), color: mono ? INK_DIM : 'rgba(217,230,242,0.95)', fontFamily: mono ? T.data : 'inherit', fontSize: mono ? '8.5px' : '10px', lineHeight: 1.5, marginTop: '7px', maxHeight: '58px', opacity: shown ? 1 : 0, overflow: 'hidden', paddingLeft: '8px', transition: 'opacity 400ms ' + delay + 'ms', whiteSpace: 'pre-wrap' },
+    style: { borderLeft: '1px solid ' + (color || LINE_DIM), color: mono ? INK_DIM : 'rgba(217,230,242,0.95)', fontFamily: mono ? T.data : 'inherit', fontSize: mono ? '9.5px' : '11.5px', lineHeight: 1.55, marginTop: '8px', maxHeight: '72px', opacity: shown ? 1 : 0, overflow: 'hidden', paddingLeft: '9px', transition: 'opacity 400ms ' + delay + 'ms', whiteSpace: 'pre-wrap' },
     children: text
   })
 }
@@ -2415,7 +2506,7 @@ function HudPage() {
         ]
       }),
       // the managed Stage: whichever lens is open, with all three dismiss paths
-      lens ? jsx(Stage, { color: lens.color, onClose: collapse, width: lens.width, children: lens.node }, 'stage') : null,
+      lens ? jsx(Stage, { color: lens.color, onClose: collapse, origin: display.detail ? expandOrigin : null, width: lens.width, children: lens.node }, 'stage') : null,
       // metric tiles: real aggregates from the live board
       display.rows.length || display.status
         ? jsx(MetricTiles, { active: display.status ?? null, onToggle: status => window.dispatchEvent(new CustomEvent('jarvis:board-filter', { detail: { status } })), rows: display.rows, shown: boardShown })

@@ -60,6 +60,23 @@ ok(errors.length === 0, 'no page errors on boot' + (errors.length ? ': ' + error
 ok((await text()).includes('8 ON BOARD · 6 SHOWN'), 'board + two build plates reflow (8 on board · 6 shown)')
 ok((await page.locator('.jv-drift').count()) === 8, 'eight drifting plates (6 cards + 2 builds), no ghosts')
 
+console.log('== reserved zones: no two zone containers overlap (rendered bounds) ==')
+// The dense cockpit (board cards + two build plates + Scheduled Ops + Live
+// Activity) must have NOTHING overlapping another zone's box — the
+// Live-Activity-over-card class of regression.
+const overlaps = await page.evaluate(() => {
+  const els = [...document.querySelectorAll('[data-jv-zone]')].map(el => ({ z: el.getAttribute('data-jv-zone'), r: el.getBoundingClientRect(), el }))
+    .filter(o => o.r.width > 2 && o.r.height > 2)
+  const hit = (a, b) => { const ox = Math.min(a.right, b.right) - Math.max(a.left, b.left); const oy = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top); return ox > 4 && oy > 4 }
+  const bad = []
+  for (let i = 0; i < els.length; i++) for (let j = i + 1; j < els.length; j++) {
+    if (els[i].el === els[j].el || els[i].el.contains(els[j].el) || els[j].el.contains(els[i].el)) continue
+    if (hit(els[i].r, els[j].r)) bad.push(els[i].z + '×' + els[j].z)
+  }
+  return { count: els.length, bad }
+})
+ok(overlaps.count >= 3 && overlaps.bad.length === 0, 'no zone-container overlaps across ' + overlaps.count + ' zones' + (overlaps.bad.length ? ' [OVERLAPS: ' + overlaps.bad.join(', ') + ']' : ''))
+
 console.log('== pointer ==')
 const card = page.locator('[data-jv-interactive]', { hasText: /Agent Installation/i }).first()
 await card.hover(f); await page.waitForTimeout(250)
@@ -147,6 +164,23 @@ ok(stageWas && throwing && switched, 'mouse NEXT throws the current project asid
 const namePre = await stageText()
 await page.keyboard.press('ArrowLeft'); await page.waitForTimeout(900)
 ok((await stageOpen()) === 1 && (await stageText()) !== namePre, 'ArrowLeft pages to the previous project (same handoff)')
+// PREV chevron pages too (all four pointer-nav inputs are guarded: NEXT, PREV, arrows, drag)
+const prevBefore = await stageText()
+const prevCtrl = page.locator('[data-jv-stage] [data-jv-interactive]', { hasText: 'PREV' }).first()
+ok(await prevCtrl.count() > 0, 'expanded stage shows an explicit PREV affordance')
+await prevCtrl.click(f); await page.waitForTimeout(900)
+ok((await stageOpen()) === 1 && (await stageText()) !== prevBefore, 'mouse PREV pages to the previous project (same handoff)')
+// horizontal drag on the lens pages too
+const dragBefore = await stageText()
+const lensBox = await page.locator('[data-jv-lens]').first().boundingBox()
+if (lensBox) {
+  await page.mouse.move(lensBox.x + lensBox.width / 2, lensBox.y + lensBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(lensBox.x + lensBox.width / 2 - 140, lensBox.y + lensBox.height / 2, { steps: 6 })
+  await page.mouse.up()
+}
+await page.waitForTimeout(900)
+ok((await stageOpen()) === 1 && (await stageText()) !== dragBefore, 'horizontal drag on the lens pages projects (same handoff)')
 await page.keyboard.press('Escape'); await page.waitForTimeout(500)
 
 console.log('== NAV is a real toggle ==')

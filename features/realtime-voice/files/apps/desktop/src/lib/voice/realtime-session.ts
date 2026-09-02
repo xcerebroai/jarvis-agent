@@ -142,7 +142,10 @@ export class RealtimeVoiceSession {
   private dc: RTCDataChannel | null = null
   private micStream: MediaStream | null = null
   private remoteAudio: HTMLAudioElement | null = null
+  private transcriptAccum = ''
   private outputAudioContext: AudioContext | null = null
+  private outputSink: GainNode | null = null
+  private meterTrack: MediaStreamTrack | null = null
   private outputMeterFrame = 0
   private audioContext: AudioContext | null = null
   private meterRaf: number | null = null
@@ -413,18 +416,25 @@ export class RealtimeVoiceSession {
       case 'conversation.item.input_audio_transcription.completed': {
         const transcript = String((event as { transcript?: string }).transcript ?? '')
 
+        this.transcriptAccum = ''
         this.trace('user transcript: "' + transcript.slice(0, 60) + '"')
-        this.deps.callbacks.onUserTranscript?.(transcript)
+        this.handleTranscriptText(transcript)
 
         break
       }
 
-      // Newer transcription event names (GA delta/segment) — surface them too
-      // so the diagnosis shows if the completed event was renamed.
-      case 'conversation.item.input_audio_transcription.delta':
-        this.trace('transcription.delta (interim) received')
+      // Interim delta: accumulate and run stop detection on the partial text so
+      // "stop" halts BEFORE the completed event (and survives if completed is
+      // ever renamed away).
+      case 'conversation.item.input_audio_transcription.delta': {
+        const delta = String((event as { delta?: string }).delta ?? '')
+
+        this.transcriptAccum = (this.transcriptAccum + ' ' + delta).slice(-200)
+        this.trace('transcription.delta (interim): "' + this.transcriptAccum.slice(-40) + '"')
+        this.handleTranscriptText(this.transcriptAccum)
 
         break
+      }
 
       case 'input_audio_buffer.speech_started':
         if (this.firstTurnGate) {
@@ -492,6 +502,17 @@ export class RealtimeVoiceSession {
       default:
         if (/transcription|response\.cancel|audio_buffer|speech_|interrupt/i.test(type)) {
           this.trace('event: ' + type)
+        }
+
+        // Drift shield: if upstream renames the transcription event, still run
+        // stop detection on any transcription-shaped event that carries text.
+        if (/transcription/i.test(type)) {
+          const anyEvent = event as { transcript?: string; delta?: string }
+          const text = String(anyEvent.transcript ?? anyEvent.delta ?? '')
+
+          if (text) {
+            this.handleTranscriptText(text)
+          }
         }
 
         break
@@ -673,6 +694,14 @@ export class RealtimeVoiceSession {
   }
 
   /** Cancel the in-flight response (Stop button while the model is speaking). */
+  /** One place all transcription paths (completed / delta / renamed) funnel
+   *  through so stop-word enforcement can never be bypassed by an event rename. */
+  private handleTranscriptText(text: string): void {
+    if (text) {
+      this.deps.callbacks.onUserTranscript?.(text)
+    }
+  }
+
   cancelResponse(): void {
     if (this.closed) {
       return
@@ -721,7 +750,23 @@ export class RealtimeVoiceSession {
     try {
       const context = new AudioContextCtor()
       const analyser = context.createAnalyser()
-      const source = context.createMediaStreamSource(stream)
+      // Meter a CLONE of the track, never the audible one. The <audio> element
+      // plays the original track; WebAudio (analyser + zero-gain pull) touches
+      // only the clone. Nothing in the visual/meter layer can perturb playback.
+      let meterStream = stream
+
+      try {
+        const audible = stream.getAudioTracks?.()[0]
+
+        if (audible?.clone && typeof MediaStream !== 'undefined') {
+          this.meterTrack = audible.clone()
+          meterStream = new MediaStream([this.meterTrack])
+        }
+      } catch {
+        meterStream = stream
+      }
+
+      const source = context.createMediaStreamSource(meterStream)
 
       analyser.fftSize = 256
       const data = new Uint8Array(analyser.fftSize)
@@ -737,6 +782,7 @@ export class RealtimeVoiceSession {
       sink.connect(context.destination)
       void context.resume?.().catch(() => undefined)
       this.outputAudioContext = context
+      this.outputSink = sink
 
       const tick = () => {
         if (!this.outputAudioContext) {
@@ -819,6 +865,13 @@ export class RealtimeVoiceSession {
     window.cancelAnimationFrame(this.outputMeterFrame)
     void this.outputAudioContext?.close().catch(() => undefined)
     this.outputAudioContext = null
+    this.outputSink = null
+
+    if (this.meterTrack) {
+      try { this.meterTrack.stop() } catch { /* best effort */ }
+      this.meterTrack = null
+    }
+
     void this.audioContext?.close().catch(() => undefined)
     this.audioContext = null
 
@@ -850,19 +903,38 @@ export class RealtimeVoiceSession {
   hardStop(): void {
     this.trace('hardStop: begin')
 
-    // 1) Cancel + flush server audio FIRST (fastest path to silence).
+    // 1) LOCAL silence FIRST — this does NOT depend on the realtime API and
+    //    cannot be defeated by an upstream drift: mute + zero-volume + pause the
+    //    element, zero the output meter's gain, and stop the inbound track. The
+    //    user hears silence NOW.
+    this.silenceOutputNow()
+
+    // 2) Then cancel + flush server-side to end the turn cleanly.
     try {
       this.cancelResponse()
     } catch {
       // ignore — closing anyway
     }
 
-    // 2) Silence the client sink: mute + pause the element AND stop the inbound
-    //    remote audio track, so buffered/played audio halts even if the element
-    //    is bypassed by the WebRTC layer.
+    this.trace('hardStop: audio silenced, closing session')
+    this.close()
+  }
+
+  /** Instant, API-independent local cutoff of assistant audio. Safe to call
+   *  from the stop word, the orb click, and Esc. Idempotent + fully guarded. */
+  silenceOutputNow(): void {
+    try {
+      if (this.outputSink) {
+        this.outputSink.gain.value = 0
+      }
+    } catch {
+      // meter sink is optional
+    }
+
     if (this.remoteAudio) {
       try {
         this.remoteAudio.muted = true
+        this.remoteAudio.volume = 0
         this.remoteAudio.pause?.()
         const stream = this.remoteAudio.srcObject as MediaStream | null
 
@@ -870,12 +942,9 @@ export class RealtimeVoiceSession {
           try { track.stop() } catch { /* best effort */ }
         }
       } catch {
-        // the close below still tears everything down
+        // best effort — close() still tears everything down
       }
     }
-
-    this.trace('hardStop: audio silenced, closing session')
-    this.close()
   }
 
   private fail(code: RealtimeErrorCode, message: string): RealtimeSessionError {

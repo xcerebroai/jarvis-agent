@@ -1252,7 +1252,7 @@ let SCALE_KEY = loadScaleKey()
 let FS = SCALE_PRESETS[SCALE_KEY].fontScale
 
 // The mutable grid the layout + slotStyle read; seeded from the active preset.
-const GRID = { cardWidth: 256, opWidth: 292, pitch: 20.5, side: 2.8, slots: 4, top: 9 }
+const GRID = { cardWidth: 256, opWidth: 292, pitch: 20.5, pitchEff: 20.5, side: 2.8, slots: 4, top: 9 }
 
 function applyScalePreset(key) {
   const preset = SCALE_PRESETS[key] || SCALE_PRESETS.xl
@@ -1263,6 +1263,7 @@ function applyScalePreset(key) {
   GRID.opWidth = preset.opWidth
   GRID.slots = preset.slots
   GRID.pitch = preset.pitch
+  GRID.pitchEff = preset.pitch
   GRID.top = preset.top
 
   try {
@@ -1347,8 +1348,8 @@ function computeCockpitLayout({ cards, detailOpen, ops }) {
 function slotStyle(pos, width) {
   return {
     [pos.side]: GRID.side + '%',
-    maxHeight: 'calc(' + GRID.pitch + '% - 12px)',
-    top: GRID.top + pos.slot * GRID.pitch + '%',
+    maxHeight: 'calc(' + GRID.pitchEff + '% - 12px)',
+    top: GRID.top + pos.slot * GRID.pitchEff + '%',
     width: width + 'px'
   }
 }
@@ -1360,7 +1361,7 @@ function slotStyle(pos, width) {
  * 'left' for right-column plates, 'right' for left-column plates, 'down' for
  * the center column, false for the rails. `phase` desyncs the drift.
  */
-function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = false, maxH, onClick, onHover, phase = 0, scroll = false, shown, style, thread = 'left', vivid = true, width }) {
+function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = false, maxH, onClick, onHover, phase = 0, scroll = false, shown, style, thread = 'left', vivid = true, width, zone }) {
   const at = ms => delay + ms + 'ms'
   const interactive = Boolean(onClick)
   // Hover in the frame-and-light language: the lines brighten, the nodes glow.
@@ -1394,6 +1395,7 @@ function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = fal
   return jsx('div', {
     className: drift && shown ? 'jv-drift' : '',
     'data-jv-interactive': interactive ? '1' : undefined,
+    'data-jv-zone': zone,
     onClick: interactive ? event => { event.stopPropagation(); onClick(event) } : undefined,
     onMouseEnter: onHover ? () => onHover(true) : undefined,
     onMouseLeave: onHover ? () => onHover(false) : undefined,
@@ -1576,7 +1578,7 @@ function ProjectPlate({ delay, dissolving, focus, index, pos, row, shown, update
   const d = dissolving ? Math.max(0, 3 - index) * 40 : delay
 
   return jsx(Plate, {
-    color: f.color, delay: d, hot, onClick: expand, onHover: setHot, phase: index * 1.3, shown: visible, style, thread: focus ? 'left' : pos.side === 'left' ? 'right' : 'left', width,
+    color: f.color, delay: d, hot, onClick: expand, onHover: setHot, phase: index * 1.3, shown: visible, style, thread: focus ? 'left' : pos.side === 'left' ? 'right' : 'left', width, zone: focus ? 'focus' : 'card',
     children: jsxs('div', { children: [
       jsx(Rail, { left: 'PROJECT · ' + String(row.priority || 'NORMAL').toUpperCase(), right: hot ? 'CLICK · EXPAND' : updated ? 'IDX ' + updated : '' }),
       jsxs('div', { style: { alignItems: 'flex-end', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
@@ -1634,7 +1636,7 @@ function TaskPlate({ clock, onExpand, pos, task }) {
   const kindLabel = task.kind === 'research' ? 'RESEARCH OPERATION' : task.kind === 'browser' ? 'BROWSER OPERATION · WATCH THE SCREEN' : 'TASK OPERATION'
 
   return jsx(Plate, {
-    color, delay: 0, hot, onClick: () => { uiSound('tick'); onExpand() }, onHover: setHot, phase: 2.1, shown, style: { opacity: task.status === 'cancelled' ? 0.65 : 1, position: 'absolute', zIndex: 3, ...slotStyle(pos, GRID.opWidth) }, thread: pos.side === 'left' ? 'right' : 'left', width: GRID.opWidth,
+    color, delay: 0, hot, onClick: () => { uiSound('tick'); onExpand() }, onHover: setHot, phase: 2.1, shown, style: { opacity: task.status === 'cancelled' ? 0.65 : 1, position: 'absolute', zIndex: 3, ...slotStyle(pos, GRID.opWidth) }, thread: pos.side === 'left' ? 'right' : 'left', width: GRID.opWidth, zone: 'task',
     children: jsxs('div', { children: [
       jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
         jsx(Rail, { left: hot ? 'CLICK · FULL DETAIL' : kindLabel }),
@@ -1681,7 +1683,7 @@ function BuildPlate({ build, clock, onExpand, pos }) {
   const waiting = state === 'waiting' && buildSessionId(build)
 
   return jsx(Plate, {
-    color, hot, onClick: () => { uiSound('tick'); onExpand() }, onHover: setHot, phase: 3.4 + pos.slot, shown, style: { opacity: state === 'done' ? 0.8 : 1, position: 'absolute', zIndex: 3, ...slotStyle(pos, GRID.opWidth) }, thread: pos.side === 'left' ? 'right' : 'left', width: GRID.opWidth,
+    color, hot, onClick: () => { uiSound('tick'); onExpand() }, onHover: setHot, phase: 3.4 + pos.slot, shown, style: { opacity: state === 'done' ? 0.8 : 1, position: 'absolute', zIndex: 3, ...slotStyle(pos, GRID.opWidth) }, thread: pos.side === 'left' ? 'right' : 'left', width: GRID.opWidth, zone: 'build',
     children: jsxs('div', { children: [
       jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '8px', justifyContent: 'space-between' }, children: [
         jsx(Rail, { left: hot ? (waiting ? 'CLICK · ANSWER IN SESSION' : 'CLICK · FULL DETAIL') : 'BUILD SESSION' }),
@@ -1968,35 +1970,37 @@ function RailRow({ children, delay, onClick, shown, style }) {
   })
 }
 
-function JobsRail({ jobs, onExpand }) {
+function JobsRail({ jobs, maxH, onExpand }) {
   const shown = useMaterialize(jobs.length)
 
   return jsx(Plate, {
-    drift: false, shown, style: { bottom: '52px', left: '2.8%', position: 'absolute', zIndex: 2 }, thread: false, width: 240,
+    drift: false, shown, style: { bottom: '52px', left: '2.8%', position: 'absolute', zIndex: 4 }, thread: false, width: 240,
+    zone: 'jobs',
     children: jsxs('div', { children: [
       jsx(Rail, { left: 'SCHEDULED OPERATIONS', right: jobs.length + ' JOB' + (jobs.length === 1 ? '' : 'S') }),
-      ...jobs.map((job, i) =>
+      jsx('div', { style: { maxHeight: maxH, overflowY: 'auto', overscrollBehavior: 'contain' }, children: jobs.map((job, i) =>
         jsxs(RailRow, { delay: 200 + i * 90, onClick: () => onExpand(job), shown, style: { fontSize: fs(9.5), justifyContent: 'space-between', padding: '3px 0 0 5px' }, children: [
           jsx('span', { style: { color: INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: String(job.name || job.id || '').slice(0, 30) }),
           jsx('span', { style: { color: 'rgba(96,165,250,0.85)', fontFamily: T.data, fontSize: fs(8.5), whiteSpace: 'nowrap' }, children: String(job.schedule_display || job.schedule?.display || '').slice(0, 12) })
-        ] }, job.id || i))
+        ] }, job.id || i)) })
     ] })
   })
 }
 
-function ActivityRail({ activity, onExpand }) {
+function ActivityRail({ activity, maxH, onExpand }) {
   const shown = useMaterialize(activity.length > 0)
 
   return jsx(Plate, {
-    drift: false, shown, style: { bottom: '52px', position: 'absolute', right: '2.8%', zIndex: 2 }, thread: false, width: 240,
+    drift: false, shown, style: { bottom: '52px', position: 'absolute', right: '2.8%', zIndex: 4 }, thread: false, width: 240,
+    zone: 'activity',
     children: jsxs('div', { children: [
       jsx(Rail, { left: 'LIVE ACTIVITY' }),
-      ...activity.map(item =>
+      jsx('div', { style: { maxHeight: maxH, overflowY: 'auto', overscrollBehavior: 'contain' }, children: activity.map(item =>
         jsxs(RailRow, { delay: 0, onClick: () => onExpand(item), shown: true, style: { animation: 'jvFadeUp 320ms both', fontSize: fs(9), padding: '2px 0 0 5px' }, children: [
           jsx('span', { style: { color: 'rgba(96,165,250,0.75)', fontFamily: T.data, fontSize: fs(8) }, children: item.at }),
           jsx('span', { style: { color: 'rgba(217,230,242,0.9)', fontFamily: T.label, fontSize: fs(8.5), letterSpacing: '0.14em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: item.label }),
           item.detail ? jsx('span', { style: { color: 'rgba(96,165,250,0.8)', fontFamily: T.data, fontSize: fs(7.5), marginLeft: 'auto', whiteSpace: 'nowrap' }, children: item.detail }) : null
-        ] }, item.key))
+        ] }, item.key)) })
     ] })
   })
 }
@@ -2680,7 +2684,19 @@ function HudPage() {
   // cards reflow into the remainder. Nothing overlaps.
   const dockBuilds = builds.slice(0, 4)
   const opsList = [...dockBuilds.map(build => ({ build, kind: 'build' })), ...(task ? [{ kind: 'task' }] : [])]
-  const layout = computeCockpitLayout({ cards: display.rows.length, detailOpen: false, ops: opsList.length })
+  const railLeft = jobs.length > 0
+  const railRight = activity.length > 0
+  const railsOn = railLeft || railRight
+  // Reserved zones without dropping cards: when the bottom rails are present,
+  // COMPRESS the slot pitch so every card slot fits ABOVE the rail band (bottom
+  // ~RAIL_BAND%). No card can then reach a rail's box — exclusive by geometry,
+  // full density kept. Set before the board + plates read GRID.pitchEff.
+  const RAIL_BAND_TOP = 78
+  GRID.pitchEff = railsOn ? Math.min(GRID.pitch, (RAIL_BAND_TOP - GRID.top) / GRID.slots) : GRID.pitch
+  // A focus card owns the right-centre; clear the right column under it.
+  const layout = computeCockpitLayout({ cards: display.rows.length, detailOpen: Boolean(display.focus), ops: opsList.length })
+  const railBottomOfCards = GRID.top + GRID.slots * GRID.pitchEff
+  const railMaxH = 'calc(' + Math.max(12, 100 - railBottomOfCards) + 'vh - 60px)'
   const taskPos = task ? layout.ops[opsList.length - 1] : null
   const boardShown = display.shown && !display.dissolving
 
@@ -2883,13 +2899,14 @@ function HudPage() {
       // center column: SIGHT + JUDGMENT (one of each at a time)
       sight || judgment
         ? jsxs('div', {
+            'data-jv-zone': 'center',
             style: { display: 'flex', flexDirection: 'column', gap: '14px', left: '50%', pointerEvents: 'none', position: 'absolute', top: '86px', transform: 'translateX(-50%)', width: '440px', zIndex: 5 },
             children: [sight ? jsx(SightPlate, { onExpand: () => setExpanded({ kind: 'sight' }), sight }, 'sight') : null, judgment ? jsx(JudgmentPlate, { judgment, onExpand: () => setExpanded({ kind: 'judgment' }) }, 'judgment') : null]
           })
         : null,
       // rails: scheduled operations + live activity
-      jobs.length ? jsx(JobsRail, { jobs, onExpand: job => setExpanded({ id: job.id || job.name, kind: 'job' }) }, 'jobs') : null,
-      activity.length ? jsx(ActivityRail, { activity, onExpand: item => setExpanded({ key: item.key, kind: 'activity' }) }, 'activity') : null,
+      jobs.length ? jsx(JobsRail, { jobs, maxH: railMaxH, onExpand: job => setExpanded({ id: job.id || job.name, kind: 'job' }) }, 'jobs') : null,
+      activity.length ? jsx(ActivityRail, { activity, maxH: railMaxH, onExpand: item => setExpanded({ key: item.key, kind: 'activity' }) }, 'activity') : null,
       // edge tab: sessions/nav reachable without stock chrome (no fill — a filament tab)
       jsx('div', {
         'data-jv-navtab': '1',
@@ -2935,7 +2952,7 @@ function HudPage() {
             layout.cards[index]
               ? jsx(ProjectPlate, { delay: 140 + index * 110, dissolving: display.dissolving, focus: false, index, pos: layout.cards[index], row, shown: display.shown, updated: display.updated }, String(row.name || '') + '#' + index)
               : null),
-          display.focus
+          display.focus && !lens
             ? jsx(ProjectPlate, { delay: 0, dissolving: display.dissolving, focus: true, index: 0, pos: { side: 'right', slot: 0 }, row: display.focus, shown: true, updated: display.updated }, 'focus')
             : null
         ]

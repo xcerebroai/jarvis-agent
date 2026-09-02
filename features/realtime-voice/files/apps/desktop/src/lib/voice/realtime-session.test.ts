@@ -96,12 +96,13 @@ interface Harness {
   session: RealtimeVoiceSession
   pc: FakePeerConnection
   mic: ReturnType<typeof fakeMicStream>
-  audio: { autoplay: boolean; muted: boolean; srcObject: unknown; play: ReturnType<typeof vi.fn>; pause: ReturnType<typeof vi.fn> }
+  audio: { autoplay: boolean; muted: boolean; volume: number; srcObject: unknown; play: ReturnType<typeof vi.fn>; pause: ReturnType<typeof vi.fn> }
   sdpFetch: ReturnType<typeof vi.fn>
   statuses: RealtimeStatus[]
   toolCalls: { callId: string; name: string; arguments: Record<string, unknown> }[]
   errors: RealtimeSessionError[]
   outputLevels: number[]
+  transcripts: string[]
   userSpeechStarts: number
 }
 
@@ -113,11 +114,12 @@ function makeHarness(overrides: {
 } = {}): Harness {
   const pc = new FakePeerConnection()
   const mic = fakeMicStream()
-  const audio = { autoplay: false, muted: false, srcObject: null as unknown, play: vi.fn().mockResolvedValue(undefined), pause: vi.fn() }
+  const audio = { autoplay: false, muted: false, volume: 1, srcObject: null as unknown, play: vi.fn().mockResolvedValue(undefined), pause: vi.fn() }
   const statuses: RealtimeStatus[] = []
   const toolCalls: Harness['toolCalls'] = []
   const errors: RealtimeSessionError[] = []
   const outputLevels: number[] = []
+  const transcripts: string[] = []
   let userSpeechStarts = 0
 
   const sdpFetch = vi.fn().mockResolvedValue({
@@ -147,6 +149,9 @@ function makeHarness(overrides: {
       },
       onOutputLevel: (level: number) => {
         outputLevels.push(level)
+      },
+      onUserTranscript: (t: string) => {
+        transcripts.push(t)
       }
     }
   })
@@ -161,6 +166,7 @@ function makeHarness(overrides: {
     toolCalls,
     errors,
     outputLevels,
+    transcripts,
     get userSpeechStarts() {
       return userSpeechStarts
     }
@@ -526,10 +532,11 @@ describe('RealtimeVoiceSession', () => {
     }
     const sourceNode = { connect: vi.fn(() => connects.push('source->analyser')) }
     const resume = vi.fn().mockResolvedValue(undefined)
+    let meteredStream: unknown = null
     class FakeAudioContext {
       destination = { kind: 'destination' }
       createAnalyser = () => analyserNode
-      createMediaStreamSource = () => sourceNode
+      createMediaStreamSource = (str: unknown) => { meteredStream = str; return sourceNode }
       createGain = () => gainNode
       resume = resume
       close = vi.fn().mockResolvedValue(undefined)
@@ -539,13 +546,16 @@ describe('RealtimeVoiceSession', () => {
     // meter recurse and monopolize the budget before the output meter starts.)
     const rafQueue: FrameRequestCallback[] = []
     const pump = (times: number) => { for (let i = 0; i < times; i++) { rafQueue.splice(0).forEach(cb => cb(0)) } }
+    const cloneTrack = { enabled: true, kind: 'audio', stop: vi.fn(), id: 'clone' }
+    const audibleTrack = { enabled: true, kind: 'audio', stop: vi.fn(), id: 'audible', clone: () => cloneTrack }
+    class FakeMediaStream { tracks: unknown[]; constructor(tracks: unknown[]) { this.tracks = tracks } getAudioTracks() { return this.tracks } getTracks() { return this.tracks } }
     vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('MediaStream', FakeMediaStream)
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => rafQueue.push(cb))
     vi.stubGlobal('cancelAnimationFrame', () => undefined)
 
     try {
-      const track = { enabled: true, kind: 'audio', stop: vi.fn() } as unknown as MediaStreamTrack
-      const remoteStream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream
+      const remoteStream = { getTracks: () => [audibleTrack], getAudioTracks: () => [audibleTrack] } as unknown as MediaStream
       const h = makeHarness()
       await h.session.connect()
       h.pc.dc!.open()
@@ -563,8 +573,62 @@ describe('RealtimeVoiceSession', () => {
       // and it actually produced a non-zero output level (orb speak-bloom fuel)
       expect(h.outputLevels.length).toBeGreaterThan(0)
       expect(Math.max(...h.outputLevels)).toBeGreaterThan(0)
+      // NON-PERTURBATION (continuous playback guard): WebAudio meters a CLONE,
+      // never the audible track. The <audio> element keeps the ORIGINAL stream,
+      // so nothing in the meter/animation layer can interrupt playback.
+      expect((meteredStream as { getAudioTracks(): { id: string }[] }).getAudioTracks()[0].id).toBe('clone')
+      expect(h.audio.srcObject).toBe(remoteStream)
     } finally {
       vi.unstubAllGlobals()
     }
+  })
+
+  it('STOP drift shield: transcription events drive stop detection even if the completed event is renamed', async () => {
+    const h = makeHarness()
+    await h.session.connect()
+    h.pc.dc!.open()
+    h.pc.dc!.emit({ type: 'session.updated' })
+
+    // canonical completed event
+    h.pc.dc!.emit({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'stop' })
+    // interim delta (earlier detection)
+    h.pc.dc!.emit({ type: 'conversation.item.input_audio_transcription.delta', delta: 'never' })
+    // a HYPOTHETICAL upstream rename — still transcription-shaped, still carries text
+    h.pc.dc!.emit({ type: 'conversation.item.input_audio_transcription.segment', transcript: 'never mind' })
+
+    // every path funnelled a transcript to the supervisor's stop matcher
+    expect(h.transcripts).toContain('stop')
+    expect(h.transcripts.some(t => /never mind/.test(t))).toBe(true)
+    // the renamed event was NOT silently dropped
+    expect(h.transcripts.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('STOP local cutoff: silenceOutputNow kills the element WITHOUT depending on the realtime API', async () => {
+    const remoteStream = { getTracks: () => [{ enabled: true, kind: 'audio', stop: vi.fn() }], getAudioTracks: () => [{ enabled: true, kind: 'audio', stop: vi.fn() }] } as unknown as MediaStream
+    const h = makeHarness()
+    await h.session.connect()
+    // remote audio element is playing
+    h.pc.ontrack?.({ streams: [remoteStream] } as unknown as RTCTrackEvent)
+    expect(h.audio.muted).toBe(false)
+
+    // local cutoff — no data channel / API involved
+    h.session.silenceOutputNow()
+
+    expect(h.audio.muted).toBe(true)
+    expect(h.audio.volume).toBe(0)
+    expect(h.audio.pause).toHaveBeenCalled()
+  })
+
+  it('STOP kill-message contract (drift pin): cancelResponse sends response.cancel THEN output_audio_buffer.clear', async () => {
+    const h = makeHarness()
+    await h.session.connect()
+    h.pc.dc!.open()
+    h.pc.dc!.emit({ type: 'session.updated' })
+    h.session.cancelResponse()
+    const sent = h.pc.dc!.parsedSent().map(e => e.type)
+    // If upstream ever changes these message names, this fails loudly in CI.
+    expect(sent).toContain('response.cancel')
+    expect(sent).toContain('output_audio_buffer.clear')
+    expect(sent.indexOf('response.cancel')).toBeLessThan(sent.indexOf('output_audio_buffer.clear'))
   })
 })

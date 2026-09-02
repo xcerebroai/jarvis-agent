@@ -859,14 +859,24 @@ function startOrb(canvas, tracker) {
 // drifting wrapper is its own compositor layer, so eight-plus plates hold
 // frame rate; motion starts only on real events (data arriving, a task
 // starting, a replay the owner asked for).
+// Saturated, luminous status hues — the board is readable by COLOR alone from
+// across the room. The dark base stays; the DATA and STATUS are the light.
 const STATUS_COLOR = {
-  Blocked: '#F87171',
-  'Build Mode': '#60A5FA',
-  Live: '#34D399',
-  'Payment Follow-Up': '#FBBF24',
-  Planning: '#7A8CA3',
-  Ready: '#93C5FD',
-  Testing: '#A78BFA'
+  Blocked: '#FF3B3B',
+  'Build Mode': '#3B9DFF',
+  Live: '#12E38A',
+  'Payment Follow-Up': '#FFB020',
+  Planning: '#8AA0BC',
+  Ready: '#5AB0FF',
+  Testing: '#B57BFF'
+}
+
+/** hex -> rgba(...) at alpha a, for status-tinted glows. */
+function withAlpha(hex, a) {
+  const h = String(hex).replace('#', '')
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16)
+
+  return 'rgba(' + ((n >> 16) & 255) + ', ' + ((n >> 8) & 255) + ', ' + (n & 255) + ', ' + a + ')'
 }
 
 const EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
@@ -888,6 +898,8 @@ const COCKPIT_CSS = `
 @keyframes jvShard { from { opacity: 0; } 40% { opacity: 0.9; } to { opacity: 0; } }
 @keyframes jvDollyIn { from { opacity: 0; transform: translateX(-50%) scale(1.55); filter: blur(8px); } to { opacity: 1; transform: translateX(-50%) scale(1); filter: blur(0); } }
 @keyframes jvHoloIn { from { opacity: 0; transform: translateX(-50%) scale(0.9); filter: blur(10px) brightness(2.2); } 60% { filter: blur(1px) brightness(1.4); } to { opacity: 1; transform: translateX(-50%) scale(1); filter: blur(0) brightness(1); } }
+@keyframes jvHandoffOut { from { opacity: 1; transform: translateX(-50%) translateZ(0) rotateY(0) scale(1); } to { opacity: 0; transform: translateX(-136%) translateZ(-220px) rotateY(34deg) scale(0.7); } }
+@keyframes jvHandoffIn { from { opacity: 0; transform: translateX(38%) translateZ(-260px) rotateY(-30deg) scale(0.72); } 70% { opacity: 1; } to { opacity: 1; transform: translateX(-50%) translateZ(0) rotateY(0) scale(1); } }
 .jv-board-recede { filter: blur(7px) brightness(0.45); transform: scale(0.94); transition: filter 320ms cubic-bezier(0.22,1,0.36,1), transform 320ms cubic-bezier(0.22,1,0.36,1); transform-origin: 50% 46%; }
 .jv-board-normal { filter: none; transform: none; transition: filter 320ms cubic-bezier(0.22,1,0.36,1), transform 320ms cubic-bezier(0.22,1,0.36,1); }
 .jv-chip { animation: jvBreathe 2.4s ease-in-out infinite; }
@@ -973,10 +985,40 @@ function CloseNode({ color, onClose }) {
 // card's board slot. Transform/opacity only, ~400ms open / 320ms close.
 const STAGE_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
 
-function Stage({ children, color = '#93C5FD', expandStyle = 'zoom', onClose, origin = null, width = 560 }) {
+function Stage({ children, color = '#93C5FD', contentKey = '', expandStyle = 'zoom', onClose, origin = null, width = 560 }) {
+  // The stage grows with the SIZE preset so bigger type never clips.
+  const W = Math.round(width * (0.62 + 0.38 * FS))
   const shown = useMaterialize(true)
   const lensRef = useRef(null)
   const closingRef = useRef(false)
+  // Task-to-task pass: when the focused project switches while the stage is
+  // open, the current lens is THROWN aside as the next rushes in from the
+  // other side (3D), the orb sweeping energy across the handoff.
+  const [exiting, setExiting] = useState(null)
+  const prevRef = useRef({ key: contentKey, node: children })
+
+  useEffect(() => {
+    if (prevRef.current.key && prevRef.current.key !== contentKey) {
+      setExiting({ id: prevRef.current.key, node: prevRef.current.node })
+      window.dispatchEvent(new CustomEvent('jarvis:orb-sweep'))
+      uiSound('materialize')
+
+      const el = lensRef.current
+
+      if (el) {
+        el.style.animation = 'jvHandoffIn 460ms cubic-bezier(0.16, 1, 0.3, 1) both'
+      }
+
+      const t = window.setTimeout(() => setExiting(null), 460)
+
+      prevRef.current = { key: contentKey, node: children }
+
+      return () => window.clearTimeout(t)
+    }
+
+    prevRef.current = { key: contentKey, node: children }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contentKey])
   const useFlip = expandStyle === 'zoom' && origin
 
   const invertTo = box => {
@@ -1123,19 +1165,23 @@ function Stage({ children, color = '#93C5FD', expandStyle = 'zoom', onClose, ori
   return jsx('div', {
     'data-jv-stage': '1',
     onClick: event => { event.stopPropagation(); requestClose() },
-    style: { backdropFilter: 'blur(3px)', background: expandStyle === 'dolly' ? 'rgba(1,2,6,0.5)' : 'rgba(1,2,6,0.66)', cursor: 'default', inset: 0, opacity: shown ? 1 : 0, pointerEvents: 'auto', position: 'absolute', transition: 'opacity 300ms', zIndex: 8 },
-    children: jsx('div', {
+    style: { backdropFilter: 'blur(3px)', background: expandStyle === 'dolly' ? 'rgba(1,2,6,0.5)' : 'rgba(1,2,6,0.66)', cursor: 'default', inset: 0, opacity: shown ? 1 : 0, perspective: '1700px', pointerEvents: 'auto', position: 'absolute', transition: 'opacity 300ms', zIndex: 8 },
+    children: [
+    exiting ? jsx('div', { key: 'exit-' + exiting.id, style: { animation: 'jvHandoffOut 440ms cubic-bezier(0.5, 0, 0.75, 0) both', left: '50%', maxHeight: '84%', pointerEvents: 'none', position: 'absolute', top: '8%', transformOrigin: 'center', width: W + 'px', zIndex: 9 }, children: jsx(Plate, { color, drift: false, shown: true, thread: false, width: W, children: exiting.node }) }) : null,
+    jsx('div', {
+      key: 'lens',
       'data-jv-interactive': '1',
       'data-jv-lens': '1',
       onClick: event => event.stopPropagation(),
       ref: lensRef,
-      style: { left: '50%', maxHeight: '80%', position: 'absolute', top: '9%', transform: 'translateX(-50%)', width: width + 'px', willChange: 'transform, filter, opacity' },
+      style: { left: '50%', maxHeight: '84%', position: 'absolute', top: '8%', transform: 'translateX(-50%)', width: W + 'px', willChange: 'transform, filter, opacity' },
       children: jsxs('div', { style: { position: 'relative' }, children: [
         shards,
-        jsx(Plate, { color, drift: false, shown, thread: false, width, children }),
+        jsx(Plate, { color, drift: false, scroll: true, shown, thread: false, width: W, children }),
         jsx(CloseNode, { color, onClose: requestClose })
       ] })
     })
+    ]
   })
 }
 
@@ -1304,15 +1350,18 @@ function slotStyle(pos, width) {
  * 'left' for right-column plates, 'right' for left-column plates, 'down' for
  * the center column, false for the rails. `phase` desyncs the drift.
  */
-function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = false, onClick, onHover, phase = 0, shown, style, thread = 'left', width }) {
+function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = false, onClick, onHover, phase = 0, scroll = false, shown, style, thread = 'left', vivid = true, width }) {
   const at = ms => delay + ms + 'ms'
   const interactive = Boolean(onClick)
   // Hover in the frame-and-light language: the lines brighten, the nodes glow.
-  const lineGlow = hot ? '0 0 10px rgba(191,219,254,0.9)' : GLOW
+  // Status is the light source: the bright frame edges carry the status hue and
+  // glow with it; the trailing edges stay a dim structural blue.
+  const bright = vivid ? color : LINE
+  const lineGlow = hot ? '0 0 12px ' + withAlpha(color, 0.95) : vivid ? '0 0 7px ' + withAlpha(color, 0.7) : GLOW
   const line = (pos, axis, ms, key, dim) =>
     jsx('div', {
       style: {
-        background: hot ? '#BFDBFE' : dim ? LINE_DIM : LINE, boxShadow: lineGlow, position: 'absolute', ...pos,
+        background: hot ? '#FFFFFF' : dim ? LINE_DIM : bright, boxShadow: dim ? GLOW : lineGlow, position: 'absolute', ...pos,
         transform: shown ? 'scale(1)' : axis === 'x' ? 'scaleX(0)' : 'scaleY(0)',
         transition: 'transform 640ms ' + EASE + ' ' + at(ms) + ', background 220ms, box-shadow 220ms'
       }
@@ -1345,6 +1394,7 @@ function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = fal
         jsxs('div', {
           style: { inset: 0, pointerEvents: 'none', position: 'absolute' },
           children: [
+            vivid ? jsx('div', { style: { background: 'radial-gradient(130% 110% at 6% 0%, ' + withAlpha(color, 0.16) + ', transparent 62%)', inset: 0, opacity: shown ? 1 : 0, pointerEvents: 'none', position: 'absolute', transition: 'opacity 600ms ' + at(120) } }) : null,
             threadStyle ? jsx('div', { style: { position: 'absolute', transition: 'transform 560ms ' + EASE + ' ' + at(40), ...threadStyle } }) : null,
             line({ height: '1px', left: '14px', right: 0, top: 0, transformOrigin: 'left' }, 'x', 60, 'top'),
             line({ height: '44px', right: 0, top: 0, transformOrigin: 'top', width: '1px' }, 'y', 420, 'right'),
@@ -1353,14 +1403,14 @@ function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = fal
             arc({ left: 0, top: 0 }, 'M 1 14 A 13 13 0 0 1 14 1', color, 520, 'tl', 16),
             arc({ bottom: 0, right: 0 }, 'M 1 35 A 34 34 0 0 0 35 1', LINE_DIM, 780, 'br', 36),
             node({ left: '-1px', top: '13px' }, 700, 'n0', color),
-            node({ left: '13px', top: '-1px' }, 820, 'n1', '#93C5FD'),
-            node({ right: '-1px', top: '43px' }, 940, 'n2', '#93C5FD'),
+            node({ left: '13px', top: '-1px' }, 820, 'n1', vivid ? color : '#93C5FD'),
+            node({ right: '-1px', top: '43px' }, 940, 'n2', vivid ? color : '#93C5FD'),
             node({ bottom: '-1px', right: '33px' }, 1060, 'n3', '#93C5FD'),
             ...[0, 1, 2, 3, 4].map(i =>
-              jsx('div', { style: { background: LINE, bottom: 0, height: '5px', left: 52 + i * 22 + 'px', opacity: shown ? 0.8 : 0, position: 'absolute', transition: 'opacity 300ms ' + at(1000 + i * 70), width: '1px' } }, 't' + i))
+              jsx('div', { style: { background: bright, boxShadow: vivid ? '0 0 5px ' + withAlpha(color, 0.6) : 'none', bottom: 0, height: '5px', left: 52 + i * 22 + 'px', opacity: shown ? 0.85 : 0, position: 'absolute', transition: 'opacity 300ms ' + at(1000 + i * 70), width: '1px' } }, 't' + i))
           ]
         }),
-        jsx('div', { style: { overflow: 'hidden', padding: '9px 14px 12px 15px', position: 'relative', maxHeight: 'inherit' }, children })
+        jsx('div', { style: { overflowX: 'hidden', overflowY: scroll ? 'auto' : 'hidden', padding: '9px 14px 12px 15px', position: 'relative', maxHeight: 'inherit' }, children })
       ]
     })
   })
@@ -1772,7 +1822,7 @@ function paymentLabel(raw) {
 function ProjectLens({ detail, shown }) {
   const f = projectFacts(detail)
   const tasks = Array.isArray(detail.task_list) ? detail.task_list : []
-  const facts = [['CLIENT', detail.client], ['COMPANY', detail.company], ['PAYMENT', paymentLabel(detail.payment)], ['OWNER', detail.owner], ['START', detail.start], ['TARGET', detail.target_end], ['BUILD', detail.build_type], ['DEADLINE', detail.deadline || detail.target_end], ['COUNTDOWN', f.countdown], ['STALE', f.stale], ['REVENUE', f.revenue]].filter(([, v]) => v && v !== '—').map(([k, v]) => [k, String(v).slice(0, 34)])
+  const facts = [['CLIENT', detail.client], ['COMPANY', detail.company], ['PAYMENT', paymentLabel(detail.payment)], ['OWNER', detail.owner], ['START', detail.start], ['TARGET', detail.target_end], ['BUILD', detail.build_type], ['DEADLINE', detail.deadline || detail.target_end], ['COUNTDOWN', f.countdown], ['STALE', f.stale], ['REVENUE', f.revenue]].filter(([, v]) => v && v !== '—').map(([k, v]) => [k, String(v).slice(0, 60)])
 
   return jsxs('div', { children: [
     jsx(Rail, { left: 'PROJECT DETAIL · ' + String(detail.priority || 'NORMAL').toUpperCase(), right: (detail.id ? String(detail.id) + ' · ' : '') + 'ESC · COLLAPSE' }),
@@ -1780,15 +1830,20 @@ function ProjectLens({ detail, shown }) {
       jsx('div', { style: { minWidth: 0 }, children: jsx(Title, { delay: 120, shown, size: 16, text: String(detail.name || '') }) }),
       jsx(Chip, { blink: detail.status === 'Blocked', color: f.color, delay: 400, shown, text: String(detail.status || '') })
     ] }),
-    detail.status === 'Blocked' && (detail.note || detail.notes) ? jsx(Hazard, { delay: 380, shown, text: String(detail.note || detail.notes).slice(0, 90) }) : null,
+    detail.status === 'Blocked' && (detail.note || detail.notes)
+      ? jsxs('div', { style: { alignItems: 'flex-start', background: 'repeating-linear-gradient(135deg, ' + withAlpha(f.color, 0.14) + ' 0 6px, transparent 6px 13px)', borderLeft: '2px solid ' + f.color, display: 'flex', gap: '7px', marginTop: '6px', opacity: shown ? 1 : 0, padding: '5px 8px', transition: 'opacity 300ms 380ms' }, children: [
+          jsx('span', { style: { animation: 'jvBlink 1.1s steps(2) infinite', color: f.color, flexShrink: 0, fontFamily: T.data, fontSize: fs(9) }, children: '\u25a0' }),
+          jsx('span', { style: { color: '#FCA5A5', fontSize: fs(10.5), lineHeight: 1.5 }, children: String(detail.note || detail.notes) })
+        ] })
+      : null,
     jsx(DataGrid, { cols: 4, delay: 500, items: facts, shown }),
     f.total ? jsx(ChargeBar, { color: f.color, delay: 700, done: f.done, shown, total: f.total }) : null,
-    (detail.note || detail.notes) && detail.status !== 'Blocked' ? jsx(Body, { color: f.color, delay: 800, shown, text: String(detail.note || detail.notes).slice(0, 300) }) : null,
+    (detail.note || detail.notes) && detail.status !== 'Blocked' ? jsx(Body, { color: f.color, delay: 800, shown, text: String(detail.note || detail.notes).slice(0, 600) }) : null,
     tasks.length
-      ? jsx('div', { style: { columnGap: '18px', columns: tasks.length > 6 ? 2 : 1, marginTop: '8px' }, children: tasks.slice(0, 14).map((task, i) =>
+      ? jsx('div', { style: { columnGap: '18px', columns: tasks.length > 6 ? 2 : 1, marginTop: '8px' }, children: tasks.map((task, i) =>
           jsxs('div', { style: { alignItems: 'center', breakInside: 'avoid', display: 'flex', fontSize: fs(10), gap: '8px', opacity: shown ? (task.done ? 0.55 : 1) : 0, padding: '2px 0', transition: 'opacity 250ms ' + (900 + i * 60) + 'ms' }, children: [
             jsx('div', { style: { background: task.done ? f.color : 'transparent', border: '1px solid ' + (task.done ? f.color : 'rgba(96,165,250,0.6)'), flexShrink: 0, height: '6px', width: '6px' } }),
-            jsx('span', { style: { overflow: 'hidden', textDecoration: task.done ? 'line-through' : 'none', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: String(task.label).slice(0, 60) })
+            jsx('span', { style: { overflow: 'hidden', textDecoration: task.done ? 'line-through' : 'none' }, children: String(task.label).slice(0, 90) })
           ] }, i)) })
       : null
   ] })
@@ -2114,12 +2169,20 @@ function HudPage() {
       setExpandStyle(EXPAND_KEY)
     }
 
+    const onSweep = () => {
+      // The orb hurls energy across the arc of the project handoff.
+      tracker.gesture = { at: performance.now(), kind: 'gather' }
+      tracker.thinkUntil = Math.max(tracker.thinkUntil, performance.now() + 600)
+    }
+
     window.addEventListener('jarvis:hud-scale', onScale)
     window.addEventListener('jarvis:hud-expand', onExpand)
+    window.addEventListener('jarvis:orb-sweep', onSweep)
 
     return () => {
       window.removeEventListener('jarvis:hud-scale', onScale)
       window.removeEventListener('jarvis:hud-expand', onExpand)
+      window.removeEventListener('jarvis:orb-sweep', onSweep)
     }
   }, [])
 
@@ -2715,7 +2778,7 @@ function HudPage() {
         ]
       }),
       // the managed Stage: whichever lens is open, with all three dismiss paths
-      lens ? jsx(Stage, { color: lens.color, expandStyle, onClose: collapse, origin: display.detail ? expandOrigin : null, width: lens.width, children: lens.node }, 'stage') : null,
+      lens ? jsx(Stage, { color: lens.color, contentKey: lensName || 'lens', expandStyle, onClose: collapse, origin: display.detail ? expandOrigin : null, width: lens.width, children: lens.node }, 'stage') : null,
       // metric tiles: real aggregates from the live board
       display.rows.length || display.status
         ? jsx(MetricTiles, { active: display.status ?? null, onToggle: status => window.dispatchEvent(new CustomEvent('jarvis:board-filter', { detail: { status } })), rows: display.rows, shown: boardShown })

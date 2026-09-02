@@ -93,6 +93,7 @@ const lookAtScreen = vi.fn(async (_o: unknown) => ({ answer: 'A terminal with a 
 const setRealtimeProjectFields = vi.fn(async (_o: unknown) => ({ fields: { priority: 'High' }, key: 'P-1', name: 'Alpha', ok: true }))
 
 vi.mock('@/hermes', () => ({
+  appendVoiceTrace: () => undefined,
   mintRealtimeToken: (o: unknown) => mintRealtimeToken(o),
   getRealtimeProjectReview: (o: unknown) => getRealtimeProjectReview(o),
   getRealtimeVoiceConfig: () => getRealtimeVoiceConfig(),

@@ -280,7 +280,14 @@ grep -q "import('@/lib/voice/voice-supervisor')" "$SRC/apps/desktop/src/main.tsx
 grep -q "probeBackendHealth" "$V/voice-supervisor.ts" && grep -q "voice.backend" "$V/voice-supervisor.ts" && ok "drift guard: startup backend health probe emits voice.backend" || bad "backend health probe missing"
 grep -q "def audio_input_rms" "$SRC/tools/wake_word.py" && grep -q "input level rms" "$SRC/tools/wake_word.py" && ok "detector logs input RMS periodically (deafness is visible)" || bad "RMS telemetry missing"
 grep -q "audio_rms" "$SRC/tui_gateway/server.py" && ok "wake.status carries audio_rms for the cockpit" || bad "audio_rms not on wake.status"
-grep -q "VOICE OFFLINE" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && grep -q "MIC \\u00b7 NO INPUT" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && ok "cockpit shows honest voice/mic health (never silent deafness that looks like listening)" || bad "honest-state surfacing missing from the cockpit"
+grep -q "VOICE OFFLINE" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && grep -q "NO INPUT" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && grep -q "deriveHealth" "$OVERLAY_DIR/plugins/jarvis-hud/plugin.js" && ok "cockpit shows honest voice/mic health (never silent deafness that looks like listening)" || bad "honest-state surfacing missing from the cockpit"
+
+echo "== 5l. P1 kill paths re-ported to the WebRTC GA interruption surface =="
+grep -q "output_audio_buffer.clear" "$V/realtime-session.ts" && ok "cancelResponse flushes buffered audio (output_audio_buffer.clear), not just response.cancel" || bad "buffered-audio flush missing — spoken stop leaves audio playing"
+grep -q "track.stop()" "$V/realtime-session.ts" && grep -q "hardStop" "$V/realtime-session.ts" && ok "hardStop stops the inbound remote track (client sink silenced)" || bad "hardStop does not stop the remote track"
+grep -q "STOP WORD matched" "$V/voice-supervisor.ts" && ok "stop-word path is traced (diagnosable)" || bad "stop-word trace missing"
+grep -q "/api/audio/realtime/trace" "$SRC/hermes_cli/web_server.py" && grep -q "def append_voice_trace" "$SRC/hermes_cli/realtime_voice.py" && ok "reliable voice-trace sink present (renderer console never reaches the log)" || bad "voice-trace sink missing"
+grep -q "cancelResponse flushes buffered audio" "$V/realtime-session.test.ts" && ok "interruption re-port has a regression test (drift guard)" || bad "interruption regression test missing"
 
 echo "== 6. revert restores an EXACT clean upstream =="
 bash "$APPLY" revert "$SRC" >/dev/null 2>&1

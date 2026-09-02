@@ -1362,3 +1362,28 @@ def mic_input_status() -> Dict[str, Any]:
             name = buf.value.decode("utf-8", "replace")
         cf.CFRelease(cfstr.value)
     return {"ok": True, "platform": "darwin", "capturing": bool(running.value) if running is not None else None, "device": name}
+
+
+# =============================================================================
+# P1-restore — VOICE TRACE: a reliable sink for the interruption/stop diagnosis
+# =============================================================================
+# Renderer console.warn does not reach the desktop log, so the stop-word / kill
+# path is invisible there. This appends renderer-supplied trace lines to
+# <home>/logs/voice-trace.log so a live "say stop" test is observable. Pure,
+# bounded, no secrets — the renderer sends short step labels only.
+
+def append_voice_trace(home: "Path", line: str) -> Dict[str, Any]:
+    import datetime as _dt
+
+    text = str(line or "").strip()[:400]
+    if not text:
+        return {"ok": True}
+    try:
+        log_dir = home / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = _dt.datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        with (log_dir / "voice-trace.log").open("a", encoding="utf-8") as handle:
+            handle.write(f"{stamp} [voice] {text}\n")
+    except OSError:
+        return {"ok": False}
+    return {"ok": True}

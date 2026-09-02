@@ -271,3 +271,16 @@ export function updateRealtimeBuild(id: string, patch: Partial<RealtimeBuildReco
     timeoutMs: 8_000
   })
 }
+
+/** Append one voice-path trace line to <home>/logs/voice-trace.log — the
+ *  reliable sink for the stop-word / interruption diagnosis (renderer
+ *  console.warn does not reach the desktop log). Fire-and-forget. */
+export function appendVoiceTrace(line: string): void {
+  void hermesApi<{ ok: boolean }>({
+    ...profileScoped(),
+    path: '/api/audio/realtime/trace',
+    method: 'POST',
+    body: { question: line },
+    timeoutMs: 4000
+  }).catch(() => undefined)
+}

@@ -410,8 +410,19 @@ export class RealtimeVoiceSession {
 
         break
 
-      case 'conversation.item.input_audio_transcription.completed':
-        this.deps.callbacks.onUserTranscript?.(String((event as { transcript?: string }).transcript ?? ''))
+      case 'conversation.item.input_audio_transcription.completed': {
+        const transcript = String((event as { transcript?: string }).transcript ?? '')
+
+        this.trace('user transcript: "' + transcript.slice(0, 60) + '"')
+        this.deps.callbacks.onUserTranscript?.(transcript)
+
+        break
+      }
+
+      // Newer transcription event names (GA delta/segment) — surface them too
+      // so the diagnosis shows if the completed event was renamed.
+      case 'conversation.item.input_audio_transcription.delta':
+        this.trace('transcription.delta (interim) received')
 
         break
 
@@ -479,6 +490,10 @@ export class RealtimeVoiceSession {
         break
 
       default:
+        if (/transcription|response\.cancel|audio_buffer|speech_|interrupt/i.test(type)) {
+          this.trace('event: ' + type)
+        }
+
         break
     }
   }
@@ -612,7 +627,11 @@ export class RealtimeVoiceSession {
   }
 
   private trace(line: string): void {
-    this.deps.callbacks.onTrace?.(line)
+    try {
+      this.deps.callbacks.onTrace?.(line)
+    } catch {
+      // tracing must never break the voice path
+    }
   }
 
   /** Enable/disable the live mic track without tearing the session down. The
@@ -635,7 +654,12 @@ export class RealtimeVoiceSession {
       return
     }
 
+    // Stop GENERATION and flush already-buffered output audio. On the WebRTC
+    // GA surface response.cancel alone leaves buffered audio playing, so the
+    // spoken "stop" felt ignored — output_audio_buffer.clear halts it now.
     this.send({ type: 'response.cancel' })
+    this.send({ type: 'output_audio_buffer.clear' })
+    this.trace('cancelResponse: response.cancel + output_audio_buffer.clear sent')
     this.setStatus('listening')
   }
 
@@ -790,21 +814,33 @@ export class RealtimeVoiceSession {
   /** Instant audible halt (<300ms): mute and pause the remote audio element
    *  synchronously, cancel the in-flight response, then close. */
   hardStop(): void {
-    if (this.remoteAudio) {
-      try {
-        this.remoteAudio.muted = true
-        this.remoteAudio.pause?.()
-      } catch {
-        // the close below still tears everything down
-      }
-    }
+    this.trace('hardStop: begin')
 
+    // 1) Cancel + flush server audio FIRST (fastest path to silence).
     try {
       this.cancelResponse()
     } catch {
       // ignore — closing anyway
     }
 
+    // 2) Silence the client sink: mute + pause the element AND stop the inbound
+    //    remote audio track, so buffered/played audio halts even if the element
+    //    is bypassed by the WebRTC layer.
+    if (this.remoteAudio) {
+      try {
+        this.remoteAudio.muted = true
+        this.remoteAudio.pause?.()
+        const stream = this.remoteAudio.srcObject as MediaStream | null
+
+        for (const track of stream?.getTracks?.() ?? []) {
+          try { track.stop() } catch { /* best effort */ }
+        }
+      } catch {
+        // the close below still tears everything down
+      }
+    }
+
+    this.trace('hardStop: audio silenced, closing session')
     this.close()
   }
 

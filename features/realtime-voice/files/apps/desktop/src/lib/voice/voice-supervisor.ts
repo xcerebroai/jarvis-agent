@@ -27,6 +27,7 @@ import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/st
 import { atom } from 'nanostores'
 
 import {
+  appendVoiceTrace,
   createRealtimeProject,
   getRealtimeProjectContext,
   getRealtimeProjectReview,
@@ -132,6 +133,10 @@ function voiceTrace(line: string): void {
   } catch {
     // tracing never breaks the voice path
   }
+
+  // Reliable sink: renderer console.warn does not reach the desktop log, so the
+  // stop-word / interruption path is diagnosed from <home>/logs/voice-trace.log.
+  appendVoiceTrace(line)
 }
 
 let config: RealtimeSessionConfigOptions = {}
@@ -1645,7 +1650,12 @@ async function connect(renewal: boolean): Promise<void> {
       onUserTranscript: transcript => {
         // P1: the stop word must stop — even while the assistant is mid-
         // sentence. Local enforcement; never trusts model barge-in.
-        if (isVoiceStopCommand(transcript)) {
+        const stop = isVoiceStopCommand(transcript)
+
+        voiceTrace('onUserTranscript "' + String(transcript).slice(0, 40) + '" stopWord=' + stop)
+
+        if (stop) {
+          voiceTrace('STOP WORD matched -> killVoice()')
           killVoice()
         }
       },
@@ -1820,6 +1830,8 @@ async function maybeAutoStart(): Promise<void> {
  *  spoken stop word and by the manual kills (orb click / Esc in the HUD,
  *  which dispatch the DOM event below from plugin code). */
 function killVoice(): void {
+  voiceTrace('killVoice() -> hardStop + teardown + wake re-arm')
+
   try {
     activeSession?.hardStop()
   } catch {

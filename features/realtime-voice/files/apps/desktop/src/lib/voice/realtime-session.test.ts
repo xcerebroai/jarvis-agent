@@ -96,7 +96,7 @@ interface Harness {
   session: RealtimeVoiceSession
   pc: FakePeerConnection
   mic: ReturnType<typeof fakeMicStream>
-  audio: { autoplay: boolean; srcObject: unknown; play: ReturnType<typeof vi.fn>; pause: ReturnType<typeof vi.fn> }
+  audio: { autoplay: boolean; muted: boolean; srcObject: unknown; play: ReturnType<typeof vi.fn>; pause: ReturnType<typeof vi.fn> }
   sdpFetch: ReturnType<typeof vi.fn>
   statuses: RealtimeStatus[]
   toolCalls: { callId: string; name: string; arguments: Record<string, unknown> }[]
@@ -112,7 +112,7 @@ function makeHarness(overrides: {
 } = {}): Harness {
   const pc = new FakePeerConnection()
   const mic = fakeMicStream()
-  const audio = { autoplay: false, srcObject: null as unknown, play: vi.fn().mockResolvedValue(undefined), pause: vi.fn() }
+  const audio = { autoplay: false, muted: false, srcObject: null as unknown, play: vi.fn().mockResolvedValue(undefined), pause: vi.fn() }
   const statuses: RealtimeStatus[] = []
   const toolCalls: Harness['toolCalls'] = []
   const errors: RealtimeSessionError[] = []
@@ -465,6 +465,42 @@ describe('RealtimeVoiceSession', () => {
 
     await expect(h.session.connect()).rejects.toMatchObject({ code: 'endpoint' })
     // A failed setup tears the session down.
+    expect(h.pc.closed).toBe(true)
+  })
+
+  // ── P1-restore: interruption re-ported to the WebRTC GA surface ──────────
+  it('cancelResponse flushes buffered audio (response.cancel + output_audio_buffer.clear), not just cancel', async () => {
+    const h = makeHarness()
+    await h.session.connect()
+    h.pc.dc!.open()
+    h.pc.dc!.emit({ type: 'session.updated' })
+
+    h.session.cancelResponse()
+    const sent = h.pc.dc!.parsedSent().map(e => e.type)
+    expect(sent).toContain('response.cancel')
+    expect(sent).toContain('output_audio_buffer.clear')
+    expect(sent.indexOf('response.cancel')).toBeLessThan(sent.indexOf('output_audio_buffer.clear'))
+  })
+
+  it('hardStop instantly silences: cancel+flush, mute the element, STOP the inbound track, then close', async () => {
+    const stopped: string[] = []
+    const track = { enabled: true, kind: 'audio', stop: () => stopped.push('remote') } as unknown as MediaStreamTrack
+    const remoteStream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream
+    const h = makeHarness()
+    await h.session.connect()
+    h.pc.dc!.open()
+    h.pc.dc!.emit({ type: 'session.updated' })
+    // simulate a remote audio track arriving (sets session.remoteAudio + srcObject)
+    h.pc.ontrack?.({ streams: [remoteStream] } as unknown as RTCTrackEvent)
+
+    h.session.hardStop()
+
+    const sent = h.pc.dc!.parsedSent().map(e => e.type)
+    expect(sent).toContain('response.cancel')
+    expect(sent).toContain('output_audio_buffer.clear')
+    expect(h.audio.pause).toHaveBeenCalled()
+    expect(h.audio.muted).toBe(true)
+    expect(stopped).toContain('remote')
     expect(h.pc.closed).toBe(true)
   })
 })

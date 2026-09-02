@@ -673,7 +673,7 @@ index fa5dd37243b..dba55229bfe 100644
  
  class OAuthSubmitBody(BaseModel):
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 9aad4fd8e43..3092e2d1c84 100644
+index 9aad4fd8e43..a8b1ed6a495 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
 @@ -1724,6 +1724,14 @@ from hermes_cli.web_models import (  # noqa: F401
@@ -691,7 +691,7 @@ index 9aad4fd8e43..3092e2d1c84 100644
      OAuthSubmitBody,
      BulkDeleteSessions,
      SessionImport,
-@@ -5603,6 +5611,399 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
+@@ -5603,6 +5611,412 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
      }
  
  
@@ -1052,6 +1052,19 @@ index 9aad4fd8e43..3092e2d1c84 100644
 +    return await loop.run_in_executor(
 +        None, lambda: realtime_voice.look_at_screen(home, config, api_key, body.question, app=body.app)
 +    )
++
++
++@app.post("/api/audio/realtime/trace")
++async def realtime_trace(payload: RealtimeLookRequest):
++    """Append a renderer voice-path trace line to <home>/logs/voice-trace.log.
++    Reuses RealtimeLookRequest.question as the line (bounded, no secrets) so no
++    new model is needed. Enables the live stop-word / interruption diagnosis
++    because renderer console.warn never reaches the desktop log."""
++    from hermes_cli import realtime_voice
++    from hermes_constants import get_hermes_home
++    from pathlib import Path as _P
++
++    return realtime_voice.append_voice_trace(_P(get_hermes_home()), payload.question)
 +
 +
 +@app.post("/api/audio/realtime/thumbnail")

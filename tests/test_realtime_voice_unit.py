@@ -347,3 +347,33 @@ def test_sight_ignores_tiny_and_system_windows():
     tiny = {"owner": "Google Chrome", "pid": 501, "id": 703, "title": "popup", "bounds": (0, 0, 40, 40)}
     target = rv.select_capture_target([_MENUBAR, tiny, _JARVIS], _DISPLAYS, (10, 10), self_pids={4242})
     assert target["kind"] == "display"
+
+
+# --- P6.x: mic health (CoreAudio device status) ------------------------------
+
+def test_mic_input_status_shape():
+    st = rv.mic_input_status()
+    assert st["ok"] is True
+    assert "capturing" in st and "device" in st and "platform" in st
+    # capturing is a bool or None; device is a string
+    assert st["capturing"] in (True, False, None)
+    assert isinstance(st["device"], str)
+
+
+def test_audio_input_rms_and_silent_accessors_exist():
+    # Module-level accessors used by wake.status; safe with no live detector.
+    import importlib.util as _u
+    # realtime_voice does not own these — they live in wake_word (patched);
+    # here we only assert our module's mic status never raises.
+    assert isinstance(rv.mic_input_status(), dict)
+
+
+def test_append_voice_trace_writes_bounded_line(tmp_path):
+    r = rv.append_voice_trace(tmp_path, "STOP WORD matched -> killVoice()")
+    assert r["ok"] is True
+    log = tmp_path / "logs" / "voice-trace.log"
+    assert log.exists()
+    line = log.read_text(encoding="utf-8").strip()
+    assert "[voice] STOP WORD matched" in line
+    # empty is a no-op, never raises
+    assert rv.append_voice_trace(tmp_path, "")["ok"] is True

@@ -48,6 +48,7 @@ const browser = await chromium.launch({ headless: true })
 const page = await browser.newPage({ viewport: { width: 1522, height: 910 } })
 const errors = []
 page.on('pageerror', e => errors.push(e.message)); page.on('console', m => { if (m.type() === 'error') errors.push(m.text()) })
+await page.addInitScript(() => { try { localStorage.setItem('jarvis:hud-scale','comfortable'); localStorage.setItem('jarvis:hud-expand','zoom') } catch (e) {} })
 await page.goto(base); await page.waitForTimeout(3500)
 const text = async () => (await page.locator('#root').innerText()).replace(/\s+/g, ' ')
 const stageOpen = () => page.locator('[data-jv-stage]').count()

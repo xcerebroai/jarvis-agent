@@ -10,7 +10,11 @@ import { fileURLToPath } from 'node:url'
 
 const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'plugins', 'jarvis-hud', 'plugin.js'), 'utf8')
 const block = src.slice(src.indexOf('// --- layout:begin'), src.indexOf('// --- layout:end'))
-const { computeCockpitLayout, slotStyle, GRID } = new Function(block + '\nreturn { computeCockpitLayout, slotStyle, GRID }')()
+// The block runs the scale engine (localStorage is guarded); pin the baseline
+// to Comfortable (4 slots) for the geometry scenarios, then also check XL.
+globalThis.localStorage = { getItem: () => null, setItem: () => {} }
+const { computeCockpitLayout, slotStyle, GRID, applyScalePreset } = new Function(block + '\nreturn { computeCockpitLayout, slotStyle, GRID, applyScalePreset }')()
+applyScalePreset('comfortable')
 
 const W = 1522, H = 910
 function rect(pos, width) {
@@ -69,4 +73,12 @@ assertNoOverlap(layout, 'no ops')
 // 6. Slot plates are height-capped to their slot so content cannot spill into the next one.
 assert.equal(slotStyle({ side: 'right', slot: 2 }, GRID.opWidth).maxHeight, 'calc(20.5% - 12px)')
 
-console.log('hud layout: 6 scenarios, no overlaps ✓')
+// 7. XL scale: fewer, wider slots still never overlap; cards past the budget hide.
+applyScalePreset('xl')
+layout = computeCockpitLayout({ cards: 8, detailOpen: false, ops: 1 })
+assert.equal(GRID.slots, 3, 'XL uses 3 slots per column')
+assertNoOverlap(layout, 'XL: one build + 8 cards')
+assert.ok(layout.hidden >= 2, 'XL shows fewer cards (more hidden)')
+applyScalePreset('comfortable')
+
+console.log('hud layout: 7 scenarios (incl. XL scale), no overlaps ✓')

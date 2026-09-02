@@ -31,14 +31,15 @@ const T = {
   label: "'Avenir Next Condensed', 'Bahnschrift', 'Arial Narrow', 'Inter', sans-serif"
 }
 
-const LABEL = {
+// LABEL is a getter so its fontSize tracks the live scale. Spreads still work.
+const LABEL_BASE = {
   color: 'rgba(122, 150, 183, 0.85)',
   fontFamily: T.label,
-  fontSize: '10px',
   fontWeight: 600,
   letterSpacing: '0.32em',
   textTransform: 'uppercase'
 }
+const LABEL = new Proxy(LABEL_BASE, { get: (t, k) => (k === 'fontSize' ? fs(10) : t[k]), ownKeys: t => [...Reflect.ownKeys(t), 'fontSize'], getOwnPropertyDescriptor: (t, k) => (k === 'fontSize' ? { configurable: true, enumerable: true, value: fs(10) } : Object.getOwnPropertyDescriptor(t, k)) })
 
 // --- UI sound family: synthesized kin of the wake chime. Soft ticks on
 // materialize/dissolve, a low bloom on boot. One switch kills everything;
@@ -884,6 +885,11 @@ const COCKPIT_CSS = `
 @keyframes jvFadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes jvDrift { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
 @keyframes jvBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }
+@keyframes jvShard { from { opacity: 0; } 40% { opacity: 0.9; } to { opacity: 0; } }
+@keyframes jvDollyIn { from { opacity: 0; transform: translateX(-50%) scale(1.55); filter: blur(8px); } to { opacity: 1; transform: translateX(-50%) scale(1); filter: blur(0); } }
+@keyframes jvHoloIn { from { opacity: 0; transform: translateX(-50%) scale(0.9); filter: blur(10px) brightness(2.2); } 60% { filter: blur(1px) brightness(1.4); } to { opacity: 1; transform: translateX(-50%) scale(1); filter: blur(0) brightness(1); } }
+.jv-board-recede { filter: blur(7px) brightness(0.45); transform: scale(0.94); transition: filter 320ms cubic-bezier(0.22,1,0.36,1), transform 320ms cubic-bezier(0.22,1,0.36,1); transform-origin: 50% 46%; }
+.jv-board-normal { filter: none; transform: none; transition: filter 320ms cubic-bezier(0.22,1,0.36,1), transform 320ms cubic-bezier(0.22,1,0.36,1); }
 .jv-chip { animation: jvBreathe 2.4s ease-in-out infinite; }
 .jv-drift { animation: jvDrift 7s ease-in-out infinite; will-change: transform; }
 .jv-sweep { background-image: linear-gradient(90deg, transparent 0%, rgba(147,197,253,0.6) 50%, transparent 100%); background-size: 38% 100%; background-repeat: no-repeat; animation: jvSweep 1.7s linear infinite; }
@@ -957,7 +963,7 @@ function CloseNode({ color, onClose }) {
     onClick: event => { event.stopPropagation(); onClose() },
     onMouseEnter: () => setHot(true),
     onMouseLeave: () => setHot(false),
-    style: { alignItems: 'center', background: hot ? '#FFFFFF' : '#02040A', border: '1px solid ' + (hot ? '#FFFFFF' : color), borderRadius: '50%', boxShadow: '0 0 ' + (hot ? '12px 2px ' : '6px ') + color, color: hot ? '#02040A' : color, cursor: 'pointer', display: 'flex', fontFamily: T.data, fontSize: '11px', height: '16px', justifyContent: 'center', lineHeight: 1, pointerEvents: 'auto', position: 'absolute', right: '-8px', top: '-8px', transition: 'background 180ms, box-shadow 180ms, color 180ms', width: '16px', zIndex: 2 },
+    style: { alignItems: 'center', background: hot ? '#FFFFFF' : '#02040A', border: '1px solid ' + (hot ? '#FFFFFF' : color), borderRadius: '50%', boxShadow: '0 0 ' + (hot ? '12px 2px ' : '6px ') + color, color: hot ? '#02040A' : color, cursor: 'pointer', display: 'flex', fontFamily: T.data, fontSize: fs(11), height: '16px', justifyContent: 'center', lineHeight: 1, pointerEvents: 'auto', position: 'absolute', right: '-8px', top: '-8px', transition: 'background 180ms, box-shadow 180ms, color 180ms', width: '16px', zIndex: 2 },
     children: '×'
   })
 }
@@ -967,10 +973,11 @@ function CloseNode({ color, onClose }) {
 // card's board slot. Transform/opacity only, ~400ms open / 320ms close.
 const STAGE_EASE = 'cubic-bezier(0.22, 1, 0.36, 1)'
 
-function Stage({ children, color = '#93C5FD', onClose, origin = null, width = 560 }) {
+function Stage({ children, color = '#93C5FD', expandStyle = 'zoom', onClose, origin = null, width = 560 }) {
   const shown = useMaterialize(true)
   const lensRef = useRef(null)
   const closingRef = useRef(false)
+  const useFlip = expandStyle === 'zoom' && origin
 
   const invertTo = box => {
     const el = lensRef.current
@@ -992,46 +999,83 @@ function Stage({ children, color = '#93C5FD', onClose, origin = null, width = 56
     return 'translateX(-50%) translate(' + dx + 'px, ' + dy + 'px) scale(' + scale + ')'
   }
 
-  // Open: place the stage AT the card, then play to the centered position.
+  // Open choreography per style.
   useEffect(() => {
     const el = lensRef.current
-    const from = invertTo(origin)
 
-    if (!el || !from) {
+    if (!el) {
       return
     }
 
-    el.style.transformOrigin = 'center center'
-    el.style.transition = 'none'
-    el.style.transform = from
-    el.style.opacity = '0.5'
-    void el.offsetWidth
-    el.style.transition = 'transform 400ms ' + STAGE_EASE + ', opacity 260ms ease'
-    el.style.transform = 'translateX(-50%)'
-    el.style.opacity = '1'
+    if (useFlip) {
+      const from = invertTo(origin)
+
+      if (!from) {
+        return
+      }
+
+      el.style.transformOrigin = 'center center'
+      el.style.transition = 'none'
+      el.style.transform = from
+      el.style.opacity = '0.5'
+      void el.offsetWidth
+      el.style.transition = 'transform 400ms ' + STAGE_EASE + ', opacity 260ms ease'
+      el.style.transform = 'translateX(-50%)'
+      el.style.opacity = '1'
+    } else if (expandStyle === 'hologram') {
+      el.style.animation = 'jvHoloIn 460ms ' + STAGE_EASE + ' both'
+    } else if (expandStyle === 'dolly') {
+      el.style.animation = 'jvDollyIn 320ms cubic-bezier(0.16, 1, 0.3, 1) both'
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Collapse: shrink back into the card's slot, then unmount.
   const requestClose = () => {
     if (closingRef.current) {
       return
     }
 
     const el = lensRef.current
-    const to = invertTo(origin)
 
-    if (!el || !to) {
-      onClose()
+    closingRef.current = true
+
+    if (el && useFlip) {
+      const to = invertTo(origin)
+
+      if (to) {
+        el.style.animation = 'none'
+        el.style.transition = 'transform 320ms ' + STAGE_EASE + ', opacity 300ms ease'
+        el.style.transform = to
+        el.style.opacity = '0'
+        window.setTimeout(onClose, 300)
+
+        return
+      }
+    }
+
+    if (el && expandStyle === 'dolly') {
+      el.style.animation = 'none'
+      el.style.transition = 'transform 260ms cubic-bezier(0.16,1,0.3,1), opacity 240ms ease, filter 260ms ease'
+      el.style.transform = 'translateX(-50%) scale(1.5)'
+      el.style.opacity = '0'
+      el.style.filter = 'blur(8px)'
+      window.setTimeout(onClose, 240)
 
       return
     }
 
-    closingRef.current = true
-    el.style.transition = 'transform 320ms ' + STAGE_EASE + ', opacity 300ms ease'
-    el.style.transform = to
-    el.style.opacity = '0'
-    window.setTimeout(onClose, 300)
+    if (el && expandStyle === 'hologram') {
+      el.style.animation = 'none'
+      el.style.transition = 'opacity 240ms ease, filter 260ms ease, transform 260ms ease'
+      el.style.transform = 'translateX(-50%) scale(0.92)'
+      el.style.opacity = '0'
+      el.style.filter = 'blur(10px) brightness(1.8)'
+      window.setTimeout(onClose, 240)
+
+      return
+    }
+
+    onClose()
   }
 
   useEffect(() => {
@@ -1045,19 +1089,49 @@ function Stage({ children, color = '#93C5FD', onClose, origin = null, width = 56
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onClose, origin])
+  }, [onClose, origin, expandStyle])
+
+  // Hologram: scattered filament fragments that fly in and dissolve as the real
+  // frame locks — the panel reads as constructed, not grown.
+  const shards = expandStyle !== 'hologram'
+    ? null
+    : jsx('div', {
+        style: { inset: '-30px', pointerEvents: 'none', position: 'absolute', zIndex: 1 },
+        children: Array.from({ length: 14 }, (_, i) => {
+          const seed = (i * 2654435761) % 1000 / 1000
+          const seed2 = (i * 40503) % 1000 / 1000
+          const horizontal = i % 2 === 0
+          const fromX = (seed - 0.5) * 260
+          const fromY = (seed2 - 0.5) * 220
+
+          return jsx('div', {
+            style: {
+              animation: 'jvShard ' + (360 + seed * 240) + 'ms ' + STAGE_EASE + ' ' + Math.round(seed2 * 160) + 'ms both',
+              background: 'linear-gradient(' + (horizontal ? '90deg' : '0deg') + ', transparent, ' + (i % 3 === 0 ? color : '#93C5FD') + ', transparent)',
+              boxShadow: '0 0 6px ' + color,
+              height: horizontal ? '1px' : 12 + seed * 26 + 'px',
+              left: 20 + seed * 60 + '%',
+              position: 'absolute',
+              top: 15 + seed2 * 60 + '%',
+              transform: 'translate(' + fromX + 'px, ' + fromY + 'px)',
+              width: horizontal ? 14 + seed2 * 30 + 'px' : '1px'
+            }
+          }, i)
+        })
+      })
 
   return jsx('div', {
     'data-jv-stage': '1',
     onClick: event => { event.stopPropagation(); requestClose() },
-    style: { backdropFilter: 'blur(3px)', background: 'rgba(1,2,6,0.66)', cursor: 'default', inset: 0, opacity: shown ? 1 : 0, pointerEvents: 'auto', position: 'absolute', transition: 'opacity 300ms', zIndex: 8 },
+    style: { backdropFilter: 'blur(3px)', background: expandStyle === 'dolly' ? 'rgba(1,2,6,0.5)' : 'rgba(1,2,6,0.66)', cursor: 'default', inset: 0, opacity: shown ? 1 : 0, pointerEvents: 'auto', position: 'absolute', transition: 'opacity 300ms', zIndex: 8 },
     children: jsx('div', {
       'data-jv-interactive': '1',
       'data-jv-lens': '1',
       onClick: event => event.stopPropagation(),
       ref: lensRef,
-      style: { left: '50%', maxHeight: '80%', position: 'absolute', top: '9%', transform: 'translateX(-50%)', width: width + 'px', willChange: 'transform' },
+      style: { left: '50%', maxHeight: '80%', position: 'absolute', top: '9%', transform: 'translateX(-50%)', width: width + 'px', willChange: 'transform, filter, opacity' },
       children: jsxs('div', { style: { position: 'relative' }, children: [
+        shards,
         jsx(Plate, { color, drift: false, shown, thread: false, width, children }),
         jsx(CloseNode, { color, onClose: requestClose })
       ] })
@@ -1097,7 +1171,98 @@ function useMaterialize(key) {
 // the right column top-down first, then the left; cards reflow into whatever
 // is left (left column first). The detail stage owns the whole right column
 // while it is open. Cards that no longer fit are hidden and counted.
+// Live type/card scale. Three presets the owner cycles on the glass; the pick
+// persists. XL is default (big + readable from a few feet back). fontScale
+// multiplies every size-bearing value via fs(); the card geometry (width,
+// slots, pitch) changes too so bigger cards mean FEWER, roomier cards.
+const SCALE_PRESETS = {
+  comfortable: { label: 'COMFORTABLE', fontScale: 1.0, cardWidth: 256, opWidth: 292, slots: 4, pitch: 20.5, top: 9 },
+  large: { label: 'LARGE', fontScale: 1.3, cardWidth: 300, opWidth: 320, slots: 4, pitch: 21, top: 7 },
+  xl: { label: 'XL', fontScale: 1.6, cardWidth: 348, opWidth: 360, slots: 3, pitch: 27, top: 8 }
+}
+const SCALE_ORDER = ['comfortable', 'large', 'xl']
+
+function loadScaleKey() {
+  try {
+    const k = localStorage.getItem('jarvis:hud-scale')
+
+    return SCALE_PRESETS[k] ? k : 'xl'
+  } catch {
+    return 'xl'
+  }
+}
+
+let SCALE_KEY = loadScaleKey()
+let FS = SCALE_PRESETS[SCALE_KEY].fontScale
+
+// The mutable grid the layout + slotStyle read; seeded from the active preset.
 const GRID = { cardWidth: 256, opWidth: 292, pitch: 20.5, side: 2.8, slots: 4, top: 9 }
+
+function applyScalePreset(key) {
+  const preset = SCALE_PRESETS[key] || SCALE_PRESETS.xl
+
+  SCALE_KEY = SCALE_PRESETS[key] ? key : 'xl'
+  FS = preset.fontScale
+  GRID.cardWidth = preset.cardWidth
+  GRID.opWidth = preset.opWidth
+  GRID.slots = preset.slots
+  GRID.pitch = preset.pitch
+  GRID.top = preset.top
+
+  try {
+    localStorage.setItem('jarvis:hud-scale', SCALE_KEY)
+  } catch {
+    // persistence optional
+  }
+}
+
+applyScalePreset(SCALE_KEY)
+
+function nextScaleKey() {
+  return SCALE_ORDER[(SCALE_ORDER.indexOf(SCALE_KEY) + 1) % SCALE_ORDER.length]
+}
+
+// Live EXPAND choreography: three styles the owner compares on the glass.
+//   zoom     — shared-element: the card lifts and scales up INTO the stage.
+//   hologram — the panel constructs from scattered filament fragments; orb surges.
+//   dolly    — the board recedes/blurs; the project rushes forward to fill the stage.
+const EXPAND_PRESETS = {
+  zoom: { label: 'ZOOM' },
+  hologram: { label: 'HOLOGRAM' },
+  dolly: { label: 'COMMAND FOCUS' }
+}
+const EXPAND_ORDER = ['zoom', 'hologram', 'dolly']
+
+function loadExpandStyle() {
+  try {
+    const k = localStorage.getItem('jarvis:hud-expand')
+
+    return EXPAND_PRESETS[k] ? k : 'zoom'
+  } catch {
+    return 'zoom'
+  }
+}
+
+let EXPAND_KEY = loadExpandStyle()
+
+function applyExpandStyle(key) {
+  EXPAND_KEY = EXPAND_PRESETS[key] ? key : 'zoom'
+
+  try {
+    localStorage.setItem('jarvis:hud-expand', EXPAND_KEY)
+  } catch {
+    // persistence optional
+  }
+}
+
+function nextExpandKey() {
+  return EXPAND_ORDER[(EXPAND_ORDER.indexOf(EXPAND_KEY) + 1) % EXPAND_ORDER.length]
+}
+
+/** Scale a base px size by the active font scale. */
+function fs(base) {
+  return Math.round(base * FS * 10) / 10 + 'px'
+}
 
 function computeCockpitLayout({ cards, detailOpen, ops }) {
   const column = side => Array.from({ length: GRID.slots }, (_, slot) => ({ side, slot }))
@@ -1204,7 +1369,7 @@ function Plate({ children, color = '#60A5FA', delay = 0, drift = true, hot = fal
 // --- B's guts, as reusable instruments -------------------------------------
 function Rail({ left, right }) {
   return jsxs('div', {
-    style: { color: 'rgba(122,150,183,0.95)', display: 'flex', fontFamily: T.data, fontSize: '8.5px', gap: '8px', justifyContent: 'space-between', letterSpacing: '0.18em', whiteSpace: 'nowrap' },
+    style: { color: 'rgba(122,150,183,0.95)', display: 'flex', fontFamily: T.data, fontSize: fs(8.5), gap: '8px', justifyContent: 'space-between', letterSpacing: '0.18em', whiteSpace: 'nowrap' },
     children: [jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis' }, children: left }), right ? jsx('span', { style: { flexShrink: 0 }, children: right }) : null]
   })
 }
@@ -1212,7 +1377,7 @@ function Rail({ left, right }) {
 /** Title: deciphers in while its tracking collapses from 0.34em to 0.08em. */
 function Title({ delay = 0, shown, size = 13.5, text }) {
   return jsx('div', {
-    style: { display: 'block', fontFamily: T.label, fontSize: size + 'px', fontWeight: 600, letterSpacing: shown ? '0.08em' : '0.34em', lineHeight: 1.2, marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: '0 0 12px rgba(96,165,250,0.45)', textTransform: 'uppercase', transition: 'letter-spacing 900ms ' + EASE + ' ' + delay + 'ms', whiteSpace: 'nowrap' },
+    style: { display: 'block', fontFamily: T.label, fontSize: fs(size), fontWeight: 600, letterSpacing: shown ? '0.08em' : '0.34em', lineHeight: 1.2, marginTop: '4px', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: '0 0 12px rgba(96,165,250,0.45)', textTransform: 'uppercase', transition: 'letter-spacing 900ms ' + EASE + ' ' + delay + 'ms', whiteSpace: 'nowrap' },
     children: shown ? jsx(Decipher, { delay: delay + 40, text }) : ' '
   })
 }
@@ -1221,7 +1386,7 @@ function Chip({ blink, color, delay = 0, shown, text }) {
   return jsxs('div', {
     style: { display: 'inline-flex', flexDirection: 'column', flexShrink: 0 },
     children: [
-      jsx('span', { className: blink ? 'jv-chip' : '', style: { color, fontFamily: T.label, fontSize: '9.5px', letterSpacing: '0.24em', opacity: shown ? 1 : 0, textShadow: '0 0 8px ' + color, textTransform: 'uppercase', transition: 'opacity 400ms ' + delay + 'ms' }, children: text }),
+      jsx('span', { className: blink ? 'jv-chip' : '', style: { color, fontFamily: T.label, fontSize: fs(9.5), letterSpacing: '0.24em', opacity: shown ? 1 : 0, textShadow: '0 0 8px ' + color, textTransform: 'uppercase', transition: 'opacity 400ms ' + delay + 'ms' }, children: text }),
       jsx('div', { style: { background: color, boxShadow: '0 0 5px ' + color, height: '1px', marginTop: '2px', transform: shown ? 'scaleX(1)' : 'scaleX(0)', transformOrigin: 'left', transition: 'transform 600ms ' + EASE + ' ' + (delay + 80) + 'ms' } })
     ]
   })
@@ -1229,10 +1394,10 @@ function Chip({ blink, color, delay = 0, shown, text }) {
 
 function Hazard({ delay = 0, shown, text }) {
   return jsxs('div', {
-    style: { alignItems: 'baseline', background: 'repeating-linear-gradient(135deg, rgba(248,113,113,0.14) 0 5px, transparent 5px 11px)', borderLeft: '2px solid #F87171', display: 'flex', fontSize: '10px', gap: '6px', lineHeight: 1.4, marginTop: '6px', opacity: shown ? 1 : 0, padding: '3px 7px', transition: 'opacity 300ms ' + delay + 'ms' },
+    style: { alignItems: 'baseline', background: 'repeating-linear-gradient(135deg, rgba(248,113,113,0.14) 0 5px, transparent 5px 11px)', borderLeft: '2px solid #F87171', display: 'flex', fontSize: fs(10), gap: '6px', lineHeight: 1.4, marginTop: '6px', opacity: shown ? 1 : 0, padding: '3px 7px', transition: 'opacity 300ms ' + delay + 'ms' },
     children: [
-      jsx('span', { style: { animation: 'jvBlink 1.1s steps(2) infinite', color: '#F87171', fontFamily: T.data, fontSize: '8px' }, children: '■' }),
-      jsx('span', { style: { color: '#FCA5A5', fontFamily: T.label, fontSize: '8px', letterSpacing: '0.22em' }, children: 'BLOCKED' }),
+      jsx('span', { style: { animation: 'jvBlink 1.1s steps(2) infinite', color: '#F87171', fontFamily: T.data, fontSize: fs(8) }, children: '■' }),
+      jsx('span', { style: { color: '#FCA5A5', fontFamily: T.label, fontSize: fs(8), letterSpacing: '0.22em' }, children: 'BLOCKED' }),
       shown ? jsx(Decipher, { delay: delay + 60, style: { color: 'rgba(217,230,242,0.9)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, text }) : null
     ]
   })
@@ -1243,8 +1408,8 @@ function DataGrid({ cols = 4, delay = 0, items, shown }) {
     style: { display: 'grid', gap: '3px 8px', gridTemplateColumns: 'repeat(' + cols + ', minmax(0, 1fr))', marginTop: '6px' },
     children: items.map(([label, value], i) =>
       jsxs('div', { style: { display: 'flex', flexDirection: 'column', gap: '1px', minWidth: 0 }, children: [
-        jsx('span', { style: { ...LABEL, fontSize: '8px', letterSpacing: '0.2em' }, children: label }),
-        jsx('span', { style: { color: INK, fontFamily: T.data, fontSize: '11.5px', fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: shown ? jsx(Decipher, { delay: delay + i * 70, text: String(value) }) : ' ' })
+        jsx('span', { style: { ...LABEL, fontSize: fs(8), letterSpacing: '0.2em' }, children: label }),
+        jsx('span', { style: { color: INK, fontFamily: T.data, fontSize: fs(11.5), fontVariantNumeric: 'tabular-nums', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: shown ? jsx(Decipher, { delay: delay + i * 70, text: String(value) }) : ' ' })
       ] }, label))
   })
 }
@@ -1259,7 +1424,7 @@ function ChargeBar({ color, delay = 0, done, shown, total }) {
     children: [
       jsx('div', { style: { display: 'flex', flex: 1, gap: '2px' }, children: Array.from({ length: SEG }, (_, i) =>
         jsx('div', { style: { background: i < filled ? color : 'rgba(59,130,246,0.16)', boxShadow: i < filled ? '0 0 4px ' + color : 'none', flex: 1, height: '5px', opacity: shown ? 1 : 0, transform: shown ? 'scaleY(1)' : 'scaleY(0)', transition: 'opacity 120ms ' + (delay + i * 40) + 'ms, transform 160ms ' + EASE + ' ' + (delay + i * 40) + 'ms' } }, i)) }),
-      jsx('span', { style: { color: 'rgba(147,197,253,0.95)', fontFamily: T.data, fontSize: '10.5px', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }, children: done + '/' + total + ' · ' + Math.round(frac * 100) + '%' })
+      jsx('span', { style: { color: 'rgba(147,197,253,0.95)', fontFamily: T.data, fontSize: fs(10.5), fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }, children: done + '/' + total + ' · ' + Math.round(frac * 100) + '%' })
     ]
   })
 }
@@ -1272,7 +1437,7 @@ function TickRow({ color, delay = 0, done, shown, total }) {
   return jsxs('div', {
     style: { alignItems: 'center', display: 'flex', gap: '6px', marginTop: '5px' },
     children: [
-      jsx('span', { style: { ...LABEL, fontSize: '6.5px' }, children: 'TASKS' }),
+      jsx('span', { style: { ...LABEL, fontSize: fs(6.5) }, children: 'TASKS' }),
       jsx('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '3px' }, children: Array.from({ length: Math.min(total, 24) }, (_, i) =>
         jsx('div', { style: { background: i < done ? color : 'transparent', border: '1px solid ' + (i < done ? color : 'rgba(96,165,250,0.5)'), height: '5px', opacity: shown ? 1 : 0, transition: 'opacity 150ms ' + (delay + i * 35) + 'ms', width: '5px' } }, i)) })
     ]
@@ -1285,8 +1450,8 @@ function NextLine({ delay = 0, label = 'NEXT ▸', shown, text }) {
   }
 
   return jsxs('div', {
-    style: { color: INK_DIM, fontSize: '10.5px', lineHeight: 1.4, marginTop: '5px', opacity: shown ? 1 : 0, overflow: 'hidden', textOverflow: 'ellipsis', transition: 'opacity 400ms ' + delay + 'ms', whiteSpace: 'nowrap' },
-    children: [jsx('span', { style: { color: '#93C5FD', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.22em', marginRight: '6px' }, children: label }), String(text).slice(0, 90)]
+    style: { color: INK_DIM, fontSize: fs(10.5), lineHeight: 1.4, marginTop: '5px', opacity: shown ? 1 : 0, overflow: 'hidden', textOverflow: 'ellipsis', transition: 'opacity 400ms ' + delay + 'ms', whiteSpace: 'nowrap' },
+    children: [jsx('span', { style: { color: '#93C5FD', fontFamily: T.label, fontSize: fs(8.5), letterSpacing: '0.22em', marginRight: '6px' }, children: label }), String(text).slice(0, 90)]
   })
 }
 
@@ -1384,7 +1549,7 @@ function elapsedLabel(sinceMs) {
 
 function Meta({ items }) {
   return jsx('div', {
-    style: { color: 'rgba(96,165,250,0.85)', display: 'flex', flexWrap: 'wrap', fontFamily: T.data, fontSize: '8px', fontVariantNumeric: 'tabular-nums', gap: '10px', letterSpacing: '0.1em', marginTop: '4px' },
+    style: { color: 'rgba(96,165,250,0.85)', display: 'flex', flexWrap: 'wrap', fontFamily: T.data, fontSize: fs(8), fontVariantNumeric: 'tabular-nums', gap: '10px', letterSpacing: '0.1em', marginTop: '4px' },
     children: items.filter(Boolean).map((item, i) => jsx('span', { style: { opacity: item.dim ? 0.5 : 0.85 }, children: item.text }, i))
   })
 }
@@ -1395,7 +1560,7 @@ function Body({ color, delay = 0, mono, shown, text }) {
   }
 
   return jsx('div', {
-    style: { borderLeft: '1px solid ' + (color || LINE_DIM), color: mono ? INK_DIM : 'rgba(217,230,242,0.95)', fontFamily: mono ? T.data : 'inherit', fontSize: mono ? '9.5px' : '11.5px', lineHeight: 1.55, marginTop: '8px', maxHeight: '72px', opacity: shown ? 1 : 0, overflow: 'hidden', paddingLeft: '9px', transition: 'opacity 400ms ' + delay + 'ms', whiteSpace: 'pre-wrap' },
+    style: { borderLeft: '1px solid ' + (color || LINE_DIM), color: mono ? INK_DIM : 'rgba(217,230,242,0.95)', fontFamily: mono ? T.data : 'inherit', fontSize: mono ? fs(9.5) : fs(11.5), lineHeight: 1.55, marginTop: '8px', maxHeight: '72px', opacity: shown ? 1 : 0, overflow: 'hidden', paddingLeft: '9px', transition: 'opacity 400ms ' + delay + 'ms', whiteSpace: 'pre-wrap' },
     children: text
   })
 }
@@ -1419,7 +1584,7 @@ function TaskPlate({ clock, onExpand, pos, task }) {
       jsx(Meta, { items: [{ text: 'T+' + elapsedLabel(task.startedAt) }, task.sessionId ? { text: 'SESSION LINKED' } : { dim: true, text: 'LINKING…' }] }),
       task.status === 'running' ? jsx(Sweep, {}) : null,
       task.tools.length
-        ? jsx('div', { style: { color: task.tools.includes('browser_vision') ? '#93C5FD' : 'rgba(122,150,183,0.9)', fontFamily: T.label, fontSize: '7.5px', letterSpacing: '0.2em', marginTop: '6px', textTransform: 'uppercase' }, children: 'TOOLS · ' + task.tools.map(t => t.replace(/_/g, ' ')).join(' · ') })
+        ? jsx('div', { style: { color: task.tools.includes('browser_vision') ? '#93C5FD' : 'rgba(122,150,183,0.9)', fontFamily: T.label, fontSize: fs(7.5), letterSpacing: '0.2em', marginTop: '6px', textTransform: 'uppercase' }, children: 'TOOLS · ' + task.tools.map(t => t.replace(/_/g, ' ')).join(' · ') })
         : null,
       task.media.length
         ? jsx('div', { style: { display: 'flex', gap: '6px', marginTop: '6px' }, children: task.media.map((m, i) =>
@@ -1483,7 +1648,7 @@ function NavControl({ label, onClick }) {
     onClick: event => { event.stopPropagation(); onClick() },
     onMouseEnter: () => setHot(true),
     onMouseLeave: () => setHot(false),
-    style: { borderBottom: '1px solid ' + (hot ? '#FFFFFF' : 'rgba(147,197,253,0.6)'), color: hot ? '#FFFFFF' : '#93C5FD', cursor: 'pointer', display: 'inline-block', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.28em', marginRight: '18px', marginTop: '10px', paddingBottom: '2px', pointerEvents: 'auto', textShadow: '0 0 8px rgba(96,165,250,0.6)', transition: 'color 180ms, border-color 180ms' },
+    style: { borderBottom: '1px solid ' + (hot ? '#FFFFFF' : 'rgba(147,197,253,0.6)'), color: hot ? '#FFFFFF' : '#93C5FD', cursor: 'pointer', display: 'inline-block', fontFamily: T.label, fontSize: fs(8.5), letterSpacing: '0.28em', marginRight: '18px', marginTop: '10px', paddingBottom: '2px', pointerEvents: 'auto', textShadow: '0 0 8px rgba(96,165,250,0.6)', transition: 'color 180ms, border-color 180ms' },
     children: label
   })
 }
@@ -1505,16 +1670,16 @@ function OperationLens({ kind, record, shown }) {
     kind === 'build' && record.goal ? jsx(NextLine, { delay: 250, label: 'GOAL ▸', shown, text: String(record.goal) }) : null,
     jsxs('div', { style: { display: 'grid', gap: '0 18px', gridTemplateColumns: '190px 1fr', marginTop: '8px' }, children: [
       jsxs('div', { children: [
-        jsx('div', { style: { ...LABEL, fontSize: '7px' }, children: 'STATUS TIMELINE' }),
+        jsx('div', { style: { ...LABEL, fontSize: fs(7) }, children: 'STATUS TIMELINE' }),
         ...(timeline.length ? timeline.slice(-12) : [{ at: '—', text: 'no events yet' }]).map((entry, i) =>
-          jsxs('div', { style: { color: INK, display: 'flex', fontFamily: T.data, fontSize: '8.5px', gap: '8px', opacity: shown ? 1 : 0, padding: '2px 0', transition: 'opacity 250ms ' + (300 + i * 50) + 'ms' }, children: [
+          jsxs('div', { style: { color: INK, display: 'flex', fontFamily: T.data, fontSize: fs(8.5), gap: '8px', opacity: shown ? 1 : 0, padding: '2px 0', transition: 'opacity 250ms ' + (300 + i * 50) + 'ms' }, children: [
             jsx('span', { style: { color: 'rgba(96,165,250,0.8)', flexShrink: 0 }, children: entry.at }),
             jsx('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: entry.text })
           ] }, i))
       ] }),
       jsxs('div', { style: { minWidth: 0 }, children: [
-        jsx('div', { style: { ...LABEL, fontSize: '7px' }, children: 'STREAM · LIVE OUTPUT' }),
-        jsx('div', { style: { color: INK_DIM, fontFamily: T.data, fontSize: '8.5px', lineHeight: 1.5, maxHeight: '220px', opacity: shown ? 1 : 0, overflowY: 'auto', paddingRight: '4px', pointerEvents: 'auto', transition: 'opacity 300ms 400ms', whiteSpace: 'pre-wrap' }, children: history ? history.slice(-3000) : '(nothing streamed yet)' })
+        jsx('div', { style: { ...LABEL, fontSize: fs(7) }, children: 'STREAM · LIVE OUTPUT' }),
+        jsx('div', { style: { color: INK_DIM, fontFamily: T.data, fontSize: fs(8.5), lineHeight: 1.5, maxHeight: '220px', opacity: shown ? 1 : 0, overflowY: 'auto', paddingRight: '4px', pointerEvents: 'auto', transition: 'opacity 300ms 400ms', whiteSpace: 'pre-wrap' }, children: history ? history.slice(-3000) : '(nothing streamed yet)' })
       ] })
     ] }),
     record.summary || record.last_summary ? jsx(Body, { color, delay: 300, shown, text: String(record.summary || record.last_summary).slice(0, 600) }) : null,
@@ -1550,7 +1715,7 @@ function SightPlate({ onExpand, sight }) {
       sight.status === 'capturing' ? jsx(Sweep, {}) : null,
       sight.thumbnail ? jsx('img', { alt: '', src: sight.thumbnail, style: { animation: 'jvFadeUp 400ms both', border: '1px solid rgba(96,165,250,0.4)', display: 'block', marginTop: '8px', maxHeight: '150px', objectFit: 'cover', objectPosition: 'top', width: '100%' } }) : null,
       sight.status === 'done' && sight.answer ? jsx(Body, { color: 'rgba(52,211,153,0.6)', delay: 150, shown, text: String(sight.answer).slice(0, 360) }) : null,
-      sight.status === 'failed' ? jsx('div', { style: { color: '#F87171', fontSize: '10px', marginTop: '6px' }, children: sight.permission ? 'Screen Recording permission needed — enable JARVIS in System Settings › Privacy & Security' : String(sight.error).slice(0, 160) }) : null,
+      sight.status === 'failed' ? jsx('div', { style: { color: '#F87171', fontSize: fs(10), marginTop: '6px' }, children: sight.permission ? 'Screen Recording permission needed — enable JARVIS in System Settings › Privacy & Security' : String(sight.error).slice(0, 160) }) : null,
       sight.status === 'done'
         ? jsx(DataGrid, { cols: 5, delay: 200, items: [['LOOK', (sight.latencyMs / 1000).toFixed(1) + 's'], ['CAPTURE', (sight.captureMs ?? '?') + 'ms'], ['VISION', (sight.analyzeMs ?? '?') + 'ms'], ['COST', typeof sight.costUsd === 'number' ? '$' + sight.costUsd.toFixed(4) + ' est' : 'n/a'], ['TOKENS', sight.usage?.total_tokens ? String(sight.usage.total_tokens) : '—']], shown })
         : null
@@ -1579,7 +1744,7 @@ function JudgmentPlate({ judgment, onExpand }) {
         ? jsxs('div', { children: [jsx(Sweep, {}), jsx(Meta, { items: [{ text: 'T+' + Math.max(0, Math.floor((Date.now() - judgment.at) / 1000)) + 's · BUDGET 5–10s' }] })] })
         : null,
       judgment.status === 'done' ? jsx(Body, { color: 'rgba(52,211,153,0.6)', delay: 150, shown, text: String(judgment.answer).slice(0, 460) }) : null,
-      judgment.status === 'failed' ? jsx('div', { style: { color: '#F87171', fontSize: '10px', marginTop: '6px' }, children: String(judgment.error).slice(0, 120) }) : null,
+      judgment.status === 'failed' ? jsx('div', { style: { color: '#F87171', fontSize: fs(10), marginTop: '6px' }, children: String(judgment.error).slice(0, 120) }) : null,
       judgment.status !== 'reasoning' && typeof judgment.elapsedMs === 'number'
         ? jsx(Meta, { items: [{ text: 'T ' + (judgment.elapsedMs / 1000).toFixed(1) + 's' + (judgment.elapsedMs > 10_000 ? ' · OVER BUDGET' : ' · WITHIN BUDGET') }] })
         : null
@@ -1621,7 +1786,7 @@ function ProjectLens({ detail, shown }) {
     (detail.note || detail.notes) && detail.status !== 'Blocked' ? jsx(Body, { color: f.color, delay: 800, shown, text: String(detail.note || detail.notes).slice(0, 300) }) : null,
     tasks.length
       ? jsx('div', { style: { columnGap: '18px', columns: tasks.length > 6 ? 2 : 1, marginTop: '8px' }, children: tasks.slice(0, 14).map((task, i) =>
-          jsxs('div', { style: { alignItems: 'center', breakInside: 'avoid', display: 'flex', fontSize: '10px', gap: '8px', opacity: shown ? (task.done ? 0.55 : 1) : 0, padding: '2px 0', transition: 'opacity 250ms ' + (900 + i * 60) + 'ms' }, children: [
+          jsxs('div', { style: { alignItems: 'center', breakInside: 'avoid', display: 'flex', fontSize: fs(10), gap: '8px', opacity: shown ? (task.done ? 0.55 : 1) : 0, padding: '2px 0', transition: 'opacity 250ms ' + (900 + i * 60) + 'ms' }, children: [
             jsx('div', { style: { background: task.done ? f.color : 'transparent', border: '1px solid ' + (task.done ? f.color : 'rgba(96,165,250,0.6)'), flexShrink: 0, height: '6px', width: '6px' } }),
             jsx('span', { style: { overflow: 'hidden', textDecoration: task.done ? 'line-through' : 'none', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: String(task.label).slice(0, 60) })
           ] }, i)) })
@@ -1641,8 +1806,8 @@ function SightLens({ shown, sight }) {
     jsx(Title, { delay: 100, shown, size: 12, text: String(sight.question || 'What is on screen?').slice(0, 90) }),
     target ? jsx(NextLine, { delay: 250, label: 'TARGET ▸', shown, text: target.kind === 'window' ? String(target.app || 'window') + (target.title ? ' — ' + target.title : '') : 'display ' + (target.display_index || 1) + (target.includes_self ? ' (includes JARVIS)' : '') }) : null,
     sight.thumbnail ? jsx('img', { alt: '', src: sight.thumbnail, style: { border: '1px solid rgba(96,165,250,0.4)', display: 'block', marginTop: '8px', maxHeight: '260px', objectFit: 'contain', objectPosition: 'left top', width: '100%' } }) : null,
-    sight.answer ? jsx('div', { style: { borderLeft: '1px solid ' + color, color: 'rgba(217,230,242,0.95)', fontSize: '10.5px', lineHeight: 1.55, marginTop: '8px', maxHeight: '160px', overflowY: 'auto', paddingLeft: '9px', pointerEvents: 'auto', whiteSpace: 'pre-wrap' }, children: String(sight.answer) }) : null,
-    sight.error ? jsx('div', { style: { color: '#F87171', fontSize: '10px', marginTop: '6px' }, children: String(sight.error) }) : null,
+    sight.answer ? jsx('div', { style: { borderLeft: '1px solid ' + color, color: 'rgba(217,230,242,0.95)', fontSize: fs(10.5), lineHeight: 1.55, marginTop: '8px', maxHeight: '160px', overflowY: 'auto', paddingLeft: '9px', pointerEvents: 'auto', whiteSpace: 'pre-wrap' }, children: String(sight.answer) }) : null,
+    sight.error ? jsx('div', { style: { color: '#F87171', fontSize: fs(10), marginTop: '6px' }, children: String(sight.error) }) : null,
     sight.status === 'done'
       ? jsx(DataGrid, { cols: 5, delay: 200, items: [['LOOK', (sight.latencyMs / 1000).toFixed(1) + 's'], ['CAPTURE', (sight.captureMs ?? '?') + 'ms'], ['VISION', (sight.analyzeMs ?? '?') + 'ms'], ['COST', typeof sight.costUsd === 'number' ? '$' + sight.costUsd.toFixed(4) + ' est' : 'n/a'], ['MODEL', String(sight.model || '—')]], shown })
       : null
@@ -1658,8 +1823,8 @@ function JudgmentLens({ judgment, shown }) {
       jsx(Chip, { blink: judgment.status === 'reasoning', color, delay: 200, shown, text: judgment.status === 'reasoning' ? 'REASONING' : judgment.status === 'done' ? 'ANSWERED' : 'NO ANSWER' })
     ] }),
     jsx(Title, { delay: 100, shown, size: 12, text: String(judgment.question || '').slice(0, 90) }),
-    judgment.answer ? jsx('div', { style: { borderLeft: '1px solid ' + color, color: 'rgba(217,230,242,0.95)', fontSize: '10.5px', lineHeight: 1.55, marginTop: '8px', maxHeight: '260px', overflowY: 'auto', paddingLeft: '9px', pointerEvents: 'auto', whiteSpace: 'pre-wrap' }, children: String(judgment.answer) }) : null,
-    judgment.error ? jsx('div', { style: { color: '#F87171', fontSize: '10px', marginTop: '6px' }, children: String(judgment.error) }) : null,
+    judgment.answer ? jsx('div', { style: { borderLeft: '1px solid ' + color, color: 'rgba(217,230,242,0.95)', fontSize: fs(10.5), lineHeight: 1.55, marginTop: '8px', maxHeight: '260px', overflowY: 'auto', paddingLeft: '9px', pointerEvents: 'auto', whiteSpace: 'pre-wrap' }, children: String(judgment.answer) }) : null,
+    judgment.error ? jsx('div', { style: { color: '#F87171', fontSize: fs(10), marginTop: '6px' }, children: String(judgment.error) }) : null,
     typeof judgment.elapsedMs === 'number' ? jsx(Meta, { items: [{ text: 'T ' + (judgment.elapsedMs / 1000).toFixed(1) + 's' + (judgment.elapsedMs > 10_000 ? ' · OVER BUDGET' : ' · WITHIN BUDGET') }] }) : null
   ] })
 }
@@ -1715,8 +1880,8 @@ function MetricTiles({ active, onToggle, rows, shown }) {
         style: { cursor: filterable ? 'pointer' : 'default', display: 'flex', flexDirection: 'column', gap: '3px', minWidth: '52px', opacity: shown ? (active && !isActive && filterable ? 0.55 : 1) : 0, pointerEvents: filterable ? 'auto' : 'none', transition: 'opacity 300ms ' + (shown ? 200 + i * 70 : 0) + 'ms' },
         children: [
           jsxs('div', { style: { alignItems: 'baseline', display: 'flex', gap: '6px' }, children: [
-            jsx('span', { style: { color: isActive || hot ? '#FFFFFF' : tile.color, fontFamily: T.data, fontSize: '12px', fontVariantNumeric: 'tabular-nums', fontWeight: 600, textShadow: '0 0 ' + (isActive || hot ? '14px ' : '8px ') + tile.color, transition: 'color 200ms, text-shadow 200ms' }, children: String(tile.value) }),
-            jsx('span', { style: { ...LABEL, color: isActive ? tile.color : LABEL.color, fontSize: '7px', letterSpacing: '0.22em' }, children: tile.label + (isActive ? ' ·ONLY' : '') })
+            jsx('span', { style: { color: isActive || hot ? '#FFFFFF' : tile.color, fontFamily: T.data, fontSize: fs(12), fontVariantNumeric: 'tabular-nums', fontWeight: 600, textShadow: '0 0 ' + (isActive || hot ? '14px ' : '8px ') + tile.color, transition: 'color 200ms, text-shadow 200ms' }, children: String(tile.value) }),
+            jsx('span', { style: { ...LABEL, color: isActive ? tile.color : LABEL.color, fontSize: fs(7), letterSpacing: '0.22em' }, children: tile.label + (isActive ? ' ·ONLY' : '') })
           ] }),
           jsx('div', { style: { background: tile.color, boxShadow: '0 0 ' + (isActive || hot ? '10px ' : '5px ') + tile.color, height: isActive ? '2px' : '1px', opacity: isActive || hot ? 1 : 0.8, transform: shown ? 'scaleX(1)' : 'scaleX(0)', transformOrigin: 'left', transition: 'transform 600ms ' + EASE + ' ' + (300 + i * 70) + 'ms, box-shadow 200ms, height 200ms' } })
         ]
@@ -1746,9 +1911,9 @@ function JobsRail({ jobs, onExpand }) {
     children: jsxs('div', { children: [
       jsx(Rail, { left: 'SCHEDULED OPERATIONS', right: jobs.length + ' JOB' + (jobs.length === 1 ? '' : 'S') }),
       ...jobs.map((job, i) =>
-        jsxs(RailRow, { delay: 200 + i * 90, onClick: () => onExpand(job), shown, style: { fontSize: '9.5px', justifyContent: 'space-between', padding: '3px 0 0 5px' }, children: [
+        jsxs(RailRow, { delay: 200 + i * 90, onClick: () => onExpand(job), shown, style: { fontSize: fs(9.5), justifyContent: 'space-between', padding: '3px 0 0 5px' }, children: [
           jsx('span', { style: { color: INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: String(job.name || job.id || '').slice(0, 30) }),
-          jsx('span', { style: { color: 'rgba(96,165,250,0.85)', fontFamily: T.data, fontSize: '8.5px', whiteSpace: 'nowrap' }, children: String(job.schedule_display || job.schedule?.display || '').slice(0, 12) })
+          jsx('span', { style: { color: 'rgba(96,165,250,0.85)', fontFamily: T.data, fontSize: fs(8.5), whiteSpace: 'nowrap' }, children: String(job.schedule_display || job.schedule?.display || '').slice(0, 12) })
         ] }, job.id || i))
     ] })
   })
@@ -1762,10 +1927,10 @@ function ActivityRail({ activity, onExpand }) {
     children: jsxs('div', { children: [
       jsx(Rail, { left: 'LIVE ACTIVITY' }),
       ...activity.map(item =>
-        jsxs(RailRow, { delay: 0, onClick: () => onExpand(item), shown: true, style: { animation: 'jvFadeUp 320ms both', fontSize: '9px', padding: '2px 0 0 5px' }, children: [
-          jsx('span', { style: { color: 'rgba(96,165,250,0.75)', fontFamily: T.data, fontSize: '8px' }, children: item.at }),
-          jsx('span', { style: { color: 'rgba(217,230,242,0.9)', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.14em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: item.label }),
-          item.detail ? jsx('span', { style: { color: 'rgba(96,165,250,0.8)', fontFamily: T.data, fontSize: '7.5px', marginLeft: 'auto', whiteSpace: 'nowrap' }, children: item.detail }) : null
+        jsxs(RailRow, { delay: 0, onClick: () => onExpand(item), shown: true, style: { animation: 'jvFadeUp 320ms both', fontSize: fs(9), padding: '2px 0 0 5px' }, children: [
+          jsx('span', { style: { color: 'rgba(96,165,250,0.75)', fontFamily: T.data, fontSize: fs(8) }, children: item.at }),
+          jsx('span', { style: { color: 'rgba(217,230,242,0.9)', fontFamily: T.label, fontSize: fs(8.5), letterSpacing: '0.14em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, children: item.label }),
+          item.detail ? jsx('span', { style: { color: 'rgba(96,165,250,0.8)', fontFamily: T.data, fontSize: fs(7.5), marginLeft: 'auto', whiteSpace: 'nowrap' }, children: item.detail }) : null
         ] }, item.key))
     ] })
   })
@@ -1805,6 +1970,8 @@ function HudPage() {
   const [jobs, setJobs] = useState([])
   const [activity, setActivity] = useState([])
   const [isFull, setIsFull] = useState(false)
+  const [scaleTick, setScaleTick] = useState(0)
+  const [expandStyle, setExpandStyle] = useState(loadExpandStyle())
   // P5.1 instruments: sight (one look at a time), judgment (one at a time),
   // and the build dock (persistent, restart-surviving plates).
   const [sight, setSight] = useState(null)
@@ -1931,6 +2098,28 @@ function HudPage() {
     return () => {
       timers.forEach(t => window.clearTimeout(t))
       window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: false } }))
+    }
+  }, [])
+
+  useEffect(() => {
+    // Live cockpit switches (size + expand style): the ⌘K commands dispatch
+    // these; the top-rail chips dispatch them too. Re-render so every fs() and
+    // the grid pick up the new scale immediately, at true size.
+    const onScale = event => {
+      applyScalePreset(event.detail?.key || nextScaleKey())
+      setScaleTick(t => t + 1)
+    }
+    const onExpand = event => {
+      applyExpandStyle(event.detail?.key || nextExpandKey())
+      setExpandStyle(EXPAND_KEY)
+    }
+
+    window.addEventListener('jarvis:hud-scale', onScale)
+    window.addEventListener('jarvis:hud-expand', onExpand)
+
+    return () => {
+      window.removeEventListener('jarvis:hud-scale', onScale)
+      window.removeEventListener('jarvis:hud-expand', onExpand)
     }
   }, [])
 
@@ -2418,6 +2607,16 @@ function HudPage() {
   const lensBuild = expanded?.kind === 'build' ? dockBuilds.find(b => b.id === expanded.id) : null
   const lensActivity = expanded?.kind === 'activity' ? activity.find(a => a.key === expanded.key) : null
   const lensJob = expanded?.kind === 'job' ? jobs.find(j => (j.id || j.name) === expanded.id) : null
+  // Orb surge when a lens forms (hologram builds it, dolly rushes it forward).
+  const lensName = display.detail ? String(display.detail.name || '') : expanded ? JSON.stringify(expanded) : ''
+
+  useEffect(() => {
+    if (lensName && (expandStyle === 'hologram' || expandStyle === 'dolly')) {
+      tracker.gesture = { at: performance.now(), kind: 'gather' }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lensName])
+
   const lens = display.detail
     ? { color: projectFacts(display.detail).color, node: jsx(ProjectLens, { detail: display.detail, shown: true }), width: 560 }
     : expanded?.kind === 'task' && task
@@ -2500,13 +2699,23 @@ function HudPage() {
             display.rows.length
               ? jsx('div', { style: { ...LABEL, color: 'rgba(96,165,250,0.9)' }, children: display.rows.length + ' ON BOARD' + (layout.hidden ? ' · ' + (display.rows.length - layout.hidden) + ' SHOWN' : '') })
               : null,
+            jsx('div', {
+              onClick: () => window.dispatchEvent(new CustomEvent('jarvis:hud-scale')),
+              style: { ...LABEL, color: '#93C5FD', cursor: 'pointer', pointerEvents: 'auto' },
+              children: 'SIZE · ' + SCALE_PRESETS[SCALE_KEY].label
+            }),
+            jsx('div', {
+              onClick: () => window.dispatchEvent(new CustomEvent('jarvis:hud-expand')),
+              style: { ...LABEL, color: '#93C5FD', cursor: 'pointer', pointerEvents: 'auto' },
+              children: 'EXPAND · ' + EXPAND_PRESETS[EXPAND_KEY].label
+            }),
             (() => { const h = deriveHealth(health); return h.chip ? jsxs('div', { style: { alignItems: 'center', display: 'flex', gap: '6px' }, children: [jsx('div', { className: h.state === 'silent' || h.state === 'backend' ? 'jv-chip' : '', style: { background: h.color, borderRadius: '50%', boxShadow: '0 0 6px ' + h.color, height: '5px', width: '5px' } }), jsx('div', { style: { ...LABEL, color: h.color }, children: h.chip })] }) : null })(),
             jsx('div', { style: { ...LABEL, fontFamily: T.data, fontVariantNumeric: 'tabular-nums', letterSpacing: '0.18em' }, children: clock })
           ] })
         ]
       }),
       // the managed Stage: whichever lens is open, with all three dismiss paths
-      lens ? jsx(Stage, { color: lens.color, onClose: collapse, origin: display.detail ? expandOrigin : null, width: lens.width, children: lens.node }, 'stage') : null,
+      lens ? jsx(Stage, { color: lens.color, expandStyle, onClose: collapse, origin: display.detail ? expandOrigin : null, width: lens.width, children: lens.node }, 'stage') : null,
       // metric tiles: real aggregates from the live board
       display.rows.length || display.status
         ? jsx(MetricTiles, { active: display.status ?? null, onToggle: status => window.dispatchEvent(new CustomEvent('jarvis:board-filter', { detail: { status } })), rows: display.rows, shown: boardShown })
@@ -2528,7 +2737,7 @@ function HudPage() {
       // edge tab: sessions/nav reachable without stock chrome (no fill — a filament tab)
       jsx('div', {
         onClick: () => window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: false } })),
-        style: { alignItems: 'center', borderBottom: '1px solid rgba(59,130,246,0.35)', borderRight: '1px solid rgba(59,130,246,0.35)', borderTop: '1px solid rgba(59,130,246,0.35)', color: 'rgba(147,197,253,0.9)', cursor: 'pointer', display: 'flex', fontFamily: T.label, fontSize: '8px', height: '86px', justifyContent: 'center', left: 0, letterSpacing: '0.28em', padding: '0 3px', position: 'absolute', textTransform: 'uppercase', top: '44%', writingMode: 'vertical-rl', zIndex: 6 },
+        style: { alignItems: 'center', borderBottom: '1px solid rgba(59,130,246,0.35)', borderRight: '1px solid rgba(59,130,246,0.35)', borderTop: '1px solid rgba(59,130,246,0.35)', color: 'rgba(147,197,253,0.9)', cursor: 'pointer', display: 'flex', fontFamily: T.label, fontSize: fs(8), height: '86px', justifyContent: 'center', left: 0, letterSpacing: '0.28em', padding: '0 3px', position: 'absolute', textTransform: 'uppercase', top: '44%', writingMode: 'vertical-rl', zIndex: 6 },
         children: 'NAV'
       }),
       // fullscreen toggle
@@ -2543,7 +2752,7 @@ function HudPage() {
             void root.requestFullscreen?.().then(() => setIsFull(true)).catch(() => undefined)
           }
         },
-        style: { color: 'rgba(96,165,250,0.8)', cursor: 'pointer', fontFamily: T.label, fontSize: '8.5px', letterSpacing: '0.28em', padding: '4px 8px', position: 'absolute', right: '48px', bottom: '17px', textTransform: 'uppercase', zIndex: 6 },
+        style: { color: 'rgba(96,165,250,0.8)', cursor: 'pointer', fontFamily: T.label, fontSize: fs(8.5), letterSpacing: '0.28em', padding: '4px 8px', position: 'absolute', right: '48px', bottom: '17px', textTransform: 'uppercase', zIndex: 6 },
         children: isFull ? 'EXIT FULLSCREEN' : 'FULLSCREEN'
       }),
       // boot overlay
@@ -2553,14 +2762,16 @@ function HudPage() {
             style: { alignItems: 'center', background: 'rgba(1, 2, 6, 0.92)', cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: '14px', inset: 0, justifyContent: 'center', position: 'absolute', zIndex: 9 },
             children: [
               jsx('div', { style: { animation: 'jvBootIn 700ms 150ms both', background: 'rgba(96,165,250,0.7)', height: '1px', width: '260px' } }),
-              jsx('div', { style: { animation: 'jvFadeUp 500ms 480ms both', color: '#D9E6F2', fontFamily: T.label, fontSize: '26px', fontWeight: 600, letterSpacing: '0.6em', textIndent: '0.6em', textShadow: '0 0 22px rgba(59,130,246,0.6)' }, children: 'JARVIS' }),
+              jsx('div', { style: { animation: 'jvFadeUp 500ms 480ms both', color: '#D9E6F2', fontFamily: T.label, fontSize: fs(26), fontWeight: 600, letterSpacing: '0.6em', textIndent: '0.6em', textShadow: '0 0 22px rgba(59,130,246,0.6)' }, children: 'JARVIS' }),
               jsx('div', { style: { animation: 'jvFadeUp 500ms 850ms both', ...LABEL, color: 'rgba(96,165,250,0.95)' }, children: 'SYSTEMS ONLINE' }),
               jsx('div', { style: { animation: 'jvBootIn 700ms 150ms both', background: 'rgba(96,165,250,0.7)', height: '1px', width: '260px' } })
             ]
           })
         : null,
-      // the board: every card draws on its own orb pulse, in its slot
+      // the board: every card draws on its own orb pulse, in its slot. On a
+      // COMMAND FOCUS expand the whole board recedes/blurs back in depth.
       jsx('div', {
+        className: lens && expandStyle === 'dolly' ? 'jv-board-recede' : 'jv-board-normal',
         style: { inset: 0, pointerEvents: 'none', position: 'absolute' },
         children: [
           ...display.rows.map((row, index) =>
@@ -2590,7 +2801,7 @@ function HudPage() {
             style: {
               color: '#D9E6F2',
               fontFamily: "'Inter', system-ui, sans-serif",
-              fontSize: '15px',
+              fontSize: fs(15),
               fontWeight: 600,
               letterSpacing: '0.42em',
               textIndent: '0.42em',
@@ -2603,7 +2814,7 @@ function HudPage() {
             style: {
               color: 'rgba(122, 140, 163, 0.85)',
               fontFamily: "'Inter', system-ui, sans-serif",
-              fontSize: '11px',
+              fontSize: fs(11),
               letterSpacing: '0.18em',
               textIndent: '0.18em',
               textTransform: 'uppercase'
@@ -2640,11 +2851,11 @@ class HudBoundary extends Component {
         flexDirection: 'column', gap: '12px', height: '100%', inset: 0, justifyContent: 'center', position: 'absolute'
       },
       children: [
-        jsx('div', { style: { color: 'rgba(96,165,250,0.9)', fontFamily: T.label, fontSize: '12px', letterSpacing: '0.4em', textTransform: 'uppercase' }, children: 'HUD RECOVERING' }),
-        jsx('div', { style: { color: 'rgba(122,150,183,0.8)', fontFamily: T.data, fontSize: '10px', maxWidth: '420px', textAlign: 'center' }, children: String(this.state.error?.message ?? this.state.error).slice(0, 160) }),
+        jsx('div', { style: { color: 'rgba(96,165,250,0.9)', fontFamily: T.label, fontSize: fs(12), letterSpacing: '0.4em', textTransform: 'uppercase' }, children: 'HUD RECOVERING' }),
+        jsx('div', { style: { color: 'rgba(122,150,183,0.8)', fontFamily: T.data, fontSize: fs(10), maxWidth: '420px', textAlign: 'center' }, children: String(this.state.error?.message ?? this.state.error).slice(0, 160) }),
         jsx('button', {
           onClick: () => this.setState({ error: null }),
-          style: { background: 'transparent', border: '1px solid rgba(96,165,250,0.5)', color: '#93C5FD', cursor: 'pointer', fontFamily: T.label, fontSize: '10px', letterSpacing: '0.3em', padding: '6px 18px', textTransform: 'uppercase' },
+          style: { background: 'transparent', border: '1px solid rgba(96,165,250,0.5)', color: '#93C5FD', cursor: 'pointer', fontFamily: T.label, fontSize: fs(10), letterSpacing: '0.3em', padding: '6px 18px', textTransform: 'uppercase' },
           children: 'REMOUNT'
         })
       ]
@@ -2678,6 +2889,26 @@ export default {
           label: 'JARVIS: Open HUD',
           keywords: ['hud', 'orb', 'jarvis', 'presence'],
           run: () => host.navigate('/hud')
+        }
+      },
+      {
+        id: 'size',
+        area: PALETTE_AREA,
+        data: {
+          id: 'jarvisHud.size',
+          label: 'JARVIS: Cockpit Text Size (cycle Comfortable / Large / XL)',
+          keywords: ['size', 'text', 'scale', 'large', 'xl', 'readable', 'jarvis', 'hud'],
+          run: () => window.dispatchEvent(new CustomEvent('jarvis:hud-scale'))
+        }
+      },
+      {
+        id: 'expand',
+        area: PALETTE_AREA,
+        data: {
+          id: 'jarvisHud.expand',
+          label: 'JARVIS: Expand Animation (cycle Zoom / Hologram / Command Focus)',
+          keywords: ['expand', 'animation', 'zoom', 'hologram', 'dolly', 'focus', 'jarvis', 'hud'],
+          run: () => window.dispatchEvent(new CustomEvent('jarvis:hud-expand'))
         }
       }
     ])

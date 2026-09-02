@@ -24,6 +24,7 @@ const realtime = vi.hoisted(() => {
     deps: Deps
     connectImpl: () => Promise<void>
     sendToolOutput = vi.fn()
+    noteContext = vi.fn()
     updateForegroundContext = vi.fn()
     setMuted = vi.fn()
     cancelResponse = vi.fn()
@@ -142,6 +143,7 @@ vi.mock('./agent-delegate', () => ({
 
 import { emitGatewayEvent, onGatewayEvent } from '@/contrib/events'
 import { requestVoiceConversationStart } from '@/store/composer'
+import { $sidebarOpen } from '@/store/layout'
 import { $voiceState, voiceSupervisor } from './voice-supervisor'
 
 const tick = async (n = 4) => {
@@ -531,6 +533,10 @@ describe('voiceSupervisor', () => {
 
     expect(getRealtimeProjectReview).toHaveBeenCalledWith({ detail: true, limit: 1, query: 'Alpha' })
     expect(seen).toContain('display.detail')
+    // Bug 2: whatever is on the stage is handed to the voice model as context,
+    // so "read me this" answers from the same data (show + speak share state).
+    expect(session.noteContext).toHaveBeenCalledWith(expect.stringContaining('Alpha'))
+    expect(session.noteContext).toHaveBeenCalledWith(expect.stringContaining('"status":"Blocked"'))
 
     // The voice's bare "expand it" now resolves to the clicked card.
     getRealtimeProjectReview.mockResolvedValueOnce({ ok: true, projects: [{ name: 'Alpha', status: 'Blocked' }], source: 'project index' } as never)
@@ -542,6 +548,21 @@ describe('voiceSupervisor', () => {
     await tick(2)
     expect(seen).toContain('display.stage.clear')
     off()
+  })
+
+  it('bug 3: jarvis:chrome is a deterministic sidebar toggle — show opens, hide closes (no stuck restore)', () => {
+    // The old handler restored a remembered state which, after the cockpit had
+    // auto-hidden the chrome on mount, was ALWAYS closed — so the NAV button
+    // appeared dead. Deterministic mapping: hide:false => open, hide:true => close.
+    window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: true } }))
+    expect($sidebarOpen.get()).toBe(false)
+    window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: false } }))
+    expect($sidebarOpen.get()).toBe(true)
+    window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: true } }))
+    expect($sidebarOpen.get()).toBe(false)
+    // Re-open after close must work (the regression left it stuck closed).
+    window.dispatchEvent(new CustomEvent('jarvis:chrome', { detail: { hide: false } }))
+    expect($sidebarOpen.get()).toBe(true)
   })
 
   it('P6: a metric-tile click filters the board through the same review pipeline', async () => {

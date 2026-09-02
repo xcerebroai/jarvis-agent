@@ -48,7 +48,7 @@ const browser = await chromium.launch({ headless: true })
 const page = await browser.newPage({ viewport: { width: 1522, height: 910 } })
 const errors = []
 page.on('pageerror', e => errors.push(e.message)); page.on('console', m => { if (m.type() === 'error') errors.push(m.text()) })
-await page.addInitScript(() => { try { localStorage.setItem('jarvis:hud-scale','comfortable'); localStorage.setItem('jarvis:hud-expand','zoom') } catch (e) {} })
+await page.addInitScript(() => { window.__JV_TEST__ = true; try { localStorage.setItem('jarvis:hud-scale','comfortable'); localStorage.setItem('jarvis:hud-expand','zoom') } catch (e) {} })
 await page.goto(base); await page.waitForTimeout(3500)
 const text = async () => (await page.locator('#root').innerText()).replace(/\s+/g, ' ')
 const stageOpen = () => page.locator('[data-jv-stage]').count()
@@ -162,6 +162,27 @@ ok((await sidebarOpen()) === false, 'Esc closes the NAV drawer')
 await page.locator('[data-jv-navtab]').first().click(f); await page.waitForTimeout(150)
 await page.mouse.click(760, 470); await page.waitForTimeout(200)
 ok((await sidebarOpen()) === false, 'click-outside closes the NAV drawer')
+// NAV must re-open after a close (the restore-from-remembered-state bug left
+// it stuck closed on the second open).
+await page.locator('[data-jv-navtab]').first().click(f); await page.waitForTimeout(150)
+ok((await sidebarOpen()) === true, 'NAV re-opens after being closed (no stuck/dead toggle)')
+await page.locator('[data-jv-navtab]').first().click(f); await page.waitForTimeout(150)
+
+console.log('== orb blooms on OUTPUT amplitude, not just mic ==')
+// The #1 recurring regression: the orb must SPEAK-bloom when JARVIS speaks
+// (source:'out'), and mic input must not fake a speaking bloom.
+const orbReady = await page.evaluate(() => Boolean(window.__jvOrb))
+ok(orbReady, 'orb drive state is observable (test seam present)')
+await page.evaluate(() => { window.__jvOrb.speakUntil = 0; window.__jvOrb.listenUntil = 0 })
+await page.evaluate(() => window.__jvEmit('voice.amplitude', { source: 'out', level: 0.6 }))
+await page.waitForTimeout(60)
+const spokeOnOut = await page.evaluate(() => window.__jvOrb.speakUntil > performance.now())
+ok(spokeOnOut, 'output amplitude (JARVIS speaking) drives the orb SPEAKING bloom')
+await page.evaluate(() => { window.__jvOrb.speakUntil = 0; window.__jvOrb.listenUntil = 0 })
+await page.evaluate(() => window.__jvEmit('voice.amplitude', { source: 'mic', level: 0.6 }))
+await page.waitForTimeout(60)
+const micState = await page.evaluate(() => ({ speak: window.__jvOrb.speakUntil > performance.now(), listen: window.__jvOrb.listenUntil > performance.now() }))
+ok(!micState.speak && micState.listen, 'mic input drives LISTENING, never a fake speaking bloom (speak=' + micState.speak + ' listen=' + micState.listen + ')')
 
 ok(errors.length === 0, 'no page errors during the run' + (errors.length ? ': ' + errors[0].slice(0, 160) : ''))
 

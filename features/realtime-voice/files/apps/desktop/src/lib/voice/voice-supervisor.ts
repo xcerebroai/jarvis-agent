@@ -273,9 +273,32 @@ function resumeWakeForVoiceSession(): void {
 // Conversational display context: what is on the stage right now. Natural
 // speech references ("it", "that one", a bare "expand") resolve against this
 // before anything is asked aloud — an error toast is never the answer.
-const displayContext: { focused: null | string; lastRows: Array<{ name: string; status: string }> } = {
+const displayContext: { focused: null | string; focusedData: null | Record<string, unknown>; lastRows: Array<{ name: string; status: string }> } = {
   focused: null,
+  focusedData: null,
   lastRows: []
+}
+
+/**
+ * Keep the voice model's context in lock-step with what is on the cockpit
+ * stage. Whenever a project is focused (by voice OR by pointer), stash its full
+ * data and quietly hand it to the live session as context — no speech — so the
+ * model can answer "read me this / what's the blocker / what's left" from the
+ * SAME data the owner is looking at. Show and speak share one source of truth.
+ */
+function syncFocusedToVoice(row: null | Record<string, unknown>): void {
+  displayContext.focusedData = row
+
+  if (!row) {
+    return
+  }
+
+  const name = String((row as { name?: unknown }).name ?? 'the project')
+
+  activeSession?.noteContext(
+    `On the cockpit stage now: ${name}. Full data: ${JSON.stringify(row)}. ` +
+      `If the owner asks you to read this, or asks about its blocker, next action, tasks, deadline or status, answer from this exact data.`
+  )
 }
 
 function resolveProjectReference(raw: string | undefined): { ask?: string; name?: string } {
@@ -365,14 +388,16 @@ function runDisplayTool(session: RealtimeVoiceSession, name: string, callId: str
   }
 
   emitGatewayEvent({ payload: { focus }, type: 'display.retrieving' })
-  void getRealtimeProjectReview({ detail, limit: focus ? 1 : 8, query, status: statusFilter })
+  void getRealtimeProjectReview({ detail: detail || focus, limit: focus ? 1 : 8, query, status: statusFilter })
     .then(result => {
       const rows = Array.isArray(result.projects) ? result.projects : []
 
       if (focus && rows[0]?.name) {
         displayContext.focused = String(rows[0].name)
+        syncFocusedToVoice(rows[0] as unknown as Record<string, unknown>)
       } else if (!focus) {
         displayContext.focused = null
+        displayContext.focusedData = null
         displayContext.lastRows = rows.map(row => ({ name: String(row.name ?? ''), status: String(row.status ?? '') }))
       }
 
@@ -1846,8 +1871,6 @@ function killVoice(): void {
 // The cockpit owns the window edge-to-edge: the HUD dispatches these DOM
 // events on mount/unmount and the feature layer drives the host chrome
 // (setSidebarOpen is not SDK-exported — fidelity-wins ruling applies).
-// Prior state is remembered and restored when command mode ends.
-let chromeWasOpen: boolean | null = null
 
 // --- Data requests from the cockpit (dense-by-default zones) ----------------
 // Same truthful path as the voice verbs: fetch the compact read, emit the
@@ -1856,16 +1879,13 @@ if (typeof window !== 'undefined') {
   window.addEventListener('jarvis:voice-kill', () => killVoice())
 
   window.addEventListener('jarvis:chrome', event => {
+    // Deterministic: hide:true closes the app chrome, hide:false opens it. The
+    // NAV tab is a real toggle on top of this; no remembered-state restore
+    // (that left the sidebar closed and made NAV look dead).
     const hide = Boolean((event as CustomEvent).detail?.hide)
 
     try {
-      if (hide) {
-        chromeWasOpen ??= $sidebarOpen.get()
-        setSidebarOpen(false)
-      } else {
-        setSidebarOpen(chromeWasOpen ?? true)
-        chromeWasOpen = null
-      }
+      setSidebarOpen(!hide)
     } catch {
       // chrome control is best-effort; the cockpit renders regardless
     }
@@ -1893,6 +1913,7 @@ if (typeof window !== 'undefined') {
 
         if (rows[0]?.name) {
           displayContext.focused = String(rows[0].name)
+          syncFocusedToVoice(rows[0] as unknown as Record<string, unknown>)
           emitGatewayEvent({ payload: { focus: true, query: name, result, source: 'pointer' }, type: 'display.detail' })
         }
       })
@@ -1905,6 +1926,7 @@ if (typeof window !== 'undefined') {
     const focus = String((event as CustomEvent).detail?.focus ?? '').trim() || null
 
     displayContext.focused = focus
+    displayContext.focusedData = null
     emitGatewayEvent({ payload: { focus, source: 'pointer' }, type: 'display.stage.clear' })
   })
 

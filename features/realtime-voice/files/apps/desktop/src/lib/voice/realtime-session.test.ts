@@ -101,6 +101,7 @@ interface Harness {
   statuses: RealtimeStatus[]
   toolCalls: { callId: string; name: string; arguments: Record<string, unknown> }[]
   errors: RealtimeSessionError[]
+  outputLevels: number[]
   userSpeechStarts: number
 }
 
@@ -116,6 +117,7 @@ function makeHarness(overrides: {
   const statuses: RealtimeStatus[] = []
   const toolCalls: Harness['toolCalls'] = []
   const errors: RealtimeSessionError[] = []
+  const outputLevels: number[] = []
   let userSpeechStarts = 0
 
   const sdpFetch = vi.fn().mockResolvedValue({
@@ -142,6 +144,9 @@ function makeHarness(overrides: {
       onError: e => errors.push(e),
       onUserSpeechStarted: () => {
         userSpeechStarts += 1
+      },
+      onOutputLevel: (level: number) => {
+        outputLevels.push(level)
       }
     }
   })
@@ -155,6 +160,7 @@ function makeHarness(overrides: {
     statuses,
     toolCalls,
     errors,
+    outputLevels,
     get userSpeechStarts() {
       return userSpeechStarts
     }
@@ -502,5 +508,63 @@ describe('RealtimeVoiceSession', () => {
     expect(h.audio.muted).toBe(true)
     expect(stopped).toContain('remote')
     expect(h.pc.closed).toBe(true)
+  })
+
+  it('bug 4: the orb SPEAKS on JARVIS output — the remote-stream meter pulls the graph to a destination, resumes, and yields a non-zero level (not silence)', async () => {
+    // Chromium's analyser reads all-silence from a remote WebRTC stream unless
+    // the graph is pulled to a destination. This guards that the output meter
+    // builds analyser -> zero-gain sink -> destination, resumes the context,
+    // and actually produces a level — the exact wiring that keeps regressing to
+    // a silent stream tap (orb then only moves on mic).
+    const connects: string[] = []
+    const gainNode = { gain: { value: 1 }, connect: vi.fn(() => connects.push('gain->dest')) }
+    const analyserNode = {
+      fftSize: 0,
+      connect: vi.fn(() => connects.push('analyser->gain')),
+      // non-flat waveform => non-zero RMS
+      getByteTimeDomainData: (a: Uint8Array) => { for (let i = 0; i < a.length; i++) a[i] = i % 2 ? 210 : 46 }
+    }
+    const sourceNode = { connect: vi.fn(() => connects.push('source->analyser')) }
+    const resume = vi.fn().mockResolvedValue(undefined)
+    class FakeAudioContext {
+      destination = { kind: 'destination' }
+      createAnalyser = () => analyserNode
+      createMediaStreamSource = () => sourceNode
+      createGain = () => gainNode
+      resume = resume
+      close = vi.fn().mockResolvedValue(undefined)
+    }
+    // Deferred rAF queue: real rAF is async, so the mic meter and the output
+    // meter interleave one frame at a time. (A synchronous stub lets the mic
+    // meter recurse and monopolize the budget before the output meter starts.)
+    const rafQueue: FrameRequestCallback[] = []
+    const pump = (times: number) => { for (let i = 0; i < times; i++) { rafQueue.splice(0).forEach(cb => cb(0)) } }
+    vi.stubGlobal('AudioContext', FakeAudioContext)
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => rafQueue.push(cb))
+    vi.stubGlobal('cancelAnimationFrame', () => undefined)
+
+    try {
+      const track = { enabled: true, kind: 'audio', stop: vi.fn() } as unknown as MediaStreamTrack
+      const remoteStream = { getTracks: () => [track], getAudioTracks: () => [track] } as unknown as MediaStream
+      const h = makeHarness()
+      await h.session.connect()
+      h.pc.dc!.open()
+      h.pc.dc!.emit({ type: 'session.updated' })
+
+      h.pc.ontrack?.({ streams: [remoteStream] } as unknown as RTCTrackEvent)
+      pump(3)
+
+      // graph pulled to a destination (else Chromium yields silence)
+      expect(connects).toContain('analyser->gain')
+      expect(connects).toContain('gain->dest')
+      expect(gainNode.gain.value).toBe(0)
+      // context resumed (it can start suspended with no user gesture here)
+      expect(resume).toHaveBeenCalled()
+      // and it actually produced a non-zero output level (orb speak-bloom fuel)
+      expect(h.outputLevels.length).toBeGreaterThan(0)
+      expect(Math.max(...h.outputLevels)).toBeGreaterThan(0)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 })

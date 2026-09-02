@@ -600,6 +600,30 @@ export class RealtimeVoiceSession {
     this.send({ type: 'response.create' })
   }
 
+  /**
+   * Put an out-of-band note into the conversation as CONTEXT the model can use
+   * on its next turn, WITHOUT triggering speech (no response.create). Used to
+   * keep the voice model's context in sync with whatever project is on the
+   * cockpit stage, so "read me this / what's the blocker" answers from the same
+   * data that is on screen.
+   */
+  noteContext(text: string): void {
+    const note = text.trim()
+
+    if (this.closed || !note) {
+      return
+    }
+
+    this.send({
+      type: 'conversation.item.create',
+      item: {
+        type: 'message',
+        role: 'system',
+        content: [{ type: 'input_text', text: note }]
+      }
+    })
+  }
+
   /** Hand the turn to the user: open the mic (unless muted). Idempotent. */
   private releaseFirstTurn(reason: string): void {
     if (!this.firstTurnGate) {
@@ -702,6 +726,16 @@ export class RealtimeVoiceSession {
       analyser.fftSize = 256
       const data = new Uint8Array(analyser.fftSize)
       source.connect(analyser)
+      // Chromium's analyser reads all-silence from a remote WebRTC stream
+      // unless the graph is pulled to a destination. A zero-gain sink pulls it
+      // WITHOUT adding audible signal (the <audio> element is the audible
+      // path). Resume in case the context started suspended (no gesture here).
+      const sink = context.createGain()
+
+      sink.gain.value = 0
+      analyser.connect(sink)
+      sink.connect(context.destination)
+      void context.resume?.().catch(() => undefined)
       this.outputAudioContext = context
 
       const tick = () => {

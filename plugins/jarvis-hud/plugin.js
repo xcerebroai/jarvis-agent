@@ -900,8 +900,8 @@ const COCKPIT_CSS = `
 @keyframes jvHoloIn { from { opacity: 0; transform: translateX(-50%) scale(0.9); filter: blur(10px) brightness(2.2); } 60% { filter: blur(1px) brightness(1.4); } to { opacity: 1; transform: translateX(-50%) scale(1); filter: blur(0) brightness(1); } }
 @keyframes jvHandoffOut { from { opacity: 1; transform: translateX(-50%) translateZ(0) rotateY(0) scale(1); } to { opacity: 0; transform: translateX(-136%) translateZ(-220px) rotateY(34deg) scale(0.7); } }
 @keyframes jvHandoffIn { from { opacity: 0; transform: translateX(38%) translateZ(-260px) rotateY(-30deg) scale(0.72); } 70% { opacity: 1; } to { opacity: 1; transform: translateX(-50%) translateZ(0) rotateY(0) scale(1); } }
-.jv-board-recede { filter: blur(7px) brightness(0.45); transform: scale(0.94); transition: filter 320ms cubic-bezier(0.22,1,0.36,1), transform 320ms cubic-bezier(0.22,1,0.36,1); transform-origin: 50% 46%; }
-.jv-board-normal { filter: none; transform: none; transition: filter 320ms cubic-bezier(0.22,1,0.36,1), transform 320ms cubic-bezier(0.22,1,0.36,1); }
+.jv-board-recede { opacity: 0.34; transform: scale(0.94); transition: opacity 320ms cubic-bezier(0.22,1,0.36,1), transform 320ms cubic-bezier(0.22,1,0.36,1); transform-origin: 50% 46%; }
+.jv-board-normal { opacity: 1; transform: none; transition: opacity 320ms cubic-bezier(0.22,1,0.36,1), transform 320ms cubic-bezier(0.22,1,0.36,1); }
 .jv-chip { animation: jvBreathe 2.4s ease-in-out infinite; }
 .jv-drift { animation: jvDrift 7s ease-in-out infinite; will-change: transform; }
 .jv-sweep { background-image: linear-gradient(90deg, transparent 0%, rgba(147,197,253,0.6) 50%, transparent 100%); background-size: 38% 100%; background-repeat: no-repeat; animation: jvSweep 1.7s linear infinite; }
@@ -1170,7 +1170,7 @@ function Stage({ children, color = '#93C5FD', contentKey = '', expandStyle = 'zo
   return jsx('div', {
     'data-jv-stage': '1',
     onClick: event => { event.stopPropagation(); requestClose() },
-    style: { backdropFilter: 'blur(3px)', background: expandStyle === 'dolly' ? 'rgba(1,2,6,0.5)' : 'rgba(1,2,6,0.66)', cursor: 'default', inset: 0, opacity: shown ? 1 : 0, perspective: '1700px', pointerEvents: 'auto', position: 'absolute', transition: 'opacity 300ms', zIndex: 8 },
+    style: { background: expandStyle === 'dolly' ? 'rgba(1,2,6,0.62)' : 'rgba(1,2,6,0.74)', cursor: 'default', inset: 0, opacity: shown ? 1 : 0, perspective: '1700px', pointerEvents: 'auto', position: 'absolute', transition: 'opacity 300ms', zIndex: 8 },
     children: [
     onStep ? jsx('div', { key: 'prev', 'data-jv-interactive': '1', onClick: event => { event.stopPropagation(); onStep(-1) }, title: 'Previous project', style: { alignItems: 'center', color: withAlpha(color, 0.92), cursor: 'pointer', display: 'flex', flexDirection: 'column', fontFamily: T.label, gap: '4px', left: 'calc(50% - ' + (W / 2 + 58) + 'px)', pointerEvents: 'auto', position: 'absolute', top: '50%', transform: 'translateY(-50%)', zIndex: 10 }, children: [jsx('div', { style: { alignItems: 'center', border: '1px solid ' + withAlpha(color, 0.5), borderRadius: '50%', boxShadow: '0 0 12px ' + withAlpha(color, 0.4), display: 'flex', fontSize: '22px', height: '40px', justifyContent: 'center', lineHeight: 1, paddingBottom: '3px', width: '40px' }, children: '\u2039' }), jsx('div', { style: { fontSize: fs(7.5), letterSpacing: '0.26em', opacity: 0.8 }, children: 'PREV' })] }) : null,
     onStep ? jsx('div', { key: 'next', 'data-jv-interactive': '1', onClick: event => { event.stopPropagation(); onStep(1) }, title: 'Next project', style: { alignItems: 'center', color: withAlpha(color, 0.92), cursor: 'pointer', display: 'flex', flexDirection: 'column', fontFamily: T.label, gap: '4px', right: 'calc(50% - ' + (W / 2 + 58) + 'px)', pointerEvents: 'auto', position: 'absolute', top: '50%', transform: 'translateY(-50%)', zIndex: 10 }, children: [jsx('div', { style: { alignItems: 'center', border: '1px solid ' + withAlpha(color, 0.5), borderRadius: '50%', boxShadow: '0 0 12px ' + withAlpha(color, 0.4), display: 'flex', fontSize: '22px', height: '40px', justifyContent: 'center', lineHeight: 1, paddingBottom: '3px', width: '40px' }, children: '\u203a' }), jsx('div', { style: { fontSize: fs(7.5), letterSpacing: '0.26em', opacity: 0.8 }, children: 'NEXT' })] }) : null,
@@ -1187,6 +1187,7 @@ function Stage({ children, color = '#93C5FD', contentKey = '', expandStyle = 'zo
       children: jsxs('div', { style: { position: 'relative' }, children: [
         shards,
         jsx(Plate, { color, drift: false, maxH: MAXH, scroll: true, shown, thread: false, width: W, children }),
+        jsx('div', { 'data-jv-scrollcue': '1', style: { background: 'linear-gradient(to bottom, transparent, rgba(3,6,12,0.92))', bottom: '1px', height: '34px', left: '1px', pointerEvents: 'none', position: 'absolute', right: '1px', zIndex: 2 } }),
         jsx(CloseNode, { color, onClose: requestClose })
       ] })
     })
@@ -2026,6 +2027,13 @@ function HudPage() {
     reportReal: () => undefined,
     speakUntil: 0
   }).current
+
+  // Test seam: the cockpit harness reads the orb's live drive state to assert
+  // that OUTPUT amplitude (JARVIS speaking) blooms the orb — the regression that
+  // keeps breaking. No-op in production (flag unset).
+  if (typeof window !== 'undefined' && window.__JV_TEST__) {
+    window.__jvOrb = tracker
+  }
 
   tracker.busy = busy
 

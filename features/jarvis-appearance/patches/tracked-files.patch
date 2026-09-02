@@ -1,16 +1,16 @@
 diff --git a/apps/desktop/src/app/settings/index.tsx b/apps/desktop/src/app/settings/index.tsx
-index 82cc8a01..08120520 100644
+index 38a6bf0..0b66c23 100644
 --- a/apps/desktop/src/app/settings/index.tsx
 +++ b/apps/desktop/src/app/settings/index.tsx
-@@ -32,6 +32,7 @@ import { $commandPaletteOpen, openCommandPalettePage } from '@/store/command-pal
- import { confirm } from '@/store/confirm'
+@@ -34,6 +34,7 @@ import { confirm } from '@/store/confirm'
  import { bindingsFor } from '@/store/keybinds'
+ import { $localModelsEnabled } from '@/store/local-models-flag'
  import { notifyError } from '@/store/notifications'
 +import { resetSkinPreferences } from '@/themes/context'
  
  import { useRouteEnumParam } from '../hooks/use-route-enum-param'
  import { OverlayIconButton } from '../overlays/overlay-chrome'
-@@ -160,6 +161,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
+@@ -162,6 +163,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
  
      try {
        await saveHermesConfig(await getHermesConfigDefaults())
@@ -19,7 +19,7 @@ index 82cc8a01..08120520 100644
        onConfigSaved?.()
      } catch (err) {
 diff --git a/apps/desktop/src/themes/context.tsx b/apps/desktop/src/themes/context.tsx
-index 6409315d..822e2f5b 100644
+index d202490..116cf9c 100644
 --- a/apps/desktop/src/themes/context.tsx
 +++ b/apps/desktop/src/themes/context.tsx
 @@ -82,6 +82,14 @@ const profilePref = <T extends string>(record: string, legacy: string, normalize
@@ -38,7 +38,7 @@ index 6409315d..822e2f5b 100644
  const APPEARANCE_KEYS = new Set([SKIN_KEY, PROFILE_SKINS_KEY, MODE_KEY, PROFILE_MODES_KEY])
  
 diff --git a/apps/desktop/src/themes/presets.test.ts b/apps/desktop/src/themes/presets.test.ts
-index 9ca84f51..e5bab702 100644
+index 9ca84f5..e5bab70 100644
 --- a/apps/desktop/src/themes/presets.test.ts
 +++ b/apps/desktop/src/themes/presets.test.ts
 @@ -6,6 +6,7 @@ import {
@@ -75,7 +75,7 @@ index 9ca84f51..e5bab702 100644
 +  })
 +})
 diff --git a/apps/desktop/src/themes/presets.ts b/apps/desktop/src/themes/presets.ts
-index fef9fdfc..7b444725 100644
+index fef9fdf..7b44472 100644
 --- a/apps/desktop/src/themes/presets.ts
 +++ b/apps/desktop/src/themes/presets.ts
 @@ -158,6 +158,40 @@ export const githubTheme: DesktopTheme = {
@@ -134,7 +134,7 @@ index fef9fdfc..7b444725 100644
 -export const DEFAULT_SKIN_NAME = 'nous'
 +export const DEFAULT_SKIN_NAME = 'jarvis'
 diff --git a/apps/desktop/src/themes/profile-theme.test.ts b/apps/desktop/src/themes/profile-theme.test.ts
-index 3567a8a6..d9cfd9ce 100644
+index 3567a8a..d9cfd9c 100644
 --- a/apps/desktop/src/themes/profile-theme.test.ts
 +++ b/apps/desktop/src/themes/profile-theme.test.ts
 @@ -1,6 +1,6 @@

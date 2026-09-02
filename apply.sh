@@ -918,6 +918,7 @@ for f in \
   mcp_serve.py tools/environments/local.py \
   agent/prompt_builder.py agent/agent_init.py \
   agent/transports/hermes_tools_mcp_server.py \
+  agent/codex_headers.py \
   acp_adapter/entry.py acp_adapter/server.py \
   ui-tui/src/theme.ts ui-tui/src/app/slash/commands/core.ts \
   ui-tui/src/app/slash/commands/topup.ts ui-tui/src/components/billingOverlay.tsx \

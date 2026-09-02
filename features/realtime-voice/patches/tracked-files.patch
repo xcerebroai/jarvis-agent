@@ -1,8 +1,8 @@
 diff --git a/apps/desktop/electron/main.ts b/apps/desktop/electron/main.ts
-index 4b339db9b29..a7e1162835f 100644
+index 8a6a53e..a7d5636 100644
 --- a/apps/desktop/electron/main.ts
 +++ b/apps/desktop/electron/main.ts
-@@ -16436,6 +16436,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
+@@ -16735,6 +16735,15 @@ ipcMain.on('hermes:active-work', (event, payload) => {
    updateStreamThrottleFromActiveWork()
  })
  
@@ -19,10 +19,10 @@ index 4b339db9b29..a7e1162835f 100644
    if (!payload || !isHexColor(payload.background) || !isHexColor(payload.foreground)) {
      return
 diff --git a/apps/desktop/electron/preload.ts b/apps/desktop/electron/preload.ts
-index a6b48e12185..016b02d17d4 100644
+index 8176ebf..f04de92 100644
 --- a/apps/desktop/electron/preload.ts
 +++ b/apps/desktop/electron/preload.ts
-@@ -260,6 +260,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
+@@ -268,6 +268,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
    watchDirectory: dir => ipcRenderer.invoke('hermes:watchDirectory', dir),
    stopPreviewFileWatch: id => ipcRenderer.invoke('hermes:stopPreviewFileWatch', id),
    setActiveWork: payload => ipcRenderer.send('hermes:active-work', payload),
@@ -31,7 +31,7 @@ index a6b48e12185..016b02d17d4 100644
    setNativeTheme: mode => ipcRenderer.send('hermes:native-theme', mode),
    setTranslucency: payload => ipcRenderer.send('hermes:translucency', payload),
 diff --git a/apps/desktop/electron/stream-throttle.test.ts b/apps/desktop/electron/stream-throttle.test.ts
-index fc41bcf1681..57979c6ab77 100644
+index fc41bcf..57979c6 100644
 --- a/apps/desktop/electron/stream-throttle.test.ts
 +++ b/apps/desktop/electron/stream-throttle.test.ts
 @@ -132,6 +132,45 @@ test('repeated busy reports do not re-apply or stack timers', () => {
@@ -81,7 +81,7 @@ index fc41bcf1681..57979c6ab77 100644
    const timers = makeTimers()
    const throttle = createStreamThrottle(timers)
 diff --git a/apps/desktop/electron/stream-throttle.ts b/apps/desktop/electron/stream-throttle.ts
-index 912b40b9167..9342e302278 100644
+index 912b40b..9342e30 100644
 --- a/apps/desktop/electron/stream-throttle.ts
 +++ b/apps/desktop/electron/stream-throttle.ts
 @@ -44,6 +44,11 @@ export interface StreamThrottle {
@@ -184,7 +184,7 @@ index 912b40b9167..9342e302278 100644
    }
  }
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
-index ffe6c4707fe..3b9130fbd84 100644
+index 9a7db49..8b50d56 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts
 @@ -1,10 +1,11 @@
@@ -197,10 +197,10 @@ index ffe6c4707fe..3b9130fbd84 100644
  import { triggerHaptic } from '@/lib/haptics'
  import { markAssistantIdSpoken, resolveSpokenReply } from '@/lib/spoken-reply'
 +import { voiceSupervisor } from '@/lib/voice/voice-supervisor'
+ import { CONVERSATION_LEASE, READ_ALOUD_LEASE, syncTtsLease } from '@/lib/tts-lease'
  import { clearWakeIndicator, syncWakeIndicatorWithVoice } from '@/lib/wake-indicator'
  import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/store/composer'
- import { resetBrowseState } from '@/store/composer-input-history'
-@@ -19,6 +20,7 @@ import { useComposerScope } from '../scope'
+@@ -20,6 +21,7 @@ import { useComposerScope } from '../scope'
  import type { ChatBarProps } from '../types'
  
  import { useAutoSpeakReplies } from './use-auto-speak-replies'
@@ -208,7 +208,7 @@ index ffe6c4707fe..3b9130fbd84 100644
  import { useVoiceConversation } from './use-voice-conversation'
  import { useVoiceRecorder } from './use-voice-recorder'
  
-@@ -40,11 +42,34 @@ interface UseComposerVoiceArgs {
+@@ -41,11 +43,34 @@ interface UseComposerVoiceArgs {
    target: ComposerTarget
  }
  
@@ -246,7 +246,7 @@ index ffe6c4707fe..3b9130fbd84 100644
   */
  export function useComposerVoice({
    busy,
-@@ -62,7 +87,6 @@ export function useComposerVoice({
+@@ -63,7 +88,6 @@ export function useComposerVoice({
    const { t } = useI18n()
    // A tile's composer speaks ITS transcript, not the primary chat's.
    const { $messages } = useComposerScope()
@@ -254,7 +254,7 @@ index ffe6c4707fe..3b9130fbd84 100644
    const ownsWakeIndicatorRef = useRef(false)
    const voiceStartRequest = useStore($voiceConversationStartRequest)
  
-@@ -127,28 +151,38 @@ export function useComposerVoice({
+@@ -128,28 +152,38 @@ export function useComposerVoice({
      await onSubmit(text)
    }
  
@@ -305,7 +305,7 @@ index ffe6c4707fe..3b9130fbd84 100644
      onSubmit: submitVoiceTurn,
      onTranscribeAudio,
      pendingResponse: pendingTurnResponse,
-@@ -157,6 +191,24 @@ export function useComposerVoice({
+@@ -158,6 +192,24 @@ export function useComposerVoice({
      beforeMicOpen: () => wakePauseBarrierRef.current ?? undefined
    })
  
@@ -330,7 +330,7 @@ index ffe6c4707fe..3b9130fbd84 100644
    // eslint-disable-next-line no-restricted-syntax -- ownership token used only by unmount cleanup
    useEffect(() => {
      if (target !== 'main') {
-@@ -177,33 +229,52 @@ export function useComposerVoice({
+@@ -178,33 +230,52 @@ export function useComposerVoice({
      []
    )
  
@@ -391,7 +391,7 @@ index ffe6c4707fe..3b9130fbd84 100644
    const resumeWakeIfPaused = useCallback(() => {
      if (!wakePausedRef.current) {
        return
-@@ -212,7 +283,7 @@ export function useComposerVoice({
+@@ -213,7 +284,7 @@ export function useComposerVoice({
      wakePausedRef.current = false
      wakePauseBarrierRef.current = null
      // Reconcile, don't just resume: the wake word is a persistent setting, so
@@ -400,7 +400,7 @@ index ffe6c4707fe..3b9130fbd84 100644
      // enabled — including when the raw resume loses the mic-release race.
      void resumeWakeAfterVoice()
    }, [])
-@@ -235,19 +306,22 @@ export function useComposerVoice({
+@@ -236,19 +307,22 @@ export function useComposerVoice({
      return barrier
    }, [])
  
@@ -429,7 +429,7 @@ index ffe6c4707fe..3b9130fbd84 100644
        return
      }
  
-@@ -261,18 +335,14 @@ export function useComposerVoice({
+@@ -262,7 +336,7 @@ export function useComposerVoice({
          message: t.notifications.voice.sayStopToEnd(phrase)
        })
      }
@@ -438,8 +438,10 @@ index ffe6c4707fe..3b9130fbd84 100644
  
    useEffect(() => resumeWakeIfPaused, [resumeWakeIfPaused])
  
+@@ -288,12 +362,9 @@ export function useComposerVoice({
+ 
    // Explicit start/end for the on-screen conversation controls (the hotkey uses
--  // the gated toggle above).
+   // the gated toggle above).
 -  const startConversation = useCallback(() => setVoiceConversationActive(true), [])
 -
 -  const endConversation = useCallback(() => {
@@ -453,7 +455,7 @@ index ffe6c4707fe..3b9130fbd84 100644
    const handleToggleAutoSpeak = useCallback(() => {
      void setAutoSpeakReplies(!$autoSpeakReplies.get()).catch(error =>
 diff --git a/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts b/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts
-index 5389d9f4d57..e5ec3450733 100644
+index 5389d9f..e5ec345 100644
 --- a/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts
 +++ b/apps/desktop/src/app/chat/composer/hooks/use-mic-recorder.ts
 @@ -1,3 +1,4 @@
@@ -470,10 +472,10 @@ index 5389d9f4d57..e5ec3450733 100644
          const speechThreshold = options.silenceLevel ?? 0
          const silenceMs = options.silenceMs ?? 0
 diff --git a/apps/desktop/src/global.d.ts b/apps/desktop/src/global.d.ts
-index 795d5173339..bd5328c9101 100644
+index 8067308..c611ff5 100644
 --- a/apps/desktop/src/global.d.ts
 +++ b/apps/desktop/src/global.d.ts
-@@ -286,6 +286,10 @@ declare global {
+@@ -298,6 +298,10 @@ declare global {
        watchDirectory?: (dir: string) => Promise<HermesPreviewWatch>
        stopPreviewFileWatch: (id: string) => Promise<boolean>
        setActiveWork?: (payload: HermesActiveWork) => void
@@ -485,10 +487,10 @@ index 795d5173339..bd5328c9101 100644
        setNativeTheme?: (mode: 'dark' | 'light' | 'system') => void
        /** Main-process fact: this OS can back glass with a native material. */
 diff --git a/apps/desktop/src/hermes.ts b/apps/desktop/src/hermes.ts
-index 6242ef5998b..901d24e5406 100644
+index f5fb2ee..6aa867d 100644
 --- a/apps/desktop/src/hermes.ts
 +++ b/apps/desktop/src/hermes.ts
-@@ -23,6 +23,7 @@ export * from './api/messaging'
+@@ -24,6 +24,7 @@ export * from './api/messaging'
  export * from './api/models'
  export * from './api/plugins'
  export * from './api/profiles'
@@ -497,7 +499,7 @@ index 6242ef5998b..901d24e5406 100644
  export * from './api/skills'
  export * from './api/system'
 diff --git a/apps/desktop/src/lib/voice-playback.ts b/apps/desktop/src/lib/voice-playback.ts
-index 0efb99c631f..5021a5d4833 100644
+index 0efb99c..5021a5d 100644
 --- a/apps/desktop/src/lib/voice-playback.ts
 +++ b/apps/desktop/src/lib/voice-playback.ts
 @@ -1,3 +1,4 @@
@@ -514,7 +516,7 @@ index 0efb99c631f..5021a5d4833 100644
    setVoicePlaybackState(currentState('speaking', options, audio))
  
 diff --git a/apps/desktop/src/main.tsx b/apps/desktop/src/main.tsx
-index 3c2a116a6b7..2bd926f4b71 100644
+index 3c2a116..2bd926f 100644
 --- a/apps/desktop/src/main.tsx
 +++ b/apps/desktop/src/main.tsx
 @@ -61,6 +61,13 @@ if (winParam === 'overlay') {
@@ -532,7 +534,7 @@ index 3c2a116a6b7..2bd926f4b71 100644
      <StrictMode>
        <RootErrorBoundary>
 diff --git a/apps/desktop/src/types/hermes.ts b/apps/desktop/src/types/hermes.ts
-index 4f39fca3bc9..275448feadd 100644
+index 5402baa..209c547 100644
 --- a/apps/desktop/src/types/hermes.ts
 +++ b/apps/desktop/src/types/hermes.ts
 @@ -29,6 +29,58 @@ export interface AudioSpeakResponse {
@@ -591,11 +593,11 @@ index 4f39fca3bc9..275448feadd 100644
 +  detail_retained: boolean
 +}
 +
- export interface ElevenLabsVoice {
-   label: string
-   name: string
+ /** `POST /api/audio/tts-lease` — TTS engine warm-up / release driven by speech toggles. */
+ export interface AudioTtsLeaseResponse {
+   ok: boolean
 diff --git a/hermes_cli/web_models.py b/hermes_cli/web_models.py
-index fa5dd37243b..dba55229bfe 100644
+index b03f649..19fc27b 100644
 --- a/hermes_cli/web_models.py
 +++ b/hermes_cli/web_models.py
 @@ -306,6 +306,73 @@ class TTSSpeakRequest(BaseModel):
@@ -669,30 +671,15 @@ index fa5dd37243b..dba55229bfe 100644
 +    name: str
 +
 +
- # --- from web_server.py (originally lines 11549-11551) ---
+ class TTSLeaseRequest(BaseModel):
+     """Body for ``POST /api/audio/tts-lease``.
  
- class OAuthSubmitBody(BaseModel):
 diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
-index 9aad4fd8e43..a8b1ed6a495 100644
+index b6a93a6..877559f 100644
 --- a/hermes_cli/web_server.py
 +++ b/hermes_cli/web_server.py
-@@ -1724,6 +1724,14 @@ from hermes_cli.web_models import (  # noqa: F401
-     LearningNodeEdit,
-     DebugShareRequest,
-     TTSSpeakRequest,
-+    RealtimeTokenRequest,
-+    RealtimeProjectCreateRequest,
-+    RealtimeProjectReviewRequest,
-+    RealtimeSystemOpenRequest,
-+    RealtimeProjectSetRequest,
-+    RealtimeLookRequest,
-+    RealtimeThumbnailRequest,
-+    RealtimeBuildsRequest,
-     OAuthSubmitBody,
-     BulkDeleteSessions,
-     SessionImport,
-@@ -5603,6 +5611,412 @@ async def speak_text(payload: TTSSpeakRequest, profile: Optional[str] = None):
-     }
+@@ -1208,6 +1208,412 @@ class DashboardHealth:
+         }
  
  
 +# --- Desktop Realtime speech-to-speech voice (JARVIS overlay feature) ---------
@@ -1101,11 +1088,26 @@ index 9aad4fd8e43..a8b1ed6a495 100644
 +        raise HTTPException(status_code=502, detail="Could not write the build registry.")
 +
 +
- def _split_text_for_speak_stream(text: str, cap: int) -> list:
-     """Split *text* into provider-cap-sized pieces on sentence boundaries.
+ DASHBOARD_HEALTH = DashboardHealth()
  
+ 
+@@ -1852,6 +2258,14 @@ from hermes_cli.web_models import (  # noqa: F401
+     LearningNodeEdit,
+     DebugShareRequest,
+     TTSSpeakRequest,
++    RealtimeTokenRequest,
++    RealtimeProjectCreateRequest,
++    RealtimeProjectReviewRequest,
++    RealtimeSystemOpenRequest,
++    RealtimeProjectSetRequest,
++    RealtimeLookRequest,
++    RealtimeThumbnailRequest,
++    RealtimeBuildsRequest,
+     TTSLeaseRequest,
+     OAuthSubmitBody,
+     BulkDeleteSessions,
 diff --git a/tools/wake_word.py b/tools/wake_word.py
-index f433dc66023..bdaaf1e3550 100644
+index f433dc6..bdaaf1e 100644
 --- a/tools/wake_word.py
 +++ b/tools/wake_word.py
 @@ -62,6 +62,9 @@ _DEFAULT_CONFIRMATION_FRAMES = 3
@@ -1173,10 +1175,10 @@ index f433dc66023..bdaaf1e3550 100644
      """True when the armed stream has delivered only silence (dead mic).
  
 diff --git a/tui_gateway/server.py b/tui_gateway/server.py
-index 6f0f6ee2ef6..48c4315157c 100644
+index e2eee50..2a62a4f 100644
 --- a/tui_gateway/server.py
 +++ b/tui_gateway/server.py
-@@ -16828,6 +16828,7 @@ def _(rid, params: dict) -> dict:
+@@ -17770,6 +17770,7 @@ def _(rid, params: dict) -> dict:
  def _(rid, params: dict) -> dict:
      try:
          from tools.wake_word import (
@@ -1184,7 +1186,7 @@ index 6f0f6ee2ef6..48c4315157c 100644
              audio_is_silent,
              check_wake_word_requirements,
              detector_frame_info,
-@@ -16885,6 +16886,8 @@ def _(rid, params: dict) -> dict:
+@@ -17827,6 +17828,8 @@ def _(rid, params: dict) -> dict:
              "enabled": bool(cfg.get("enabled")),
              # Armed but deaf despite an open stream; see platform-specific hint.
              "audio_silent": silent,

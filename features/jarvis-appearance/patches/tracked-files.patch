@@ -1,16 +1,16 @@
 diff --git a/apps/desktop/src/app/settings/index.tsx b/apps/desktop/src/app/settings/index.tsx
-index 82cc8a0..0812052 100644
+index 3d2eb0b21..ba4d5d2dd 100644
 --- a/apps/desktop/src/app/settings/index.tsx
 +++ b/apps/desktop/src/app/settings/index.tsx
-@@ -32,6 +32,7 @@ import { $commandPaletteOpen, openCommandPalettePage } from '@/store/command-pal
- import { confirm } from '@/store/confirm'
- import { bindingsFor } from '@/store/keybinds'
+@@ -36,6 +36,7 @@ import { bindingsFor } from '@/store/keybinds'
+ import { $localModelsEnabled } from '@/store/local-models-flag'
  import { notifyError } from '@/store/notifications'
+ import { $settingsScopeProfile } from '@/store/settings-scope'
 +import { resetSkinPreferences } from '@/themes/context'
  
  import { useRouteEnumParam } from '../hooks/use-route-enum-param'
  import { OverlayIconButton } from '../overlays/overlay-chrome'
-@@ -160,6 +161,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
+@@ -163,6 +164,7 @@ export function SettingsView({ onClose, onConfigSaved, onMainModelChanged }: Set
  
      try {
        await saveHermesConfig(await getHermesConfigDefaults())
@@ -19,10 +19,10 @@ index 82cc8a0..0812052 100644
        onConfigSaved?.()
      } catch (err) {
 diff --git a/apps/desktop/src/themes/context.tsx b/apps/desktop/src/themes/context.tsx
-index 6409315..822e2f5 100644
+index 44635d508..f9e5b804e 100644
 --- a/apps/desktop/src/themes/context.tsx
 +++ b/apps/desktop/src/themes/context.tsx
-@@ -82,6 +82,14 @@ const profilePref = <T extends string>(record: string, legacy: string, normalize
+@@ -88,6 +88,14 @@ const profilePref = <T extends string>(record: string, legacy: string, normalize
  export const skinPref = profilePref(PROFILE_SKINS_KEY, SKIN_KEY, normalizeSkin)
  export const modePref = profilePref(PROFILE_MODES_KEY, MODE_KEY, normalizeMode)
  
@@ -34,29 +34,42 @@ index 6409315..822e2f5 100644
 +  window.dispatchEvent(new StorageEvent('storage'))
 +}
 +
- /** Everything a peer window could change that this one has to repaint for. */
- const APPEARANCE_KEYS = new Set([SKIN_KEY, PROFILE_SKINS_KEY, MODE_KEY, PROFILE_MODES_KEY])
- 
+ // Provider state keeps the raw pick so a name nothing resolves YET (a backend
+ // skin the gateway hasn't seeded on this launch) isn't flattened to the default
+ // for the rest of the session — it paints as soon as the registry can resolve it.
 diff --git a/apps/desktop/src/themes/presets.test.ts b/apps/desktop/src/themes/presets.test.ts
-index 9cb1b86..82d2c55 100644
+index 9ca84f510..a2d2178b9 100644
 --- a/apps/desktop/src/themes/presets.test.ts
 +++ b/apps/desktop/src/themes/presets.test.ts
-@@ -1,6 +1,6 @@
- import { describe, expect, it } from 'vitest'
+@@ -6,6 +6,7 @@ import {
+   DEFAULT_SKIN_NAME,
+   DEFAULT_TYPOGRAPHY,
+   EMOJI_FALLBACK,
++  jarvisTheme,
+   nousAltTheme
+ } from './presets'
  
--import { BUILTIN_THEME_LIST, DEFAULT_TYPOGRAPHY, EMOJI_FALLBACK } from './presets'
-+import { BUILTIN_THEME_LIST, DEFAULT_SKIN_NAME, DEFAULT_TYPOGRAPHY, EMOJI_FALLBACK, jarvisTheme } from './presets'
+@@ -39,14 +40,26 @@ describe('theme typography emoji fallback (#40364)', () => {
+   })
+ })
  
- // #40364: none of the UI text/mono fonts carry emoji glyphs, so every font
- // stack must end with a color-emoji fallback or emoji render as tofu on
-@@ -31,3 +31,17 @@ describe('theme typography emoji fallback (#40364)', () => {
-     expect(EMOJI_FALLBACK).toContain('Noto Color Emoji')
+-// The pre-GitHub Nous palette stays available as nous-alt; the default name
+-// still means GitHub chrome + brand blue.
++// The pre-GitHub Nous palette stays available as nous-alt.
+ describe('nous-alt is the retired Nous, not the default', () => {
+-  it('is registered under its own name and leaves nous as the default', () => {
+-    expect(DEFAULT_SKIN_NAME).toBe('nous')
++  it('is registered under its own name without replacing the product default', () => {
++    expect(DEFAULT_SKIN_NAME).toBe('jarvis')
+     expect(BUILTIN_THEMES['nous-alt']).toBe(nousAltTheme)
+     expect(BUILTIN_THEMES.nous).not.toBe(nousAltTheme)
+     expect(nousAltTheme.darkColors?.background).toBe('#0D2F86')
+     expect(BUILTIN_THEMES.nous.darkColors?.background).not.toBe(nousAltTheme.darkColors?.background)
    })
  })
 +
 +describe('JARVIS product theme', () => {
 +  it('is the built-in fallback with complete core styling', () => {
-+    expect(DEFAULT_SKIN_NAME).toBe('jarvis')
 +    expect(BUILTIN_THEME_LIST[0]).toBe(jarvisTheme)
 +    expect(jarvisTheme.colors).toMatchObject({
 +      background: '#05070B',
@@ -68,10 +81,10 @@ index 9cb1b86..82d2c55 100644
 +  })
 +})
 diff --git a/apps/desktop/src/themes/presets.ts b/apps/desktop/src/themes/presets.ts
-index ab25ab2..db5efa7 100644
+index fef9fdfcf..45c4ce6ff 100644
 --- a/apps/desktop/src/themes/presets.ts
 +++ b/apps/desktop/src/themes/presets.ts
-@@ -157,6 +157,40 @@ export const githubTheme: DesktopTheme = {
+@@ -276,6 +276,40 @@ export const nousTheme: DesktopTheme = {
    }
  }
  
@@ -110,9 +123,9 @@ index ab25ab2..db5efa7 100644
 +}
 +
  /** Catppuccin — Latte in light, Mocha in dark (Catppuccin.catppuccin-vsc). */
- 
- /**
-@@ -770,6 +804,7 @@ export const slateTheme: DesktopTheme = {
+ export const catppuccinTheme: DesktopTheme = {
+   name: 'catppuccin',
+@@ -846,6 +880,7 @@ export const slateTheme: DesktopTheme = {
  }
  
  export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
@@ -120,14 +133,14 @@ index ab25ab2..db5efa7 100644
    nous: nousTheme,
    github: githubTheme,
    catppuccin: catppuccinTheme,
-@@ -785,4 +820,4 @@ export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
+@@ -862,4 +897,4 @@ export const BUILTIN_THEMES: Record<string, DesktopTheme> = {
  export const BUILTIN_THEME_LIST = Object.values(BUILTIN_THEMES)
  
  /** Skin used when nothing is persisted or the persisted name is retired. */
 -export const DEFAULT_SKIN_NAME = 'nous'
 +export const DEFAULT_SKIN_NAME = 'jarvis'
 diff --git a/apps/desktop/src/themes/profile-theme.test.ts b/apps/desktop/src/themes/profile-theme.test.ts
-index 3567a8a..d9cfd9c 100644
+index 3567a8a67..d9cfd9cee 100644
 --- a/apps/desktop/src/themes/profile-theme.test.ts
 +++ b/apps/desktop/src/themes/profile-theme.test.ts
 @@ -1,6 +1,6 @@

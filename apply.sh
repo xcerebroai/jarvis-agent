@@ -99,6 +99,18 @@ resolve_python() {
   return 1
 }
 
+# Native Windows programs cannot open MSYS /c/... paths when automatic
+# argument conversion is disabled. Convert only filesystem arguments passed
+# to Python; keep POSIX paths unchanged throughout the shell workflow.
+python_path() {
+  case "${OS:-}${OSTYPE:-}$(uname -s 2>/dev/null)" in
+    *Windows_NT*|*msys*|*cygwin*|*MINGW*|*MSYS*)
+      cygpath -w "$1" 2>/dev/null || printf '%s\n' "$1"
+      ;;
+    *) printf '%s\n' "$1" ;;
+  esac
+}
+
 resolve_src() {
   if [ -n "${HERMES_SRC:-}" ]; then echo "$HERMES_SRC"; return 0; fi
   if [ -n "${1:-}" ]; then echo "$1"; return 0; fi
@@ -1078,7 +1090,7 @@ if [ ${#DESK_CFG[@]} -gt 0 ]; then
   rewrite_desktop_config "${DESK_CFG[@]}"
   # Assert package.json is still valid JSON after the surgical edit.
   if [ -f "$DESK_PKG" ] && [ -n "$PY" ]; then
-    if ! "$PY" -c "import json,sys; json.load(open(sys.argv[1],encoding='utf-8'))" "$DESK_PKG" 2>/dev/null; then
+    if ! "$PY" -c "import json,sys; json.load(open(sys.argv[1],encoding='utf-8'))" "$(python_path "$DESK_PKG")" 2>/dev/null; then
       echo "  ✗ desktop package.json is no longer valid JSON after edit — aborting" >&2
       exit 1
     fi
@@ -1106,7 +1118,7 @@ if [ -d "$SRC/apps/desktop" ]; then
   # Ship it: extraResources lands in Contents/Resources on macOS. Idempotent —
   # a no-op when the entry is already in package.json.
   if [ -n "$PY" ] && [ -f "$DESK_PKG" ]; then
-    "$PY" - "$DESK_PKG" <<'PYEOF'
+    "$PY" - "$(python_path "$DESK_PKG")" <<'PYEOF'
 import json, sys
 path = sys.argv[1]
 pkg = json.load(open(path, encoding="utf-8"))
@@ -1136,7 +1148,7 @@ for _p in "$OVERLAY_DIR/installer/assets/icons/128x128.png" \
 done
 if [ -f "$_splash" ] && [ -n "$_mark_png" ] && [ -n "$PY" ] \
    && grep -q "appendChild(svg)" "$_splash"; then
-  "$PY" - "$_splash" "$_mark_png" <<'PYEOF'
+  "$PY" - "$(python_path "$_splash")" "$(python_path "$_mark_png")" <<'PYEOF'
 import base64, sys
 path, png = sys.argv[1], sys.argv[2]
 s = open(path, encoding="utf-8").read()
@@ -1288,7 +1300,7 @@ fi
 # exempt is justified in branding-known-ok.txt.
 if [ -n "${PY:-}" ] && [ -f "$OVERLAY_DIR/tests/brand_scan.py" ]; then
   echo
-  if ! "$PY" "$OVERLAY_DIR/tests/brand_scan.py" "$SRC"; then
+  if ! "$PY" "$(python_path "$OVERLAY_DIR/tests/brand_scan.py")" "$(python_path "$SRC")"; then
     LEAKS=$((LEAKS + 1))
     echo "  ⚠ tree-wide brand scan found unaccounted strings (see above)"
   fi

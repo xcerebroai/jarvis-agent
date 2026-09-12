@@ -109,6 +109,16 @@ feature_present() {
   [ -f "$src/hermes_cli/realtime_voice.py" ]
 }
 
+# Newer Hermes releases ship the same full-duplex GPT Live architecture in
+# core. In that case the overlay must not patch parallel endpoints/hooks over
+# the native engine; it only migrates the operator's existing opt-in setting.
+native_voice_present() {
+  local src="$1"
+  [ -f "$src/tools/voice_live.py" ] &&
+  [ -f "$src/apps/desktop/src/lib/voice-live.ts" ] &&
+  grep -q "/api/audio/voice-live/session" "$src/hermes_cli/web_routers/audio.py" 2>/dev/null
+}
+
 copy_new_files() {
   local src="$1" rel n=0
   while IFS= read -r rel; do
@@ -170,6 +180,15 @@ else:
     changed = True
     print("  ✓ seeded documented voice.realtime defaults into config.yaml")
 
+# Hermes now ships GPT Live natively. Preserve an explicit native choice, but
+# translate the legacy overlay opt-in when the new key is absent.
+legacy_realtime = voice.get("realtime")
+if "voice_chat_mode" not in voice and isinstance(legacy_realtime, dict) and legacy_realtime.get("enabled") is True:
+    voice["voice_chat_mode"] = "gpt-live"
+    data["voice"] = voice
+    changed = True
+    print("  ✓ migrated voice.realtime.enabled to native voice.voice_chat_mode: gpt-live")
+
 # The summon phrase (wake_word) seeds PER-KEY: each key lands only when the
 # operator has not set it, so an explicit different model — or a deliberate
 # enabled:false — is never overwritten. Block-level seeding would skip
@@ -213,6 +232,14 @@ do_apply() {
   local src="$1"
   echo "◆ realtime-voice — applying feature"
   echo "  source : $src"
+
+  if native_voice_present "$src"; then
+    remove_new_files "$src" >/dev/null 2>&1 || true
+    seed_config_defaults "$src"
+    echo "  ✓ upstream native GPT Live voice detected; legacy patch not applied"
+    return 0
+  fi
+
   [ -f "$PATCH" ] || { echo "ERROR: patch not found at $PATCH" >&2; exit 1; }
 
   # 1. New source files (idempotent overwrite).
@@ -267,6 +294,12 @@ PY
 do_revert() {
   local src="$1"
   echo "◆ realtime-voice — reverting to pristine upstream"
+  if native_voice_present "$src"; then
+    remove_new_files "$src"
+    echo "  ✓ native GPT Live belongs to upstream; no tracked files reverted"
+    return 0
+  fi
+
   if git -C "$SRCG" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     local targets=() rel
     while IFS= read -r rel; do [ -n "$rel" ] && targets+=("$rel"); done < <(patch_targets)
@@ -285,6 +318,11 @@ do_revert() {
 do_verify() {
   local src="$1" rc=0 rel
   echo "◆ realtime-voice — verify applied state"
+  if native_voice_present "$src"; then
+    echo "  ✓ upstream native GPT Live voice is present"
+    return 0
+  fi
+
   while IFS= read -r rel; do
     [ -z "$rel" ] && continue
     [ -f "$src/$rel" ] || { echo "  ✗ missing feature file: $rel"; rc=1; }
